@@ -215,6 +215,7 @@ func TestSnapshotProjectsLiveCostAtOneHourRate(t *testing.T) {
 	if err := app.service.StartCapture(ctx, lesson.ID); err != nil {
 		t.Fatal(err)
 	}
+	defer app.service.StopCapture(ctx)
 	if _, err := app.service.RecordUsage(ctx, domain.RequestUsage{
 		SessionID: app.service.CurrentSessionID(),
 		Provider:  "openrouter",
@@ -241,5 +242,34 @@ func TestSnapshotProjectsLiveCostAtOneHourRate(t *testing.T) {
 	}
 	if _, err := app.service.EndLesson(ctx, lesson.ID, time.Time{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSaveSettingsIsRejectedWhileLessonIsActive(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	app := NewAppWithDependencies(
+		store,
+		capture.NewMockSource(),
+		service.NewMemorySecretStore(),
+		nil,
+	)
+	if err := app.service.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lesson, err := app.service.StartLesson(ctx, "lesson", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.service.StartCapture(ctx, lesson.ID); err != nil {
+		t.Fatal(err)
+	}
+	model := "qwen/qwen3.8-max-0902"
+	if _, err := app.SaveSettings(SettingsPatch{AnalyzerModel: &model}); err == nil {
+		t.Fatal("settings changed while a lesson was active")
 	}
 }

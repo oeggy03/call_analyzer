@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum CaptureEventType: String, Codable {
@@ -233,10 +234,18 @@ final class EventSink: @unchecked Sendable {
             var data = try JSONLineEncoder.encode(event)
             data.append(0x0A)
             lock.lock()
-            defer { lock.unlock() }
-            try output.write(contentsOf: data)
+            do {
+                try output.write(contentsOf: data)
+                lock.unlock()
+            } catch {
+                lock.unlock()
+                throw error
+            }
         } catch {
             log("failed to write JSON event: \(error.localizedDescription)")
+            // The parent owns consent and capture lifecycle. If its IPC pipe is
+            // gone, fail closed instead of continuing microphone/system capture.
+            Darwin._exit(74)
         }
     }
 

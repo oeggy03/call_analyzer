@@ -8,9 +8,46 @@ import (
 
 	"github.com/oeggy03/call_analyzer/internal/capture"
 	"github.com/oeggy03/call_analyzer/internal/domain"
+	"github.com/oeggy03/call_analyzer/internal/openrouter"
 	"github.com/oeggy03/call_analyzer/internal/storage"
 	"github.com/oeggy03/call_analyzer/internal/vocabulary"
 )
+
+func TestApplyingSettingsDuringCapturePreservesSessionBudget(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	secrets := NewMemorySecretStore()
+	if err := secrets.Set(ctx, secretOpenRouterAPIKey, "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	budget := openrouter.NewBudget(0.35, 0.50)
+	router, err := openrouter.NewClient(openrouter.Config{
+		Budget: budget,
+	}, APIKeySecretProvider{Store: secrets, Name: secretOpenRouterAPIKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := New(store, capture.NewMockSource(), secrets, router)
+	svc.mu.Lock()
+	svc.capturing = true
+	svc.mu.Unlock()
+	if err := svc.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	budget.Add(0.20)
+
+	model := "qwen/qwen3.8-max-0902"
+	if err := svc.ApplySettings(ctx, SettingsPatch{AnalyzerModel: &model}); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.router.BudgetStatus().Spent; got != 0.20 {
+		t.Fatalf("settings reset live session spend to %v", got)
+	}
+}
 
 func TestServiceSecretsCaptureAndExtraction(t *testing.T) {
 	ctx := context.Background()

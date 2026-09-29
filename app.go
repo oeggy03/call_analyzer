@@ -93,7 +93,7 @@ func (a *App) emit(name string, payload any) {
 
 func (a *App) onServiceEvent(name string, payload any) {
 	a.emit(name, payload)
-	if name == "snapshot_changed" {
+	if name == "snapshot_changed" || name == "capture.levels" {
 		return
 	}
 	if snapshot, err := a.GetAppSnapshot(); err == nil {
@@ -228,6 +228,9 @@ func (a *App) MergeCandidates(sourceID, targetID string) (AppSnapshot, error) {
 }
 
 func (a *App) SaveSettings(patch SettingsPatch) (AppSnapshot, error) {
+	if a.service.HasActiveLesson() {
+		return AppSnapshot{}, errors.New("finish the active lesson before changing settings")
+	}
 	if patch.OpenRouterKey != nil {
 		if strings.TrimSpace(*patch.OpenRouterKey) == "" {
 			if err := a.service.ClearAPIKey(a.context()); err != nil {

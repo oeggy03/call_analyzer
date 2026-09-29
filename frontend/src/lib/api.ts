@@ -42,6 +42,7 @@ export const BACKEND_METHODS = {
 
 export const BACKEND_EVENTS = {
   snapshotChanged: 'call_analyzer:snapshot_changed',
+  captureLevels: 'call_analyzer:capture.levels',
 } as const
 
 export type ApiMode = 'runtime' | 'demo' | 'unavailable'
@@ -325,6 +326,16 @@ export function isAppSnapshot(value: unknown): value is AppSnapshot {
   )
 }
 
+function isAudioLevels(value: unknown): value is AudioLevels {
+  return (
+    isRecord(value) &&
+    typeof value.mic === 'number' &&
+    Number.isFinite(value.mic) &&
+    typeof value.remote === 'number' &&
+    Number.isFinite(value.remote)
+  )
+}
+
 class DemoApi implements AppApi {
   readonly mode = 'demo' as const
   private snapshot = createDemoSnapshot()
@@ -517,6 +528,7 @@ class DemoApi implements AppApi {
 
 class RuntimeApi implements AppApi {
   readonly mode = 'runtime' as const
+  private latestSnapshot?: AppSnapshot
 
   constructor(private readonly app: RuntimeApp) {}
 
@@ -575,15 +587,30 @@ class RuntimeApi implements AppApi {
     const callback = (...args: unknown[]) => {
       const possibleSnapshot = args[0]
       if (isAppSnapshot(possibleSnapshot)) {
-        listener(possibleSnapshot)
+        const accepted = this.remember(possibleSnapshot)
+        if (accepted === possibleSnapshot) listener(accepted)
         return
       }
       void this.getSnapshot().then(listener).catch(() => undefined)
     }
-    const cleanup = eventsOn(BACKEND_EVENTS.snapshotChanged, callback)
-    return typeof cleanup === 'function'
-      ? cleanup
-      : () => window.runtime?.EventsOff?.(BACKEND_EVENTS.snapshotChanged)
+    const levelsCallback = (...args: unknown[]) => {
+      const levels = args[0]
+      if (!this.latestSnapshot || !isAudioLevels(levels)) return
+      const next = {
+        ...this.latestSnapshot,
+        levels,
+      }
+      this.latestSnapshot = next
+      listener(next)
+    }
+    const snapshotCleanup = eventsOn(BACKEND_EVENTS.snapshotChanged, callback)
+    const levelsCleanup = eventsOn(BACKEND_EVENTS.captureLevels, levelsCallback)
+    return () => {
+      if (typeof snapshotCleanup === 'function') snapshotCleanup()
+      else window.runtime?.EventsOff?.(BACKEND_EVENTS.snapshotChanged)
+      if (typeof levelsCleanup === 'function') levelsCleanup()
+      else window.runtime?.EventsOff?.(BACKEND_EVENTS.captureLevels)
+    }
   }
 
   private async callSnapshot(methodName: string, ...args: unknown[]): Promise<AppSnapshot> {
@@ -591,7 +618,7 @@ class RuntimeApi implements AppApi {
     if (!isAppSnapshot(result)) {
       throw new ApiUnavailableError(`Backend method ${methodName} returned an invalid snapshot.`)
     }
-    return result
+    return this.remember(result)
   }
 
   private async callMutation(methodName: string, ...args: unknown[]): Promise<AppSnapshot> {
@@ -599,7 +626,22 @@ class RuntimeApi implements AppApi {
     if (!isAppSnapshot(result)) {
       throw new ApiUnavailableError(`Backend method ${methodName} returned an invalid snapshot.`)
     }
-    return result
+    return this.remember(result)
+  }
+
+  private remember(snapshot: AppSnapshot): AppSnapshot {
+    const currentTime = Date.parse(this.latestSnapshot?.lastUpdated ?? '')
+    const nextTime = Date.parse(snapshot.lastUpdated)
+    if (
+      this.latestSnapshot &&
+      Number.isFinite(currentTime) &&
+      Number.isFinite(nextTime) &&
+      nextTime < currentTime
+    ) {
+      return this.latestSnapshot
+    }
+    this.latestSnapshot = snapshot
+    return snapshot
   }
 
   private async call(methodName: string, args: unknown[]): Promise<unknown> {

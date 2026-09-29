@@ -8,8 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/oeggy03/call_analyzer/internal/audio"
 	"github.com/oeggy03/call_analyzer/internal/capture"
 	"github.com/oeggy03/call_analyzer/internal/domain"
@@ -28,6 +26,8 @@ const (
 	automaticAnalysisCadence = 20 * time.Second
 	vadThreshold             = 0.01
 )
+
+var sessionCancelDrainTimeout = 5 * time.Second
 
 type analysisJob struct {
 	window    audio.AudioWindow
@@ -50,6 +50,7 @@ type captureSession struct {
 	manualCancel    context.CancelFunc
 	stopCh          chan struct{}
 	stopOnce        sync.Once
+	failureOnce     sync.Once
 	frames          chan capture.AudioFrame
 	events          chan capture.Event
 	jobs            chan analysisJob
@@ -60,6 +61,7 @@ type captureSession struct {
 	lastText        map[string]string
 	pendingAuto     []domain.TranscriptSegment
 	pendingSince    time.Time
+	nextAutoAttempt time.Time
 	budgetExhausted bool
 	ring            *audio.RingBuffer
 	lessonID        string
@@ -86,7 +88,7 @@ func newCaptureSession(parent context.Context, ring *audio.RingBuffer, lessonID 
 		ring:         ring,
 		lessonID:     lessonID,
 		lessonStart:  lessonStart,
-		sessionID:    uuid.NewString(),
+		sessionID:    lessonID,
 	}
 }
 
@@ -95,17 +97,23 @@ func (s *captureSession) start(owner *Service) {
 	go s.runProcessor(owner)
 }
 
-func (s *captureSession) stop(ctx context.Context) {
+func (s *captureSession) stop(ctx context.Context) error {
 	s.stopOnce.Do(func() {
 		close(s.stopCh)
 	})
 	select {
 	case <-s.done:
+		s.cancel()
+		return nil
 	case <-ctx.Done():
 		s.cancel()
 		s.manualCancel()
+		select {
+		case <-s.done:
+		case <-time.After(sessionCancelDrainTimeout):
+		}
+		return ctx.Err()
 	}
-	s.cancel()
 }
 
 func (s *captureSession) enqueueFrame(frame capture.AudioFrame) bool {
@@ -207,6 +215,14 @@ func (s *captureSession) handleEvent(owner *Service, event capture.Event) {
 			message = "native capture error"
 		}
 		owner.diagnostic("native capture error: "+message, nil)
+		if event.Fatal {
+			s.failureOnce.Do(func() {
+				owner.captureSessionFailed(s)
+				s.stopOnce.Do(func() {
+					close(s.stopCh)
+				})
+			})
+		}
 		return
 	case "state":
 		state := strings.TrimSpace(event.Text)
@@ -274,7 +290,11 @@ func (s *captureSession) runProcessor(owner *Service) {
 			}
 			owner.processAnalysisJob(s.ctx, s, job)
 		case <-ticker.C:
-			if !s.pendingSince.IsZero() && time.Since(s.pendingSince) >= automaticAnalysisCadence {
+			dueAt := s.pendingSince.Add(automaticAnalysisCadence)
+			if !s.nextAutoAttempt.IsZero() {
+				dueAt = s.nextAutoAttempt
+			}
+			if !s.pendingSince.IsZero() && !time.Now().Before(dueAt) {
 				owner.flushAutomaticAnalysis(s.ctx, s)
 			}
 		}
@@ -537,7 +557,8 @@ func (s *Service) processAnalysisJob(ctx context.Context, session *captureSessio
 		if session.pendingSince.IsZero() {
 			session.pendingSince = time.Now()
 		}
-		if automaticBatchReady(session.pendingAuto) {
+		if automaticBatchReady(session.pendingAuto) &&
+			(session.nextAutoAttempt.IsZero() || !time.Now().Before(session.nextAutoAttempt)) {
 			s.flushAutomaticAnalysis(ctx, session)
 		}
 		return
@@ -566,16 +587,25 @@ func (s *Service) flushAutomaticAnalysis(ctx context.Context, session *captureSe
 		return
 	}
 	segments := session.pendingAuto
-	session.pendingAuto = nil
-	session.pendingSince = time.Time{}
 	if session.budgetExhausted {
+		session.pendingAuto = nil
+		session.pendingSince = time.Time{}
+		session.nextAutoAttempt = time.Time{}
 		return
 	}
 	s.mu.RLock()
 	router := s.router
 	s.mu.RUnlock()
-	if router == nil || router.BudgetStatus().HardExceeded {
+	if router == nil {
+		session.nextAutoAttempt = time.Now().Add(15 * time.Second)
+		s.diagnostic("OpenRouter is not configured", nil)
+		return
+	}
+	if router.BudgetStatus().HardExceeded {
 		s.exhaustSessionBudget(session)
+		session.pendingAuto = nil
+		session.pendingSince = time.Time{}
+		session.nextAutoAttempt = time.Time{}
 		return
 	}
 	parts := make([]string, 0, len(segments))
@@ -585,16 +615,27 @@ func (s *Service) flushAutomaticAnalysis(ctx context.Context, session *captureSe
 		}
 	}
 	if len(parts) == 0 {
+		session.pendingAuto = nil
+		session.pendingSince = time.Time{}
+		session.nextAutoAttempt = time.Time{}
 		return
 	}
 	last := segments[len(segments)-1]
 	if err := s.analyzeTranscript(ctx, session, router, last, false, strings.Join(parts, "\n")); err != nil {
 		if errors.Is(err, openrouter.ErrBudgetExceeded) {
 			s.exhaustSessionBudget(session)
+			session.pendingAuto = nil
+			session.pendingSince = time.Time{}
+			session.nextAutoAttempt = time.Time{}
 			return
 		}
+		session.nextAutoAttempt = time.Now().Add(15 * time.Second)
 		s.diagnostic("vocabulary extraction failed", err)
+		return
 	}
+	session.pendingAuto = nil
+	session.pendingSince = time.Time{}
+	session.nextAutoAttempt = time.Time{}
 }
 
 func (s *Service) exhaustSessionBudget(session *captureSession) {

@@ -191,7 +191,14 @@ func (r *LessonRepository) EndOrphaned(ctx context.Context, endedAt time.Time) (
 	var count int64
 	err := r.store.withTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx,
-			"UPDATE lessons SET ended_at = ? WHERE ended_at IS NULL",
+			`UPDATE lessons
+			 SET ended_at = ?,
+			     final_cost = COALESCE(
+			         (SELECT SUM(cost) FROM request_usage WHERE session_id = lessons.id),
+			         final_cost,
+			         0
+			     )
+			 WHERE ended_at IS NULL`,
 			timeValue(endedAt.UTC()),
 		)
 		if err != nil {

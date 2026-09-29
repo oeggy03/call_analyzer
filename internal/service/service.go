@@ -453,18 +453,21 @@ func (s *Service) StopCapture(ctx context.Context) error {
 	lessonID := s.currentLesson
 	session := s.session
 	s.mu.RUnlock()
-	if !running {
+	if !running && session == nil {
 		return nil
 	}
 	sourceErr := s.source.Stop(ctx)
+	var sessionErr error
 	if session != nil {
-		session.stop(ctx)
+		sessionErr = session.stop(ctx)
 	}
 	s.mu.Lock()
 	s.capturing = false
-	s.currentLesson = ""
-	s.session = nil
-	s.ring = nil
+	if sourceErr == nil && sessionErr == nil {
+		s.currentLesson = ""
+		s.session = nil
+		s.ring = nil
+	}
 	s.micLevel = 0
 	s.remoteLevel = 0
 	s.lastLevelEmit = time.Time{}
@@ -472,8 +475,15 @@ func (s *Service) StopCapture(ctx context.Context) error {
 	if sourceErr != nil {
 		s.diagnostic("stopping capture failed", sourceErr)
 	}
-	s.emit("capture.stopped", map[string]string{"lessonId": lessonID})
-	return sourceErr
+	if sessionErr != nil {
+		s.diagnostic("finishing pending lesson analysis timed out", sessionErr)
+	}
+	if sourceErr == nil && sessionErr == nil {
+		s.emit("capture.stopped", map[string]string{"lessonId": lessonID})
+	} else {
+		s.emit("capture.stop_failed", map[string]string{"lessonId": lessonID})
+	}
+	return errors.Join(sourceErr, sessionErr)
 }
 
 func (s *Service) StopAndEndCurrentLesson(ctx context.Context) (domain.Lesson, error) {
@@ -486,9 +496,12 @@ func (s *Service) StopAndEndCurrentLesson(ctx context.Context) (domain.Lesson, e
 	if lessonID == "" {
 		return domain.Lesson{}, errors.New("service: no active lesson")
 	}
-	flushCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	flushCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	stopErr := s.StopCapture(flushCtx)
+	if stopErr != nil {
+		return domain.Lesson{}, stopErr
+	}
 	if router == nil || !router.BudgetStatus().HardExceeded {
 		reconcileCtx, reconcileCancel := context.WithTimeout(ctx, 20*time.Second)
 		reconcileErr := s.reconcileLesson(
@@ -504,10 +517,22 @@ func (s *Service) StopAndEndCurrentLesson(ctx context.Context) (domain.Lesson, e
 		}
 	}
 	lesson, endErr := s.EndLesson(ctx, lessonID, time.Time{})
-	if stopErr != nil {
-		return lesson, stopErr
-	}
 	return lesson, endErr
+}
+
+func (s *Service) captureSessionFailed(session *captureSession) {
+	s.mu.Lock()
+	if s.session != session {
+		s.mu.Unlock()
+		return
+	}
+	s.capturing = false
+	s.micLevel = 0
+	s.remoteLevel = 0
+	s.lastLevelEmit = time.Time{}
+	lessonID := s.currentLesson
+	s.mu.Unlock()
+	s.emit("capture.failed", map[string]string{"lessonId": lessonID})
 }
 
 func (s *Service) receiveFrame(frame capture.AudioFrame) {
@@ -746,6 +771,12 @@ func (s *Service) CurrentSessionID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.sessionID
+}
+
+func (s *Service) HasActiveLesson() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.currentLesson != ""
 }
 
 func (s *Service) CurrentCost(ctx context.Context) (float64, error) {

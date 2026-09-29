@@ -12,6 +12,37 @@ import (
 	"github.com/oeggy03/call_analyzer/internal/domain"
 )
 
+func TestEndOrphanedLessonsRecoversPersistedSessionCost(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	lesson, err := store.Lessons().Start(ctx, "orphaned", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Usage().Record(ctx, domain.RequestUsage{
+		SessionID: lesson.ID,
+		Provider:  "openrouter",
+		Model:     "test",
+		Cost:      0.17,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Lessons().EndOrphaned(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.Lessons().Get(ctx, lesson.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.EndedAt == nil || recovered.FinalCost != 0.17 {
+		t.Fatalf("orphan recovery lost lesson cost: %#v", recovered)
+	}
+}
+
 func TestSQLiteRepositoriesAndLifecycle(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, filepath.Join(t.TempDir(), "call_analyzer.db"))

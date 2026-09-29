@@ -150,6 +150,28 @@ private final class SignalHandler {
     }
 }
 
+private final class ParentProcessMonitor {
+    private let parentPID = Darwin.getppid()
+    private let timer = DispatchSource.makeTimerSource(
+        queue: DispatchQueue.global(qos: .userInitiated)
+    )
+
+    init(onParentExit: @escaping () -> Void) {
+        timer.schedule(deadline: .now() + 1, repeating: 1)
+        timer.setEventHandler { [parentPID] in
+            let currentParent = Darwin.getppid()
+            if currentParent == 1 || currentParent != parentPID {
+                onParentExit()
+            }
+        }
+        timer.resume()
+    }
+
+    deinit {
+        timer.cancel()
+    }
+}
+
 @main
 struct CaptureCLI {
     static func main() async {
@@ -172,8 +194,12 @@ struct CaptureCLI {
                 let signalHandler = SignalHandler {
                     engine.requestStop()
                 }
+                let parentMonitor = ParentProcessMonitor {
+                    engine.requestStop()
+                }
                 await engine.waitForStopRequest()
                 _ = signalHandler
+                _ = parentMonitor
                 await engine.stop()
             case .stop(let pid):
                 guard Darwin.kill(pid, SIGTERM) == 0 else {

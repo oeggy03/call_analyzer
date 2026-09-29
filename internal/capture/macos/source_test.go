@@ -221,6 +221,20 @@ func TestCreateSessionSpoolRemovesCrashedSessionAudio(t *testing.T) {
 	}
 }
 
+func TestFatalNativeErrorsAreMarkedForLessonRecovery(t *testing.T) {
+	event, ok := mapParentEvent(Event{
+		Type:    "error",
+		Code:    "stream_stopped",
+		Message: "capture stopped",
+	}, time.Now())
+	if !ok || !event.Fatal || event.Code != "stream_stopped" {
+		t.Fatalf("fatal native error was not preserved: %#v", event)
+	}
+	if isFatalCaptureError("audio_chunk") {
+		t.Fatal("recoverable chunk error was marked fatal")
+	}
+}
+
 func fakeSourceHelper(t *testing.T) string {
 	t.Helper()
 	path, err := filepath.Abs(filepath.Join("testdata", "fake-source-helper.sh"))

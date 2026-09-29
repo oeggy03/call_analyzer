@@ -616,8 +616,19 @@ func mapParentEvent(event Event, startedAt time.Time) (capture.Event, bool) {
 			Source:    event.Source,
 			Timestamp: timestamp,
 			Text:      event.Message,
+			Code:      event.Code,
+			Fatal:     isFatalCaptureError(event.Code),
 		}, true
 	default:
 		return capture.Event{}, false
+	}
+}
+
+func isFatalCaptureError(code string) bool {
+	switch code {
+	case "stream_stopped", "helper_exit", "stdout_read":
+		return true
+	default:
+		return false
 	}
 }

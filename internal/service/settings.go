@@ -101,11 +101,15 @@ func (s *Service) loadSettings(ctx context.Context) error {
 }
 
 func (s *Service) rebuildRouter(settings RuntimeSettings) error {
-	budget := openrouter.NewBudget(0.35, settings.HardBudgetUSD)
 	s.mu.RLock()
 	existing := s.router
+	capturing := s.capturing
 	s.mu.RUnlock()
 	if existing != nil {
+		var budget *openrouter.Budget
+		if !capturing {
+			budget = openrouter.NewBudget(0.35, settings.HardBudgetUSD)
+		}
 		s.mu.Lock()
 		s.router = existing.WithModels(settings.STTModel, settings.AnalyzerModel, budget)
 		s.mu.Unlock()
@@ -115,7 +119,7 @@ func (s *Service) rebuildRouter(settings RuntimeSettings) error {
 	return s.ConfigureOpenRouter(openrouter.Config{
 		ASRModel:  settings.STTModel,
 		ChatModel: settings.AnalyzerModel,
-		Budget:    budget,
+		Budget:    openrouter.NewBudget(0.35, settings.HardBudgetUSD),
 	})
 }
 

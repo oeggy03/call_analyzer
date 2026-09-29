@@ -50,6 +50,8 @@ type Event struct {
 	Timestamp time.Time `json:"timestamp"`
 	Text      string    `json:"text,omitempty"`
 	Speaker   string    `json:"speaker,omitempty"`
+	Code      string    `json:"code,omitempty"`
+	Fatal     bool      `json:"fatal,omitempty"`
 }
 
 // PermissionSource and TargetSource are optional capabilities. Keeping them

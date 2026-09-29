@@ -99,6 +99,8 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 		lessonState.Error = a.service.LessonError()
 		if running {
 			lessonState.Status = "live"
+		} else if lesson.EndedAt == nil && lessonState.Error != "" {
+			lessonState.Status = "error"
 		}
 	}
 	uiCandidates := a.makeCandidateSnapshots(ctx, candidates)

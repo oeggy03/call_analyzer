@@ -579,6 +579,8 @@ function LiveLessonView({
   onPermission: () => void
 }) {
   const isLive = snapshot.lesson.status === 'live'
+  const isInterrupted = snapshot.lesson.status === 'error' && Boolean(snapshot.lesson.id)
+  const hasActiveLesson = isLive || isInterrupted
   const isStarting = busyAction === 'start-lesson'
   const isStopping = busyAction === 'stop-lesson'
   const canInteract = snapshot.connection !== 'unavailable'
@@ -624,7 +626,7 @@ function LiveLessonView({
                 id="target-app"
                 value={selectedTarget}
                 onChange={(event) => onTargetChange(event.target.value as TargetApp)}
-                disabled={isLive || !canInteract}
+                disabled={hasActiveLesson || !canInteract}
               >
                 <option value="zoom">Zoom</option>
                 <option value="googleMeet" disabled>Google Meet (coming later)</option>
@@ -662,16 +664,16 @@ function LiveLessonView({
           </div>
         </section>
 
-        <section className={`panel lesson-panel ${isLive ? 'is-live' : ''}`}>
+        <section className={`panel lesson-panel ${hasActiveLesson ? 'is-live' : ''}`}>
           <div className="lesson-panel-top">
             <div>
               <p className="eyebrow">Lesson control</p>
-              <h2>{isLive ? 'Lesson in progress' : 'Ready when you are'}</h2>
+              <h2>{isLive ? 'Lesson in progress' : isInterrupted ? 'Capture interrupted' : 'Ready when you are'}</h2>
             </div>
             <LessonStatus status={snapshot.lesson.status} />
           </div>
           {snapshot.lesson.error && <InlineAlert tone="error">{snapshot.lesson.error}</InlineAlert>}
-          {!isLive ? (
+          {!hasActiveLesson ? (
             <>
               <div className="consent-box">
                 <input
@@ -710,11 +712,11 @@ function LiveLessonView({
             <>
               <div className="live-clock">
                 <span className="live-pulse" aria-hidden="true" />
-                <span>Capturing {formatStartedAt(snapshot.lesson.startedAt)}</span>
+                <span>{isInterrupted ? 'Capture stopped unexpectedly' : `Capturing ${formatStartedAt(snapshot.lesson.startedAt)}`}</span>
               </div>
               <button className="button button-danger start-button" type="button" onClick={onStop} disabled={isStopping}>
                 <Icon name="stop" />
-                {isStopping ? 'Stopping lesson…' : 'Stop lesson'}
+                {isStopping ? 'Finishing lesson…' : isInterrupted ? 'Finish lesson' : 'Stop lesson'}
               </button>
             </>
           )}
@@ -1090,7 +1092,7 @@ function SettingsView({
     onSave({ openRouterKey: '' })
   }
 
-  const lessonIsActive = ['live', 'starting', 'stopping'].includes(snapshot.lesson.status)
+  const lessonIsActive = ['live', 'starting', 'stopping', 'error'].includes(snapshot.lesson.status)
   const canDeleteLastLesson = Boolean(snapshot.lesson.id) && !lessonIsActive && !busyAction
 
   return (
@@ -1121,7 +1123,7 @@ function SettingsView({
               {snapshot.settings.openRouterKeyConfigured && (
                 <div className="key-actions">
                   <span className="key-status" role="status">A key is saved securely.</span>
-                  <button className="button button-danger-outline button-small" type="button" onClick={clearApiKey} disabled={busyAction === 'save-settings'}>
+                  <button className="button button-danger-outline button-small" type="button" onClick={clearApiKey} disabled={lessonIsActive || busyAction === 'save-settings'}>
                     {busyAction === 'save-settings' ? 'Clearing…' : 'Clear API key'}
                   </button>
                 </div>
@@ -1199,10 +1201,11 @@ function SettingsView({
             <DiagnosticRow label="Permission" value={snapshot.capturePermission === 'granted' ? 'Granted' : 'Needs attention'} tone={snapshot.capturePermission === 'granted' ? 'good' : 'warning'} />
             <DiagnosticRow label="Snapshot updated" value={snapshot.lastUpdated ? formatTimestamp(snapshot.lastUpdated) : 'Not connected'} />
           </section>
-          <button className="button button-primary save-settings" type="submit" disabled={busyAction === 'save-settings'}>
+          <button className="button button-primary save-settings" type="submit" disabled={lessonIsActive || busyAction === 'save-settings'}>
             <Icon name="check" />
             {busyAction === 'save-settings' ? 'Saving…' : 'Save settings'}
           </button>
+          {lessonIsActive && <p className="settings-footnote">Finish the active lesson before changing provider or capture settings.</p>}
           <p className="settings-footnote">Your key is sent only to the local Wails backend when you save and is stored securely by the desktop runtime.</p>
         </aside>
       </form>

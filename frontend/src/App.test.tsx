@@ -13,6 +13,7 @@ async function openView(label: string) {
 describe('Call Analyzer frontend', () => {
   afterEach(() => {
     window.go = undefined
+    window.runtime = undefined
     vi.restoreAllMocks()
   })
 
@@ -235,6 +236,37 @@ describe('Call Analyzer frontend', () => {
     expect(fakeApp.SaveSettings).toHaveBeenCalledWith(settingsPatch)
     expect(fakeApp.DeleteLastLesson).toHaveBeenCalledWith()
     expect(BACKEND_EVENTS.snapshotChanged).toBe('call_analyzer:snapshot_changed')
+  })
+
+  it('applies lightweight level events and rejects stale snapshots', async () => {
+    const snapshot = await createDemoApi().getSnapshot()
+    const stale = { ...snapshot, lastUpdated: '2020-01-01T00:00:00.000Z' }
+    const callbacks = new Map<string, (...args: unknown[]) => void>()
+    window.runtime = {
+      EventsOn: (name, callback) => {
+        callbacks.set(name, callback)
+        return () => callbacks.delete(name)
+      },
+    }
+    window.go = {
+      main: {
+        App: {
+          GetAppSnapshot: vi.fn().mockResolvedValue(snapshot),
+        },
+      },
+    }
+    const runtimeApi = createApi({ mode: 'runtime' })
+    await runtimeApi.getSnapshot()
+    const listener = vi.fn()
+    const unsubscribe = runtimeApi.subscribe(listener)
+
+    callbacks.get(BACKEND_EVENTS.captureLevels)?.({ mic: 0.25, remote: 0.75 })
+    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({
+      levels: { mic: 0.25, remote: 0.75 },
+    }))
+    callbacks.get(BACKEND_EVENTS.snapshotChanged)?.(stale)
+    expect(listener).toHaveBeenCalledTimes(1)
+    unsubscribe()
   })
 
   it('rejects an invalid runtime snapshot instead of inventing state', async () => {

@@ -2,13 +2,17 @@ package service
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/oeggy03/call_analyzer/internal/audio"
 	"github.com/oeggy03/call_analyzer/internal/capture"
 	"github.com/oeggy03/call_analyzer/internal/domain"
+	"github.com/oeggy03/call_analyzer/internal/openrouter"
 	"github.com/oeggy03/call_analyzer/internal/storage"
 )
 
@@ -198,6 +202,152 @@ func TestManualJobsUsePriorityQueue(t *testing.T) {
 		}
 	default:
 		t.Fatal("manual job was not placed on the priority queue")
+	}
+}
+
+func TestFatalCaptureEventLeavesLessonRecoverableButNotLive(t *testing.T) {
+	ring, err := audio.NewRingBuffer(audio.DefaultRingCapacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := newCaptureSession(context.Background(), ring, "lesson-1", time.Now())
+	svc := &Service{
+		session:       session,
+		capturing:     true,
+		currentLesson: "lesson-1",
+	}
+	failed := make(chan struct{}, 1)
+	svc.SetEventHook(func(name string, _ any) {
+		if name == "capture.failed" {
+			failed <- struct{}{}
+		}
+	})
+	session.start(svc)
+	if !session.enqueueEvent(capture.Event{
+		Kind:  "error",
+		Code:  "stream_stopped",
+		Text:  "ScreenCaptureKit stopped",
+		Fatal: true,
+	}) {
+		t.Fatal("could not queue fatal capture event")
+	}
+	select {
+	case <-failed:
+	case <-time.After(time.Second):
+		t.Fatal("fatal native failure did not update capture state")
+	}
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+	if svc.capturing {
+		t.Fatal("service still reports live capture after native failure")
+	}
+	if svc.currentLesson != "lesson-1" || svc.session != session {
+		t.Fatal("failed lesson was cleared before the user could finish it")
+	}
+}
+
+func TestFailedAutomaticBatchIsRetainedForRetry(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) <= 2 {
+			http.Error(w, "temporary failure", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"candidates\":[]}"}}]}`))
+	}))
+	defer server.Close()
+	ctx := context.Background()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	lesson, err := store.Lessons().Start(ctx, "retry", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	segment, err := store.Transcripts().Insert(ctx, domain.TranscriptSegment{
+		LessonID: lesson.ID,
+		Text:     "测试",
+		EndMS:    20_000,
+		Source:   "remote",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := NewMemorySecretStore()
+	if err := secrets.Set(ctx, secretOpenRouterAPIKey, "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	router, err := openrouter.NewClient(openrouter.Config{
+		BaseURL:    server.URL,
+		MaxRetries: 1,
+		RetryBase:  time.Millisecond,
+	}, APIKeySecretProvider{Store: secrets, Name: secretOpenRouterAPIKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := New(store, nil, secrets, router)
+	var lastDiagnostic any
+	svc.SetEventHook(func(name string, payload any) {
+		if name == "diagnostic" {
+			lastDiagnostic = payload
+		}
+	})
+	session := &captureSession{
+		ctx:          ctx,
+		lessonID:     lesson.ID,
+		lessonStart:  lesson.StartedAt,
+		sessionID:    lesson.ID,
+		pendingSince: time.Now().Add(-automaticAnalysisCadence),
+		pendingAuto:  []domain.TranscriptSegment{segment},
+	}
+	svc.flushAutomaticAnalysis(ctx, session)
+	if len(session.pendingAuto) != 1 || session.nextAutoAttempt.IsZero() {
+		t.Fatal("failed automatic batch was discarded instead of scheduled for retry")
+	}
+	session.nextAutoAttempt = time.Time{}
+	svc.flushAutomaticAnalysis(ctx, session)
+	if len(session.pendingAuto) != 0 || calls.Load() != 3 {
+		t.Fatalf("successful retry did not clear batch: pending=%d calls=%d diagnostic=%v", len(session.pendingAuto), calls.Load(), lastDiagnostic)
+	}
+}
+
+func TestStopTimeoutRetainsLessonForRecovery(t *testing.T) {
+	ring, err := audio.NewRingBuffer(audio.DefaultRingCapacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := capture.NewMockSource()
+	if err := source.Start(context.Background(), func(capture.AudioFrame) {}); err != nil {
+		t.Fatal(err)
+	}
+	session := newCaptureSession(context.Background(), ring, "lesson-1", time.Now())
+	svc := &Service{
+		source:        source,
+		capturing:     true,
+		currentLesson: "lesson-1",
+		session:       session,
+		ring:          ring,
+	}
+	previousDrainTimeout := sessionCancelDrainTimeout
+	sessionCancelDrainTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		sessionCancelDrainTimeout = previousDrainTimeout
+		session.cancel()
+	})
+	stopContext, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	if err := svc.StopCapture(stopContext); err == nil {
+		t.Fatal("expected pending analysis timeout")
+	}
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+	if svc.currentLesson != "lesson-1" || svc.session != session || svc.ring != ring {
+		t.Fatal("stop timeout cleared recoverable lesson state")
+	}
+	if svc.capturing {
+		t.Fatal("timed-out stop still reported active capture")
 	}
 }
 
