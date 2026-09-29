@@ -12,6 +12,6 @@ func newPlatformSource() capture.Source {
 		BundleID:     "us.zoom.xos",
 		Microphone:   true,
 		OCR:          false,
-		ChunkSeconds: 10,
+		ChunkSeconds: 2,
 	})
 }

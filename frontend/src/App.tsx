@@ -34,6 +34,8 @@ const EMPTY_SNAPSHOT: AppSnapshot = {
     projectedUsd: 0,
     hardBudgetUsd: 0.5,
     currency: 'USD',
+    warning: false,
+    hardExceeded: false,
   },
   privacy: {
     zdrEnabled: true,
@@ -76,6 +78,35 @@ const STATUS_OPTIONS: Array<{ value: VocabularyStatus | 'all'; label: string }> 
   { value: 'mastered', label: 'Mastered' },
 ]
 
+const STT_MODEL_OPTIONS = [
+  { value: 'qwen/qwen3-asr-1.7b', label: 'Qwen 3 ASR 1.7B' },
+  { value: 'qwen/qwen3-asr-0.6b', label: 'Qwen 3 ASR 0.6B' },
+  { value: 'openai/whisper-large-v3-turbo', label: 'OpenAI Whisper Large v3 Turbo' },
+  { value: 'microsoft/mai-transcribe-2', label: 'Microsoft MAI Transcribe 2' },
+  { value: 'mistralai/voxtral-mini-3b-2507', label: 'Mistral Voxtral Mini 3B' },
+] as const
+
+const ANALYZER_MODEL_OPTIONS = [
+  { value: 'qwen/qwen3.8-flash', label: 'Qwen 3.8 Flash' },
+  { value: 'qwen/qwen3.8-max-0902', label: 'Qwen 3.8 Max' },
+] as const
+
+const DEFAULT_STT_MODEL = STT_MODEL_OPTIONS[0].value
+const DEFAULT_ANALYZER_MODEL = ANALYZER_MODEL_OPTIONS[0].value
+
+type CandidateEditDraft = {
+  simplified: string
+  traditional: string
+  pinyin: string
+  meaning: string
+  partOfSpeech: string
+  classifier: string
+  example: string
+  examplePinyin: string
+  exampleTranslation: string
+  tags: string
+}
+
 export function App({ apiClient = defaultApi }: AppProps) {
   const [activeView, setActiveView] = useState<View>('live')
   const [snapshot, setSnapshot] = useState<AppSnapshot>()
@@ -88,7 +119,19 @@ export function App({ apiClient = defaultApi }: AppProps) {
   const [selectedTarget, setSelectedTarget] = useState<TargetApp>('zoom')
   const [editingCandidate, setEditingCandidate] = useState<Candidate>()
   const [mergeCandidate, setMergeCandidate] = useState<Candidate>()
-  const [editDraft, setEditDraft] = useState({ pinyin: '', meaning: '' })
+  const [editDraft, setEditDraft] = useState<CandidateEditDraft>({
+    simplified: '',
+    traditional: '',
+    pinyin: '',
+    meaning: '',
+    partOfSpeech: '',
+    classifier: '',
+    example: '',
+    examplePinyin: '',
+    exampleTranslation: '',
+    tags: '',
+  })
+  const [editError, setEditError] = useState<string>()
 
   const current = snapshot ?? EMPTY_SNAPSHOT
   const backendUnavailable = apiClient.mode === 'unavailable' || Boolean(loadError)
@@ -135,8 +178,10 @@ export function App({ apiClient = defaultApi }: AppProps) {
         setSnapshot(nextSnapshot)
         setSelectedTarget(nextSnapshot.target)
         setActionMessage(successMessage)
+        return true
       } catch (error: unknown) {
         setActionError(getErrorMessage(error))
+        return false
       } finally {
         setBusyAction(undefined)
       }
@@ -157,6 +202,18 @@ export function App({ apiClient = defaultApi }: AppProps) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [apiClient, busyAction, current.lesson.status, runAction])
 
+  useEffect(() => {
+    if (!editingCandidate && !mergeCandidate) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || busyAction) return
+      event.preventDefault()
+      setEditingCandidate(undefined)
+      setMergeCandidate(undefined)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [busyAction, editingCandidate, mergeCandidate])
+
   const handleStart = () => {
     void runAction(
       'start-lesson',
@@ -166,7 +223,11 @@ export function App({ apiClient = defaultApi }: AppProps) {
   }
 
   const handleStop = () => {
-    void runAction('stop-lesson', () => apiClient.stopLesson(), 'Lesson stopped. Your notes are safe.')
+    void runAction(
+      'stop-lesson',
+      () => apiClient.stopLesson(),
+      'Lesson stopped. Reconciliation and finalization completed.',
+    )
   }
 
   const handleRefresh = () => {
@@ -179,22 +240,60 @@ export function App({ apiClient = defaultApi }: AppProps) {
 
   const openEdit = (candidate: Candidate) => {
     setEditingCandidate(candidate)
-    setEditDraft({ pinyin: candidate.pinyin, meaning: candidate.meaning })
+    setEditDraft({
+      simplified: candidate.simplified,
+      traditional: candidate.traditional ?? '',
+      pinyin: candidate.pinyin,
+      meaning: candidate.meaning,
+      partOfSpeech: candidate.partOfSpeech ?? '',
+      classifier: candidate.classifier ?? '',
+      example: candidate.example,
+      examplePinyin: candidate.examplePinyin ?? '',
+      exampleTranslation: candidate.exampleTranslation,
+      tags: candidate.tags.join(', '),
+    })
+    setEditError(undefined)
     setActionError(undefined)
   }
 
   const saveEdit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!editingCandidate) return
+    const requiredFields: Array<[keyof CandidateEditDraft, string]> = [
+      ['simplified', 'Hanzi'],
+      ['pinyin', 'pinyin'],
+      ['meaning', 'meaning'],
+      ['example', 'sample sentence'],
+      ['examplePinyin', 'sample pinyin'],
+      ['exampleTranslation', 'translation'],
+    ]
+    const missingFields = requiredFields
+      .filter(([field]) => !editDraft[field].trim())
+      .map(([, label]) => label)
+    if (missingFields.length > 0) {
+      setEditError(`Complete the required fields: ${missingFields.join(', ')}.`)
+      return
+    }
+    setEditError(undefined)
     const patch: CandidateEditPatch = {
-      pinyin: editDraft.pinyin.trim() || editingCandidate.pinyin,
-      meaning: editDraft.meaning.trim() || editingCandidate.meaning,
+      simplified: editDraft.simplified.trim(),
+      traditional: editDraft.traditional.trim() || undefined,
+      pinyin: editDraft.pinyin.trim(),
+      meaning: editDraft.meaning.trim(),
+      partOfSpeech: editDraft.partOfSpeech.trim(),
+      classifier: editDraft.classifier.trim(),
+      example: editDraft.example.trim(),
+      examplePinyin: editDraft.examplePinyin.trim(),
+      exampleTranslation: editDraft.exampleTranslation.trim(),
+      tags: parseTags(editDraft.tags),
     }
     void runAction(
       `edit-${editingCandidate.id}`,
       () => apiClient.editCandidate(editingCandidate.id, patch),
       `${editingCandidate.simplified} updated.`,
-    ).then(() => setEditingCandidate(undefined))
+    ).then((didSave) => {
+      if (didSave) setEditingCandidate(undefined)
+    })
   }
 
   const confirmCandidate = (candidate: Candidate) => {
@@ -229,7 +328,26 @@ export function App({ apiClient = defaultApi }: AppProps) {
   }
 
   const saveSettings = (patch: SettingsPatch) => {
-    void runAction('save-settings', () => apiClient.saveSettings(patch), 'Settings saved securely.')
+    const successMessage = patch.openRouterKey === ''
+      ? 'API key cleared. Settings saved securely.'
+      : 'Settings saved securely.'
+    void runAction('save-settings', () => apiClient.saveSettings(patch), successMessage)
+  }
+
+  const handleDeleteLastLesson = () => {
+    if (['live', 'starting', 'stopping'].includes(current.lesson.status) || !current.lesson.id || busyAction) return
+    if (
+      !window.confirm(
+        'Delete the last lesson data? This removes its transcript, evidence, and any unconfirmed suggestions supported only by that lesson. Confirmed vocabulary is kept without the deleted evidence.',
+      )
+    ) {
+      return
+    }
+    void runAction(
+      'delete-last-lesson',
+      () => apiClient.deleteLastLesson(),
+      'Last lesson data deleted. Transcript, linked evidence, and orphan suggestions were removed; confirmed vocabulary was kept.',
+    )
   }
 
   return (
@@ -253,7 +371,9 @@ export function App({ apiClient = defaultApi }: AppProps) {
             <LoadingState />
           ) : (
             <>
-              {backendUnavailable && <BackendUnavailable mode={apiClient.mode} onRetry={handleRefresh} />}
+              {(backendUnavailable || apiClient.mode === 'demo') && (
+                <BackendUnavailable mode={apiClient.mode} onRetry={handleRefresh} />
+              )}
               {actionError && (
                 <InlineAlert tone="error" onDismiss={() => setActionError(undefined)}>
                   {actionError}
@@ -274,6 +394,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
                   onTargetChange={setSelectedTarget}
                   onStart={handleStart}
                   onStop={handleStop}
+                  onOpenSettings={() => setActiveView('settings')}
                   onMarkMoment={() =>
                     void runAction(
                       'mark-moment',
@@ -307,6 +428,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
                   apiMode={apiClient.mode}
                   busyAction={busyAction}
                   onSave={saveSettings}
+                  onDeleteLastLesson={handleDeleteLastLesson}
                 />
               )}
             </>
@@ -317,8 +439,12 @@ export function App({ apiClient = defaultApi }: AppProps) {
         <EditCandidateDialog
           candidate={editingCandidate}
           draft={editDraft}
+          validationError={editError}
           isSaving={busyAction === `edit-${editingCandidate.id}`}
-          onDraftChange={setEditDraft}
+          onDraftChange={(draft) => {
+            setEditDraft(draft)
+            setEditError(undefined)
+          }}
           onCancel={() => setEditingCandidate(undefined)}
           onSubmit={saveEdit}
         />
@@ -436,6 +562,7 @@ function LiveLessonView({
   onTargetChange,
   onStart,
   onStop,
+  onOpenSettings,
   onMarkMoment,
   onPermission,
 }: {
@@ -447,6 +574,7 @@ function LiveLessonView({
   onTargetChange: (value: TargetApp) => void
   onStart: () => void
   onStop: () => void
+  onOpenSettings: () => void
   onMarkMoment: () => void
   onPermission: () => void
 }) {
@@ -455,6 +583,7 @@ function LiveLessonView({
   const isStopping = busyAction === 'stop-lesson'
   const canInteract = snapshot.connection !== 'unavailable'
   const targetAvailable = selectedTarget === 'zoom'
+  const hasApiKey = snapshot.settings.openRouterKeyConfigured
   const pendingCandidates = snapshot.candidates.filter((candidate) => candidate.status === 'pending').length
 
   return (
@@ -475,6 +604,8 @@ function LiveLessonView({
           </span>
         </div>
       </section>
+
+      {(snapshot.cost.warning || snapshot.cost.hardExceeded) && <CostStatusAlert cost={snapshot.cost} />}
 
       <div className="live-grid">
         <section className="panel capture-panel">
@@ -506,13 +637,13 @@ function LiveLessonView({
               <Icon name={snapshot.capturePermission === 'granted' ? 'check' : 'mic'} />
             </div>
             <div>
-              <strong>Capture permission</strong>
+              <strong>Screen and system audio permission</strong>
               <p>
                 {snapshot.capturePermission === 'granted'
-                  ? 'Microphone and remote audio are ready.'
+                  ? 'Screen and system audio access is granted. This does not grant microphone access; microphone permission may be requested at lesson start when enabled.'
                   : snapshot.capturePermission === 'denied'
-                    ? 'Permission was denied. You can try again in System Settings.'
-                    : 'Allow access to capture this lesson.'}
+                    ? 'Screen and system audio permission was denied. You can try again in System Settings.'
+                    : 'Allow screen and system audio access. Microphone permission is separate and may be requested at lesson start when enabled.'}
               </p>
             </div>
             {snapshot.capturePermission !== 'granted' && (
@@ -551,14 +682,27 @@ function LiveLessonView({
                   disabled={!canInteract}
                 />
                 <label htmlFor="lesson-consent">
-                  I consent to capturing this conversation for this lesson and understand that the transcript is processed for vocabulary suggestions.
+                  I confirm that all participants have consented to capturing this conversation for this lesson and understand that the transcript is processed for vocabulary suggestions.
                 </label>
               </div>
-              <button className="button button-primary start-button" type="button" onClick={onStart} disabled={!consent || !canInteract || !targetAvailable || isStarting}>
+              {!hasApiKey && (
+                <div className="readiness-card" role="status">
+                  <div>
+                    <strong>OpenRouter API key required</strong>
+                    <p>Add your key in Settings before starting a lesson. It is saved securely by the local desktop runtime.</p>
+                  </div>
+                  <button className="button button-secondary button-small" type="button" onClick={onOpenSettings}>
+                    Open Settings
+                  </button>
+                </div>
+              )}
+              <button className="button button-primary start-button" type="button" onClick={onStart} disabled={!consent || !canInteract || !targetAvailable || !hasApiKey || isStarting}>
                 <Icon name="play" />
                 {isStarting ? 'Starting lesson…' : 'Start lesson'}
               </button>
-              {!targetAvailable
+              {!hasApiKey
+                ? <p className="helper-text">Configure an API key in Settings to enable lesson capture.</p>
+                : !targetAvailable
                 ? <p className="helper-text">Zoom is the only supported target in this macOS MVP.</p>
                 : !consent && <p className="helper-text">Consent is required before capture can begin.</p>}
             </>
@@ -747,6 +891,7 @@ function CandidateCard({
         </p>
         <div className="example-block">
           <p>{candidate.example}</p>
+          <p className="example-pinyin">{candidate.examplePinyin}</p>
           <p className="translation">{candidate.exampleTranslation}</p>
         </div>
         <div className="evidence-row">
@@ -880,8 +1025,13 @@ function VocabularyCard({ entry }: { entry: AppSnapshot['vocabulary'][number] })
         {entry.partOfSpeech ?? 'phrase'}
         {entry.classifier && ` · ${entry.classifier}`}
       </p>
+      <div className="example-block vocabulary-example">
+        <p>{entry.example}</p>
+        <p className="example-pinyin">{entry.examplePinyin}</p>
+        <p className="translation">{entry.exampleTranslation}</p>
+      </div>
       <div className="vocabulary-card-footer">
-        <span>Last seen {entry.lastSeen}</span>
+        <span>Last seen {formatTimestamp(entry.lastSeen)}</span>
         <span>{entry.seenCount} {entry.seenCount === 1 ? 'appearance' : 'appearances'}</span>
       </div>
       <div className="tag-row">
@@ -896,22 +1046,24 @@ function SettingsView({
   apiMode,
   busyAction,
   onSave,
+  onDeleteLastLesson,
 }: {
   snapshot: AppSnapshot
   apiMode: AppApi['mode']
   busyAction?: string
   onSave: (patch: SettingsPatch) => void
+  onDeleteLastLesson: () => void
 }) {
   const [keyDraft, setKeyDraft] = useState('')
-  const [sttModel, setSttModel] = useState(snapshot.settings.sttModel)
-  const [analyzerModel, setAnalyzerModel] = useState(snapshot.settings.analyzerModel)
+  const [sttModel, setSttModel] = useState(normalizeModel(snapshot.settings.sttModel, STT_MODEL_OPTIONS, DEFAULT_STT_MODEL))
+  const [analyzerModel, setAnalyzerModel] = useState(normalizeModel(snapshot.settings.analyzerModel, ANALYZER_MODEL_OPTIONS, DEFAULT_ANALYZER_MODEL))
   const [retention, setRetention] = useState(snapshot.settings.audioRetention)
   const [ocrEnabled, setOcrEnabled] = useState(snapshot.settings.ocrEnabled)
   const [microphoneEnabled, setMicrophoneEnabled] = useState(snapshot.settings.microphoneEnabled)
 
   useEffect(() => {
-    setSttModel(snapshot.settings.sttModel)
-    setAnalyzerModel(snapshot.settings.analyzerModel)
+    setSttModel(normalizeModel(snapshot.settings.sttModel, STT_MODEL_OPTIONS, DEFAULT_STT_MODEL))
+    setAnalyzerModel(normalizeModel(snapshot.settings.analyzerModel, ANALYZER_MODEL_OPTIONS, DEFAULT_ANALYZER_MODEL))
     setRetention(snapshot.settings.audioRetention)
     setOcrEnabled(snapshot.settings.ocrEnabled)
     setMicrophoneEnabled(snapshot.settings.microphoneEnabled)
@@ -932,6 +1084,15 @@ function SettingsView({
     setKeyDraft('')
   }
 
+  const clearApiKey = () => {
+    if (!snapshot.settings.openRouterKeyConfigured || busyAction === 'save-settings') return
+    if (!window.confirm('Clear the saved OpenRouter API key? You will need to add it again before starting a lesson.')) return
+    onSave({ openRouterKey: '' })
+  }
+
+  const lessonIsActive = ['live', 'starting', 'stopping'].includes(snapshot.lesson.status)
+  const canDeleteLastLesson = Boolean(snapshot.lesson.id) && !lessonIsActive && !busyAction
+
   return (
     <div className="view-stack">
       <section className="page-heading">
@@ -944,7 +1105,7 @@ function SettingsView({
       <form className="settings-layout" onSubmit={submit}>
         <div className="settings-main">
           <section className="panel settings-panel">
-            <PanelHeading eyebrow="Provider access" title="OpenRouter" description="The key is stored by the desktop backend and is never shown here after saving." />
+            <PanelHeading eyebrow="Provider access" title="OpenRouter" description="The key is stored securely by the local desktop backend and is never shown here after saving." />
             <div className="field-group">
               <label className="field-label" htmlFor="openrouter-key">API key</label>
               <input
@@ -957,6 +1118,14 @@ function SettingsView({
                 autoComplete="new-password"
               />
               <p className="helper-text">Write-only field. Existing credentials are intentionally not displayed.</p>
+              {snapshot.settings.openRouterKeyConfigured && (
+                <div className="key-actions">
+                  <span className="key-status" role="status">A key is saved securely.</span>
+                  <button className="button button-danger-outline button-small" type="button" onClick={clearApiKey} disabled={busyAction === 'save-settings'}>
+                    {busyAction === 'save-settings' ? 'Clearing…' : 'Clear API key'}
+                  </button>
+                </div>
+              )}
             </div>
           </section>
           <section className="panel settings-panel">
@@ -965,26 +1134,22 @@ function SettingsView({
               <div className="field-group">
                 <label className="field-label" htmlFor="stt-model">STT model</label>
                 <select id="stt-model" className="text-input" value={sttModel} onChange={(event) => setSttModel(event.target.value)}>
-                  <option value="qwen/qwen3-asr-1.7b">Qwen 3 ASR 1.7B</option>
-                  <option value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe</option>
-                  <option value="local-whisper">Local Whisper (when available)</option>
+                  {STT_MODEL_OPTIONS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
                 </select>
               </div>
               <div className="field-group">
                 <label className="field-label" htmlFor="analyzer-model">Analyzer model</label>
                 <select id="analyzer-model" className="text-input" value={analyzerModel} onChange={(event) => setAnalyzerModel(event.target.value)}>
-                  <option value="qwen/qwen3.8-flash">Qwen 3.8 Flash</option>
-                  <option value="openai/gpt-4o-mini">GPT-4o mini</option>
-                  <option value="anthropic/claude-3.5-haiku">Claude 3.5 Haiku</option>
+                  {ANALYZER_MODEL_OPTIONS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
                 </select>
               </div>
             </div>
             <div className="budget-row">
               <div>
                 <strong>Hard budget</strong>
-                <p>Stops processing when the session reaches its cap.</p>
+                <p>Pauses cloud processing when the session reaches its cap.</p>
               </div>
-              <span className="budget-value">$0.50 <small>USD</small></span>
+              <span className="budget-value">{formatUsd(snapshot.settings.hardBudgetUsd)} <small>USD</small></span>
             </div>
           </section>
           <section className="panel settings-panel">
@@ -1008,6 +1173,23 @@ function SettingsView({
               <span className="status-pill status-mastered">Enabled</span>
             </div>
           </section>
+          <section className="panel settings-panel danger-zone">
+            <PanelHeading
+              eyebrow="Data deletion"
+              title="Delete last lesson data"
+              description="Remove the last lesson's transcript and linked evidence from this desktop workspace."
+            />
+            <p className="danger-copy">
+              Unconfirmed suggestions supported only by this lesson are removed. Confirmed vocabulary remains as user-owned study data, with the deleted lesson evidence stripped.
+            </p>
+            <button className="button button-danger-outline" type="button" onClick={onDeleteLastLesson} disabled={!canDeleteLastLesson}>
+              <Icon name="trash" />
+              {busyAction === 'delete-last-lesson' ? 'Deleting…' : 'Delete last lesson data'}
+            </button>
+            {lessonIsActive
+              ? <p className="helper-text">Stop the active lesson before deleting its data.</p>
+              : !snapshot.lesson.id && <p className="helper-text">There is no lesson data available to delete.</p>}
+          </section>
         </div>
         <aside className="settings-side">
           <section className="panel diagnostics-card">
@@ -1015,13 +1197,13 @@ function SettingsView({
             <DiagnosticRow label="Backend" value={apiMode === 'runtime' ? 'Wails runtime' : apiMode === 'demo' ? 'Demo adapter' : 'Unavailable'} tone={apiMode === 'unavailable' ? 'warning' : 'good'} />
             <DiagnosticRow label="Capture target" value={labelForTarget(snapshot.target)} />
             <DiagnosticRow label="Permission" value={snapshot.capturePermission === 'granted' ? 'Granted' : 'Needs attention'} tone={snapshot.capturePermission === 'granted' ? 'good' : 'warning'} />
-            <DiagnosticRow label="Last sync" value={snapshot.lastUpdated ? formatTimestamp(snapshot.lastUpdated) : 'Not connected'} />
+            <DiagnosticRow label="Snapshot updated" value={snapshot.lastUpdated ? formatTimestamp(snapshot.lastUpdated) : 'Not connected'} />
           </section>
           <button className="button button-primary save-settings" type="submit" disabled={busyAction === 'save-settings'}>
             <Icon name="check" />
             {busyAction === 'save-settings' ? 'Saving…' : 'Save settings'}
           </button>
-          <p className="settings-footnote">Your key is sent only to the local Wails backend when you save.</p>
+          <p className="settings-footnote">Your key is sent only to the local Wails backend when you save and is stored securely by the desktop runtime.</p>
         </aside>
       </form>
     </div>
@@ -1067,21 +1249,30 @@ function DiagnosticRow({ label, value, tone }: { label: string; value: string; t
 function EditCandidateDialog({
   candidate,
   draft,
+  validationError,
   isSaving,
   onDraftChange,
   onCancel,
   onSubmit,
 }: {
   candidate: Candidate
-  draft: { pinyin: string; meaning: string }
+  draft: CandidateEditDraft
+  validationError?: string
   isSaving: boolean
-  onDraftChange: (draft: { pinyin: string; meaning: string }) => void
+  onDraftChange: (draft: CandidateEditDraft) => void
   onCancel: () => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
 }) {
   return (
     <div className="dialog-backdrop" role="presentation">
-      <form className="dialog-card" role="dialog" aria-modal="true" aria-labelledby="edit-dialog-title" onSubmit={onSubmit}>
+      <form
+        className="dialog-card dialog-card-wide"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-dialog-title"
+        aria-describedby={validationError ? 'edit-dialog-error' : undefined}
+        onSubmit={onSubmit}
+      >
         <div className="dialog-heading">
           <div>
             <p className="eyebrow">Candidate edit</p>
@@ -1089,13 +1280,89 @@ function EditCandidateDialog({
           </div>
           <button className="icon-button" type="button" aria-label="Close edit dialog" onClick={onCancel}><Icon name="close" /></button>
         </div>
+        {validationError && <div className="dialog-error" id="edit-dialog-error" role="alert">{validationError}</div>}
+        <div className="dialog-form-grid">
+          <div className="field-group">
+            <label className="field-label" htmlFor="edit-simplified">Hanzi</label>
+            <input
+              id="edit-simplified"
+              className="text-input"
+              value={draft.simplified}
+              onChange={(event) => onDraftChange({ ...draft, simplified: event.target.value })}
+              aria-required="true"
+              aria-invalid={Boolean(validationError && !draft.simplified.trim())}
+            />
+          </div>
+          <div className="field-group">
+            <label className="field-label" htmlFor="edit-traditional">Traditional</label>
+            <input id="edit-traditional" className="text-input" value={draft.traditional} onChange={(event) => onDraftChange({ ...draft, traditional: event.target.value })} />
+          </div>
+        </div>
         <div className="field-group">
           <label className="field-label" htmlFor="edit-pinyin">Pinyin</label>
-          <input id="edit-pinyin" className="text-input" value={draft.pinyin} onChange={(event) => onDraftChange({ ...draft, pinyin: event.target.value })} autoFocus />
+          <input
+            id="edit-pinyin"
+            className="text-input"
+            value={draft.pinyin}
+            onChange={(event) => onDraftChange({ ...draft, pinyin: event.target.value })}
+            aria-required="true"
+            aria-invalid={Boolean(validationError && !draft.pinyin.trim())}
+            autoFocus
+          />
         </div>
         <div className="field-group">
           <label className="field-label" htmlFor="edit-meaning">Meaning</label>
-          <textarea id="edit-meaning" className="text-input textarea" value={draft.meaning} onChange={(event) => onDraftChange({ ...draft, meaning: event.target.value })} rows={3} />
+          <textarea
+            id="edit-meaning"
+            className="text-input textarea"
+            value={draft.meaning}
+            onChange={(event) => onDraftChange({ ...draft, meaning: event.target.value })}
+            aria-required="true"
+            aria-invalid={Boolean(validationError && !draft.meaning.trim())}
+            rows={3}
+          />
+        </div>
+        <div className="dialog-form-grid">
+          <div className="field-group">
+            <label className="field-label" htmlFor="edit-pos">Part of speech</label>
+            <input id="edit-pos" className="text-input" value={draft.partOfSpeech} onChange={(event) => onDraftChange({ ...draft, partOfSpeech: event.target.value })} />
+          </div>
+          <div className="field-group">
+            <label className="field-label" htmlFor="edit-classifier">Classifier</label>
+            <input id="edit-classifier" className="text-input" value={draft.classifier} onChange={(event) => onDraftChange({ ...draft, classifier: event.target.value })} />
+          </div>
+        </div>
+        <div className="field-group">
+          <label className="field-label" htmlFor="edit-example">Sample sentence</label>
+          <textarea
+            id="edit-example"
+            className="text-input textarea"
+            value={draft.example}
+            onChange={(event) => onDraftChange({ ...draft, example: event.target.value })}
+            aria-required="true"
+            aria-invalid={Boolean(validationError && !draft.example.trim())}
+            rows={2}
+          />
+        </div>
+        <div className="field-group">
+          <label className="field-label" htmlFor="edit-example-pinyin">Sample pinyin</label>
+          <input id="edit-example-pinyin" className="text-input" value={draft.examplePinyin} onChange={(event) => onDraftChange({ ...draft, examplePinyin: event.target.value })} />
+        </div>
+        <div className="field-group">
+          <label className="field-label" htmlFor="edit-example-translation">Translation</label>
+          <textarea
+            id="edit-example-translation"
+            className="text-input textarea"
+            value={draft.exampleTranslation}
+            onChange={(event) => onDraftChange({ ...draft, exampleTranslation: event.target.value })}
+            aria-required="true"
+            aria-invalid={Boolean(validationError && !draft.exampleTranslation.trim())}
+            rows={2}
+          />
+        </div>
+        <div className="field-group">
+          <label className="field-label" htmlFor="edit-tags">Tags <span className="field-hint">(comma-separated)</span></label>
+          <input id="edit-tags" className="text-input" value={draft.tags} onChange={(event) => onDraftChange({ ...draft, tags: event.target.value })} />
         </div>
         <div className="dialog-actions">
           <button className="button button-ghost" type="button" onClick={onCancel}>Cancel</button>
@@ -1146,7 +1413,7 @@ function TranscriptRow({ line }: { line: AppSnapshot['transcript'][number] }) {
     <div className={`transcript-row ${line.isMoment ? 'is-moment' : ''}`}>
       <div className="transcript-time">{formatTimestamp(line.timestamp)}</div>
       <div className="transcript-source">
-        <span className={`source-dot source-${line.source}`} aria-hidden="true" />
+        <span className={`source-dot source-${sourceClass(line.source)}`} aria-hidden="true" />
         <span>{sourceLabel(line.source)}</span>
       </div>
       <div className="transcript-text">
@@ -1214,6 +1481,24 @@ function PrivacyBadge() {
   return <span className="privacy-badge"><Icon name="shield" /> ZDR enabled</span>
 }
 
+function CostStatusAlert({ cost }: { cost: AppSnapshot['cost'] }) {
+  const hardExceeded = Boolean(cost.hardExceeded)
+  return (
+    <div className={`cost-alert ${hardExceeded ? 'cost-alert-hard' : 'cost-alert-warning'}`} role="alert">
+      <Icon name="warning" />
+      <div>
+        <strong>{hardExceeded ? 'Hard cost limit reached' : 'Cost warning: approaching the hard cost limit'}</strong>
+        <p>
+          {hardExceeded
+            ? 'Cloud transcription and extraction are paused. Local capture and mark timestamps continue; a new lesson starts with a fresh budget.'
+            : `Projected cost is ${formatUsd(cost.projectedUsd)} against the ${formatUsd(cost.hardBudgetUsd)} session cap.`}
+        </p>
+        <span>Current {formatUsd(cost.currentUsd)} · Cap {formatUsd(cost.hardBudgetUsd)}</span>
+      </div>
+    </div>
+  )
+}
+
 function InlineAlert({ tone, children, onDismiss }: { tone: 'error' | 'success'; children: string; onDismiss?: () => void }) {
   return (
     <div className={`inline-alert alert-${tone}`} role={tone === 'error' ? 'alert' : 'status'}>
@@ -1233,10 +1518,12 @@ function BackendUnavailable({ mode, onRetry }: { mode: AppApi['mode']; onRetry: 
         <p>
           {mode === 'demo'
             ? 'The Wails runtime is not connected, so you are viewing deterministic sample data.'
-            : 'Start the Wails desktop runtime to capture calls and sync your vocabulary.'}
+            : 'Start the local desktop runtime to capture calls and update your vocabulary.'}
         </p>
       </div>
-      <button className="button button-secondary button-small" type="button" onClick={onRetry}>Retry connection</button>
+      {mode !== 'demo' && (
+        <button className="button button-secondary button-small" type="button" onClick={onRetry}>Retry connection</button>
+      )}
     </div>
   )
 }
@@ -1297,13 +1584,29 @@ function labelForTarget(target: TargetApp): string {
 }
 
 function sourceLabel(source: TranscriptSource): string {
-  return source === 'microphone' ? 'Microphone' : source === 'remote' ? 'Remote' : 'System'
+  if (source === 'microphone') return 'Microphone'
+  if (source === 'remote') return 'Remote'
+  if (source === 'system/ocr') return 'Screen OCR'
+  if (source === 'system/manual') return 'Marked audio'
+  return 'System'
+}
+
+function sourceClass(source: TranscriptSource): 'microphone' | 'remote' | 'system' {
+  return source === 'microphone' || source === 'remote' ? source : 'system'
 }
 
 function confidenceTone(confidence: number): string {
   if (confidence >= 0.9) return 'confidence-high'
   if (confidence >= 0.7) return 'confidence-medium'
   return 'confidence-low'
+}
+
+function normalizeModel(value: string, options: readonly { value: string }[], fallback: string): string {
+  return options.some((option) => option.value === value) ? value : fallback
+}
+
+function parseTags(value: string): string[] {
+  return Array.from(new Set(value.split(',').map((tag) => tag.trim()).filter(Boolean)))
 }
 
 type IconName =
@@ -1326,6 +1629,7 @@ type IconName =
   | 'search'
   | 'close'
   | 'warning'
+  | 'trash'
   | 'plug'
 
 function Icon({ name }: { name: IconName }) {
@@ -1349,6 +1653,7 @@ function Icon({ name }: { name: IconName }) {
     search: <><circle cx="10.8" cy="10.8" r="6.8" /><path d="m16 16 5 5" /></>,
     close: <><path d="m5 5 14 14M19 5 5 19" /></>,
     warning: <><path d="m12 3 9 17H3z" /><path d="M12 9v5M12 17.5v.1" /></>,
+    trash: <><path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3" /></>,
     plug: <><path d="M9 7V3M15 7V3M7 7h10v3a5 5 0 0 1-10 0zM12 15v6M8 21h8" /></>,
   }
   return (

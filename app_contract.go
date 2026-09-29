@@ -15,6 +15,7 @@ type CandidateEditPatch struct {
 	PartOfSpeech       *string   `json:"partOfSpeech,omitempty"`
 	Classifier         *string   `json:"classifier,omitempty"`
 	Example            *string   `json:"example,omitempty"`
+	ExamplePinyin      *string   `json:"examplePinyin,omitempty"`
 	ExampleTranslation *string   `json:"exampleTranslation,omitempty"`
 	Tags               *[]string `json:"tags,omitempty"`
 }
@@ -45,6 +46,7 @@ type AppSnapshot struct {
 }
 
 type LessonSnapshot struct {
+	ID        string `json:"id"`
 	Status    string `json:"status"`
 	StartedAt string `json:"startedAt,omitempty"`
 	Error     string `json:"error,omitempty"`
@@ -73,6 +75,7 @@ type CandidateSnapshot struct {
 	PartOfSpeech       string   `json:"partOfSpeech,omitempty"`
 	Classifier         string   `json:"classifier,omitempty"`
 	Example            string   `json:"example"`
+	ExamplePinyin      string   `json:"examplePinyin"`
 	ExampleTranslation string   `json:"exampleTranslation"`
 	Provenance         string   `json:"provenance"`
 	Confidence         float64  `json:"confidence"`
@@ -85,23 +88,28 @@ type CandidateSnapshot struct {
 }
 
 type VocabularySnapshot struct {
-	ID           string   `json:"id"`
-	Simplified   string   `json:"simplified"`
-	Traditional  string   `json:"traditional,omitempty"`
-	Pinyin       string   `json:"pinyin"`
-	Meaning      string   `json:"meaning"`
-	PartOfSpeech string   `json:"partOfSpeech,omitempty"`
-	Classifier   string   `json:"classifier,omitempty"`
-	Status       string   `json:"status"`
-	Tags         []string `json:"tags"`
-	LastSeen     string   `json:"lastSeen"`
-	SeenCount    int      `json:"seenCount"`
+	ID                 string   `json:"id"`
+	Simplified         string   `json:"simplified"`
+	Traditional        string   `json:"traditional,omitempty"`
+	Pinyin             string   `json:"pinyin"`
+	Meaning            string   `json:"meaning"`
+	PartOfSpeech       string   `json:"partOfSpeech,omitempty"`
+	Classifier         string   `json:"classifier,omitempty"`
+	Example            string   `json:"example"`
+	ExamplePinyin      string   `json:"examplePinyin"`
+	ExampleTranslation string   `json:"exampleTranslation"`
+	Status             string   `json:"status"`
+	Tags               []string `json:"tags"`
+	LastSeen           string   `json:"lastSeen"`
+	SeenCount          int      `json:"seenCount"`
 }
 
 type CostSummary struct {
 	CurrentUSD    float64 `json:"currentUsd"`
 	ProjectedUSD  float64 `json:"projectedUsd"`
 	HardBudgetUSD float64 `json:"hardBudgetUsd"`
+	Warning       bool    `json:"warning"`
+	HardExceeded  bool    `json:"hardExceeded"`
 	Currency      string  `json:"currency"`
 }
 

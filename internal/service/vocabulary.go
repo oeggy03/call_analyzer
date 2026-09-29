@@ -10,6 +10,7 @@ import (
 
 	"github.com/oeggy03/call_analyzer/internal/domain"
 	"github.com/oeggy03/call_analyzer/internal/storage"
+	"github.com/oeggy03/call_analyzer/internal/transcript"
 	"github.com/oeggy03/call_analyzer/internal/vocabulary"
 )
 
@@ -75,23 +76,39 @@ func (s *VocabularyService) processExtraction(
 	if strings.TrimSpace(transcriptText) == "" {
 		return nil, errors.New("service: transcript text is required for evidence validation")
 	}
-	candidates, err := vocabulary.Deduplicate(extraction.Candidates)
+	validCandidates := make([]vocabulary.Candidate, 0, len(extraction.Candidates))
+	var candidateErrors []error
+	for index, candidate := range extraction.Candidates {
+		normalized, err := vocabulary.Deduplicate([]vocabulary.Candidate{candidate})
+		if err != nil {
+			candidateErrors = append(candidateErrors,
+				fmt.Errorf("candidate %d: %w", index+1, err))
+			continue
+		}
+		validCandidates = append(validCandidates, normalized[0])
+	}
+	candidates, err := vocabulary.Deduplicate(validCandidates)
+	if err != nil {
+		return nil, err
+	}
+	segments, err := s.evidenceSegments(ctx, lessonID, segmentID)
 	if err != nil {
 		return nil, err
 	}
 	entries := make([]domain.VocabularyEntry, 0, len(candidates))
 	for _, candidate := range candidates {
 		for i := range candidate.Evidence {
-			if candidate.Evidence[i].LessonID == "" {
-				candidate.Evidence[i].LessonID = lessonID
-			}
-			if candidate.Evidence[i].SegmentID == "" {
-				candidate.Evidence[i].SegmentID = segmentID
-			}
+			populateEvidenceWindow(
+				&candidate.Evidence[i],
+				lessonID,
+				segmentID,
+				segments,
+			)
 		}
 		entry, err := vocabulary.NormalizeCandidate(candidate, transcriptText)
 		if err != nil {
-			return nil, err
+			candidateErrors = append(candidateErrors, err)
+			continue
 		}
 		if len(entry.Senses) == 0 {
 			senses, err := s.dictionary.Lookup(ctx, entry.Simplified, entry.Traditional)
@@ -111,5 +128,112 @@ func (s *VocabularyService) processExtraction(
 		}
 		entries = append(entries, entry)
 	}
+	if len(entries) == 0 && len(candidateErrors) > 0 {
+		return nil, errors.Join(candidateErrors...)
+	}
 	return entries, nil
+}
+
+func (s *VocabularyService) evidenceSegments(
+	ctx context.Context,
+	lessonID string,
+	segmentID string,
+) ([]domain.TranscriptSegment, error) {
+	if lessonID != "" {
+		segments, err := s.store.Transcripts().List(ctx, lessonID)
+		if err != nil {
+			return nil, err
+		}
+		if segmentID == "" {
+			return segments, nil
+		}
+		for _, segment := range segments {
+			if segment.ID == segmentID {
+				return segments, nil
+			}
+		}
+	}
+	if segmentID == "" {
+		return nil, nil
+	}
+	segment, err := s.store.Transcripts().Get(ctx, segmentID)
+	if err != nil {
+		return nil, err
+	}
+	return []domain.TranscriptSegment{segment}, nil
+}
+
+func populateEvidenceWindow(
+	evidence *domain.Evidence,
+	lessonID string,
+	segmentID string,
+	segments []domain.TranscriptSegment,
+) {
+	if evidence == nil {
+		return
+	}
+	var matched *domain.TranscriptSegment
+	if evidence.SegmentID != "" {
+		for index := range segments {
+			if segments[index].ID == evidence.SegmentID {
+				matched = &segments[index]
+				break
+			}
+		}
+	}
+	if matched == nil && segmentID != "" {
+		for index := range segments {
+			if segments[index].ID == segmentID &&
+				evidenceTextMatches(segments[index].Text, evidence.Text) {
+				matched = &segments[index]
+				break
+			}
+		}
+	}
+	if matched == nil {
+		for index := range segments {
+			if evidenceTextMatches(segments[index].Text, evidence.Text) {
+				matched = &segments[index]
+				break
+			}
+		}
+	}
+	if evidence.LessonID == "" {
+		if matched != nil {
+			evidence.LessonID = matched.LessonID
+		} else {
+			evidence.LessonID = lessonID
+		}
+	}
+	if evidence.SegmentID == "" {
+		if matched != nil {
+			evidence.SegmentID = matched.ID
+		} else {
+			evidence.SegmentID = segmentID
+		}
+	}
+	if matched == nil {
+		return
+	}
+	if evidence.StartMS == 0 {
+		evidence.StartMS = matched.StartMS
+	}
+	if evidence.EndMS == 0 {
+		evidence.EndMS = matched.EndMS
+	}
+	if evidence.Confidence == 0 {
+		evidence.Confidence = matched.Confidence
+	}
+}
+
+func evidenceTextMatches(transcriptText, evidenceText string) bool {
+	transcriptText = strings.TrimSpace(transcriptText)
+	evidenceText = strings.TrimSpace(evidenceText)
+	if transcriptText == "" || evidenceText == "" {
+		return false
+	}
+	return strings.Contains(
+		transcript.NormalizeChinese(transcriptText),
+		transcript.NormalizeChinese(evidenceText),
+	)
 }

@@ -23,6 +23,13 @@ func TestCanonicalPinyin(t *testing.T) {
 	if numbered != "lü4" || marked != "lǜ" {
 		t.Fatalf("got numbered=%q marked=%q", numbered, marked)
 	}
+	numbered, marked, err = CanonicalPinyin("Lao3 shi1, ni3 hao3!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if numbered != "lao3 shi1 ni3 hao3" || marked != "lǎo shī nǐ hǎo" {
+		t.Fatalf("sentence punctuation was not normalized: numbered=%q marked=%q", numbered, marked)
+	}
 }
 
 func TestNormalizeRequiresEvidence(t *testing.T) {
@@ -55,6 +62,26 @@ func TestDeduplicateUsesFormsAndReading(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Confidence != .9 {
 		t.Fatalf("unexpected dedup result %#v", got)
+	}
+}
+
+func TestNormalizeCanonicalizesRequiredExamplePinyin(t *testing.T) {
+	entry, err := NormalizeCandidate(Candidate{
+		Simplified: "你好",
+		Reading:    "ni3 hao3",
+		Evidence:   []domain.Evidence{{Text: "你好"}},
+		Confidence: .9,
+		Examples: []domain.Example{{
+			Simplified:  "老师，你好！",
+			Reading:     "lao3 shi1, ni3 hao3!",
+			Translation: "Hello, teacher!",
+		}},
+	}, "你好")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := entry.Examples[0].Reading; got != "lao3 shi1 ni3 hao3" {
+		t.Fatalf("example reading was not canonicalized: %q", got)
 	}
 }
 

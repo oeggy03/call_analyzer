@@ -41,7 +41,13 @@ func ScoreWords(expected, predicted []string) SetScore {
 		Expected:  len(want),
 		Predicted: len(got),
 	}
-	if len(got) > 0 {
+	if len(got) == 0 && len(want) == 0 {
+		// Correct abstention is a perfect result, not a zero-precision result.
+		// This matters for fixtures where incidental conversation should not
+		// produce a vocabulary candidate.
+		score.Precision = 1
+		score.Recall = 1
+	} else if len(got) > 0 {
 		score.Precision = float64(matched) / float64(len(got))
 	}
 	if len(want) > 0 {

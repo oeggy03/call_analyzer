@@ -3,6 +3,31 @@ import XCTest
 @testable import call_analyzer_capture
 
 final class CaptureTests: XCTestCase {
+    func testDefaultChunkDurationIsTwoSeconds() {
+        XCTAssertEqual(CaptureDefaults.chunkSeconds, 2)
+    }
+
+    func testCaptureDisplayFollowsActiveZoomWindow() {
+        let displays = [
+            CaptureDisplayGeometry(id: 1, frame: CGRect(x: 0, y: 0, width: 1_000, height: 800)),
+            CaptureDisplayGeometry(id: 2, frame: CGRect(x: 1_000, y: 0, width: 1_000, height: 800)),
+        ]
+        let windows = [
+            CaptureWindowGeometry(
+                frame: CGRect(x: 100, y: 100, width: 700, height: 500),
+                isOnScreen: true,
+                isActive: false
+            ),
+            CaptureWindowGeometry(
+                frame: CGRect(x: 1_100, y: 100, width: 500, height: 400),
+                isOnScreen: true,
+                isActive: true
+            ),
+        ]
+
+        XCTAssertEqual(CaptureDisplaySelector.bestDisplayID(displays: displays, windows: windows), 2)
+    }
+
     func testWAVWriterProducesPCM16MonoHeader() throws {
         let directory = try temporaryDirectory()
         let url = directory.appendingPathComponent("sample.wav")

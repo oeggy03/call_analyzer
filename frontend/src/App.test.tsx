@@ -13,6 +13,7 @@ async function openView(label: string) {
 describe('Call Analyzer frontend', () => {
   afterEach(() => {
     window.go = undefined
+    vi.restoreAllMocks()
   })
 
   it('gates lesson start on consent and allows marking a live moment', async () => {
@@ -31,6 +32,18 @@ describe('Call Analyzer frontend', () => {
     fireEvent.click(markButton)
 
     expect(await screen.findByText('Moment marked. It is waiting in Candidate Inbox.')).toBeInTheDocument()
+  })
+
+  it('gates lesson start on API-key readiness and links to Settings', async () => {
+    const api = createDemoApi()
+    await api.saveSettings({ openRouterKey: '' })
+    render(<App apiClient={api} />)
+
+    expect(await screen.findByRole('button', { name: /start lesson/i })).toBeDisabled()
+    expect(screen.getByText(/API key required/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Settings' }))
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument()
   })
 
   it('confirms and rejects candidates with safe feedback', async () => {
@@ -56,6 +69,92 @@ describe('Call Analyzer frontend', () => {
     expect(screen.getByLabelText('Pinyin')).toHaveFocus()
   })
 
+  it('closes candidate dialogs with Escape', async () => {
+    renderDemo()
+    await openView('Candidate Inbox')
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Edit' }))[0])
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('submits the complete candidate edit patch and validates required fields', async () => {
+    const api = createDemoApi()
+    const editCandidate = vi.spyOn(api, 'editCandidate')
+    render(<App apiClient={api} />)
+    await openView('Candidate Inbox')
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Edit' }))[0])
+
+    fireEvent.change(screen.getByLabelText('Hanzi'), { target: { value: '重点新' } })
+    fireEvent.change(screen.getByLabelText('Traditional'), { target: { value: '重點新' } })
+    fireEvent.change(screen.getByLabelText('Pinyin'), { target: { value: 'zhòngdiǎn xīn' } })
+    fireEvent.change(screen.getByLabelText('Meaning'), { target: { value: 'new meaning' } })
+    fireEvent.change(screen.getByLabelText('Part of speech'), { target: { value: 'noun' } })
+    fireEvent.change(screen.getByLabelText('Classifier'), { target: { value: '个' } })
+    fireEvent.change(screen.getByLabelText('Sample sentence'), { target: { value: '这是一个新例句。' } })
+    fireEvent.change(screen.getByLabelText('Sample pinyin'), { target: { value: 'Zhè shì yí ge xīn lìjù.' } })
+    fireEvent.change(screen.getByLabelText('Translation'), { target: { value: 'This is a new example.' } })
+    fireEvent.change(screen.getByLabelText(/Tags/), { target: { value: 'work, edited' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(editCandidate).toHaveBeenCalledWith(expect.any(String), {
+      simplified: '重点新',
+      traditional: '重點新',
+      pinyin: 'zhòngdiǎn xīn',
+      meaning: 'new meaning',
+      partOfSpeech: 'noun',
+      classifier: '个',
+      example: '这是一个新例句。',
+      examplePinyin: 'Zhè shì yí ge xīn lìjù.',
+      exampleTranslation: 'This is a new example.',
+      tags: ['work', 'edited'],
+    }))
+
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Edit' }))[0])
+    fireEvent.change(screen.getByLabelText('Meaning'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/required fields: meaning/i)
+    expect(editCandidate).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears the API key with confirmation and status feedback', async () => {
+    const api = createDemoApi()
+    const saveSettings = vi.spyOn(api, 'saveSettings')
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<App apiClient={api} />)
+    await openView('Settings')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear API key' }))
+    await waitFor(() => expect(saveSettings).toHaveBeenCalledWith({ openRouterKey: '' }))
+    expect(await screen.findByText(/API key cleared/i)).toBeInTheDocument()
+  })
+
+  it('deletes the last lesson only after confirmation', async () => {
+    const api = createDemoApi()
+    const deleteLastLesson = vi.spyOn(api, 'deleteLastLesson')
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<App apiClient={api} />)
+    await openView('Settings')
+
+    const deleteButton = screen.getByRole('button', { name: /delete last lesson data/i })
+    expect(deleteButton).toBeEnabled()
+    fireEvent.click(deleteButton)
+
+    await waitFor(() => expect(deleteLastLesson).toHaveBeenCalledWith())
+    expect(await screen.findByText(/Last lesson data deleted/i)).toBeInTheDocument()
+  })
+
+  it('shows cost warning states prominently in Live Lesson', async () => {
+    const api = createDemoApi()
+    const snapshot = await api.getSnapshot()
+    snapshot.cost.warning = true
+    vi.spyOn(api, 'getSnapshot').mockResolvedValue(snapshot)
+    render(<App apiClient={api} />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Approaching the hard cost limit/i)
+  })
+
   it('filters vocabulary by search text', async () => {
     renderDemo()
     await openView('Vocabulary')
@@ -72,8 +171,13 @@ describe('Call Analyzer frontend', () => {
     render(<App apiClient={createUnavailableApi()} />)
 
     expect(await screen.findByText('Backend unavailable')).toBeInTheDocument()
-    expect(screen.getByText(/Start the Wails desktop runtime/i)).toBeInTheDocument()
+    expect(screen.getByText(/Start the local desktop runtime/i)).toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('button', { name: /start lesson/i })).toBeDisabled())
+  })
+
+  it('clearly labels the in-memory demo adapter', async () => {
+    renderDemo()
+    expect(await screen.findByText('Demo mode is active')).toBeInTheDocument()
   })
 
   it('passes the exact positional Wails argument shapes', async () => {
@@ -89,12 +193,24 @@ describe('Call Analyzer frontend', () => {
       RejectCandidate: vi.fn().mockResolvedValue(snapshot),
       MergeCandidates: vi.fn().mockResolvedValue(snapshot),
       SaveSettings: vi.fn().mockResolvedValue(snapshot),
+      DeleteLastLesson: vi.fn().mockResolvedValue(snapshot),
       Refresh: vi.fn().mockResolvedValue(snapshot),
     }
     window.go = { main: { App: fakeApp } }
 
     const runtimeApi = createApi({ mode: 'runtime' })
-    const editPatch = { pinyin: 'xīn pīn yīn', meaning: 'new meaning' }
+    const editPatch = {
+      simplified: '新词',
+      traditional: '新詞',
+      pinyin: 'xīn cí',
+      meaning: 'new meaning',
+      partOfSpeech: 'noun',
+      classifier: '个',
+      example: '这是新例句。',
+      examplePinyin: 'Zhè shì xīn lìjù.',
+      exampleTranslation: 'This is a new example.',
+      tags: ['work'],
+    }
     const settingsPatch = { sttModel: 'qwen/qwen3-asr-1.7b' }
 
     expect(runtimeApi.mode).toBe('runtime')
@@ -108,6 +224,7 @@ describe('Call Analyzer frontend', () => {
     await runtimeApi.rejectCandidate('candidate-1')
     await runtimeApi.mergeCandidates('candidate-1', 'candidate-2')
     await runtimeApi.saveSettings(settingsPatch)
+    await runtimeApi.deleteLastLesson()
     await runtimeApi.refresh()
 
     expect(fakeApp.StartLesson).toHaveBeenCalledWith({ target: 'zoom', consent: true })
@@ -116,6 +233,7 @@ describe('Call Analyzer frontend', () => {
     expect(fakeApp.RejectCandidate).toHaveBeenCalledWith('candidate-1')
     expect(fakeApp.MergeCandidates).toHaveBeenCalledWith('candidate-1', 'candidate-2')
     expect(fakeApp.SaveSettings).toHaveBeenCalledWith(settingsPatch)
+    expect(fakeApp.DeleteLastLesson).toHaveBeenCalledWith()
     expect(BACKEND_EVENTS.snapshotChanged).toBe('call_analyzer:snapshot_changed')
   })
 

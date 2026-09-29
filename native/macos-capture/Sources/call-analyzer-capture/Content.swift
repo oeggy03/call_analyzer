@@ -2,6 +2,45 @@ import AVFoundation
 import Foundation
 import ScreenCaptureKit
 
+struct CaptureDisplayGeometry {
+    let id: CGDirectDisplayID
+    let frame: CGRect
+}
+
+struct CaptureWindowGeometry {
+    let frame: CGRect
+    let isOnScreen: Bool
+    let isActive: Bool
+}
+
+enum CaptureDisplaySelector {
+    static func bestDisplayID(
+        displays: [CaptureDisplayGeometry],
+        windows: [CaptureWindowGeometry]
+    ) -> CGDirectDisplayID? {
+        let orderedWindows = windows
+            .filter { $0.isOnScreen && !$0.frame.isEmpty }
+            .sorted {
+                if $0.isActive != $1.isActive {
+                    return $0.isActive
+                }
+                return ($0.frame.width * $0.frame.height) > ($1.frame.width * $1.frame.height)
+            }
+        for window in orderedWindows {
+            let best = displays
+                .map { display in
+                    let overlap = display.frame.intersection(window.frame)
+                    return (display.id, max(0, overlap.width) * max(0, overlap.height))
+                }
+                .max { $0.1 < $1.1 }
+            if let best, best.1 > 0 {
+                return best.0
+            }
+        }
+        return displays.first?.id
+    }
+}
+
 enum CaptureFailure: Error, LocalizedError {
     case invalidArguments(String)
     case screenRecordingPermission(String)
@@ -122,7 +161,22 @@ struct ShareableContentCatalog {
         for application: SCRunningApplication,
         in content: SCShareableContent
     ) throws -> SCContentFilter {
-        guard let display = content.displays.first else {
+        let applicationWindows = content.windows
+            .filter { $0.owningApplication?.processID == application.processID }
+        let displayID = CaptureDisplaySelector.bestDisplayID(
+            displays: content.displays.map {
+                CaptureDisplayGeometry(id: $0.displayID, frame: $0.frame)
+            },
+            windows: applicationWindows.map {
+                CaptureWindowGeometry(
+                    frame: $0.frame,
+                    isOnScreen: $0.isOnScreen,
+                    isActive: $0.isActive
+                )
+            }
+        )
+        guard let displayID,
+              let display = content.displays.first(where: { $0.displayID == displayID }) else {
             throw CaptureFailure.noDisplay
         }
         return SCContentFilter(

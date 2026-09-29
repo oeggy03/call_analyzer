@@ -36,6 +36,7 @@ export const BACKEND_METHODS = {
   rejectCandidate: 'RejectCandidate',
   mergeCandidates: 'MergeCandidates',
   saveSettings: 'SaveSettings',
+  deleteLastLesson: 'DeleteLastLesson',
   refresh: 'Refresh',
 } as const
 
@@ -58,6 +59,7 @@ export interface AppApi {
   rejectCandidate(candidateId: string): Promise<AppSnapshot>
   mergeCandidates(sourceId: string, targetId: string): Promise<AppSnapshot>
   saveSettings(patch: SettingsPatch): Promise<AppSnapshot>
+  deleteLastLesson(): Promise<AppSnapshot>
   refresh(): Promise<AppSnapshot>
   subscribe(listener: (snapshot: AppSnapshot) => void): () => void
 }
@@ -133,6 +135,7 @@ const demoCandidates: Candidate[] = [
     partOfSpeech: 'noun',
     classifier: undefined,
     example: '请先说一下这个方案的重点。',
+    examplePinyin: 'Qǐng xiān shuō yíxià zhège fāng’àn de zhòngdiǎn.',
     exampleTranslation: 'Please first explain the key points of this plan.',
     provenance: 'Manual mark · Live Lesson',
     confidence: 1,
@@ -151,6 +154,7 @@ const demoCandidates: Candidate[] = [
     partOfSpeech: 'noun',
     classifier: '个',
     example: '我们下周可以把这个方案再讨论一下。',
+    examplePinyin: 'Wǒmen xià zhōu kěyǐ bǎ zhège fāng’àn zài tǎolùn yíxià.',
     exampleTranslation: 'We can discuss this proposal again next week.',
     provenance: 'Remote transcript · 00:42',
     confidence: 0.96,
@@ -168,6 +172,7 @@ const demoCandidates: Candidate[] = [
     meaning: 'key point; main focus',
     partOfSpeech: 'noun',
     example: '今天我们先确认重点。',
+    examplePinyin: 'Jīntiān wǒmen xiān quèrèn zhòngdiǎn.',
     exampleTranslation: 'Today we will confirm the key points first.',
     provenance: 'Mic transcript · 00:49',
     confidence: 0.71,
@@ -186,6 +191,7 @@ const demoCandidates: Candidate[] = [
     meaning: 'common; frequently seen',
     partOfSpeech: 'adjective',
     example: '这个表达在工作场景里很常见。',
+    examplePinyin: 'Zhège biǎodá zài gōngzuò chǎngjǐng lǐ hěn chángjiàn.',
     exampleTranslation: 'This expression is common in work settings.',
     provenance: 'Remote transcript · 01:02',
     confidence: 0.54,
@@ -206,6 +212,9 @@ const demoVocabulary: VocabularyEntry[] = [
     meaning: 'key point; main focus',
     partOfSpeech: 'noun',
     status: 'learning',
+    example: '请先说一下这个方案的重点。',
+    examplePinyin: 'Qǐng xiān shuō yíxià zhège fāng’àn de zhòngdiǎn.',
+    exampleTranslation: 'Please first explain the key points of this plan.',
     tags: ['work'],
     lastSeen: 'Today, 2:30 PM',
     seenCount: 3,
@@ -218,6 +227,9 @@ const demoVocabulary: VocabularyEntry[] = [
     partOfSpeech: 'noun',
     classifier: '个',
     status: 'review',
+    example: '我们下周可以把这个方案再讨论一下。',
+    examplePinyin: 'Wǒmen xià zhōu kěyǐ bǎ zhège fāng’àn zài tǎolùn yíxià.',
+    exampleTranslation: 'We can discuss this proposal again next week.',
     tags: ['work', 'meeting'],
     lastSeen: 'Today, 2:29 PM',
     seenCount: 5,
@@ -230,6 +242,9 @@ const demoVocabulary: VocabularyEntry[] = [
     meaning: 'scene; context; setting',
     partOfSpeech: 'noun',
     status: 'learning',
+    example: '这个表达在工作场景里很常见。',
+    examplePinyin: 'Zhège biǎodá zài gōngzuò chǎngjǐng lǐ hěn chángjiàn.',
+    exampleTranslation: 'This expression is common in work settings.',
     tags: ['work'],
     lastSeen: 'Yesterday',
     seenCount: 2,
@@ -242,6 +257,9 @@ const demoVocabulary: VocabularyEntry[] = [
     meaning: 'to confirm; confirmation',
     partOfSpeech: 'verb',
     status: 'mastered',
+    example: '今天我们先确认重点。',
+    examplePinyin: 'Jīntiān wǒmen xiān quèrèn zhòngdiǎn.',
+    exampleTranslation: 'Today we will confirm the key points first.',
     tags: ['work', 'meeting'],
     lastSeen: 'Sep 26',
     seenCount: 11,
@@ -253,7 +271,7 @@ function createDemoSnapshot(): AppSnapshot {
     connection: 'demo',
     capturePermission: 'granted',
     target: 'zoom',
-    lesson: { status: 'idle' },
+    lesson: { id: 'demo-lesson-1', status: 'idle' },
     levels: { mic: 0.18, remote: 0.36 },
     transcript: demoTranscript,
     candidates: demoCandidates,
@@ -263,13 +281,15 @@ function createDemoSnapshot(): AppSnapshot {
       projectedUsd: 0.18,
       hardBudgetUsd: 0.5,
       currency: 'USD',
+      warning: false,
+      hardExceeded: false,
     },
     privacy: {
       zdrEnabled: true,
       audioRetention: 'sessionOnly',
     },
     settings: {
-      openRouterKeyConfigured: false,
+      openRouterKeyConfigured: true,
       sttModel: 'qwen/qwen3-asr-1.7b',
       analyzerModel: 'qwen/qwen3.8-flash',
       hardBudgetUsd: 0.5,
@@ -329,6 +349,7 @@ class DemoApi implements AppApi {
     this.snapshot.capturePermission = 'granted'
     this.snapshot.connection = 'demo'
     this.snapshot.lesson = {
+      id: this.snapshot.lesson.id ?? 'demo-lesson-1',
       status: 'live',
       startedAt: DEMO_TIMESTAMP,
     }
@@ -338,7 +359,7 @@ class DemoApi implements AppApi {
   }
 
   async stopLesson(): Promise<AppSnapshot> {
-    this.snapshot.lesson = { status: 'idle' }
+    this.snapshot.lesson = { id: this.snapshot.lesson.id ?? 'demo-lesson-1', status: 'idle' }
     this.snapshot.levels = { mic: 0, remote: 0 }
     this.publish()
     return this.getSnapshot()
@@ -368,6 +389,7 @@ class DemoApi implements AppApi {
         meaning: 'conversation snippet',
         partOfSpeech: 'noun',
         example: '我标记了一个对话片段。',
+        examplePinyin: 'Wǒ biāojì le yí ge duìhuà piànduàn.',
         exampleTranslation: 'I marked a conversation snippet.',
         provenance: 'Manual mark · just now',
         confidence: 1,
@@ -395,6 +417,9 @@ class DemoApi implements AppApi {
           meaning: candidate.meaning,
           partOfSpeech: candidate.partOfSpeech,
           classifier: candidate.classifier,
+          example: candidate.example,
+          examplePinyin: candidate.examplePinyin,
+          exampleTranslation: candidate.exampleTranslation,
           status: 'learning',
           tags: candidate.tags,
           lastSeen: 'Just now',
@@ -445,6 +470,25 @@ class DemoApi implements AppApi {
     this.snapshot.settings = next
     this.snapshot.cost.hardBudgetUsd = next.hardBudgetUsd
     this.snapshot.privacy.audioRetention = next.audioRetention
+    this.publish()
+    return this.getSnapshot()
+  }
+
+  async deleteLastLesson(): Promise<AppSnapshot> {
+    if (this.snapshot.lesson.status === 'live') {
+      throw new ApiValidationError('Stop the live lesson before deleting its data.')
+    }
+    this.snapshot.lesson = { status: 'idle' }
+    this.snapshot.levels = { mic: 0, remote: 0 }
+    this.snapshot.transcript = []
+    this.snapshot.candidates = []
+    this.snapshot.cost = {
+      ...this.snapshot.cost,
+      currentUsd: 0,
+      projectedUsd: 0,
+      warning: false,
+      hardExceeded: false,
+    }
     this.publish()
     return this.getSnapshot()
   }
@@ -514,6 +558,10 @@ class RuntimeApi implements AppApi {
 
   async saveSettings(patch: SettingsPatch): Promise<AppSnapshot> {
     return this.callMutation(BACKEND_METHODS.saveSettings, patch)
+  }
+
+  async deleteLastLesson(): Promise<AppSnapshot> {
+    return this.callMutation(BACKEND_METHODS.deleteLastLesson)
   }
 
   async refresh(): Promise<AppSnapshot> {
@@ -606,6 +654,10 @@ class UnavailableApi implements AppApi {
     return this.fail()
   }
 
+  deleteLastLesson(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
   refresh(): Promise<AppSnapshot> {
     return this.fail()
   }
@@ -656,7 +708,7 @@ export type BackendSnapshotContract = {
   connection: ConnectionState
   capturePermission: CapturePermission
   target: TargetApp
-  lesson: { status: LessonStatus }
+  lesson: { id?: string; status: LessonStatus }
   levels: AudioLevels
   cost: CostSummary
   privacy: PrivacyState

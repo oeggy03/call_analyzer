@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -29,23 +30,26 @@ type Service struct {
 	secrets SecretStore
 	router  *openrouter.Client
 
-	mu             sync.RWMutex
-	capturing      bool
-	currentLesson  string
-	lastLesson     string
-	ring           *audio.RingBuffer
-	session        *captureSession
-	sessionID      string
-	lessonStarted  time.Time
-	target         string
-	permission     capture.Permission
-	micLevel       float64
-	remoteLevel    float64
-	settings       RuntimeSettings
-	settingsLoaded bool
-	eventHook      EventHook
-	databasePath   string
-	syncEnabled    bool
+	mu              sync.RWMutex
+	capturing       bool
+	currentLesson   string
+	lastLesson      string
+	lessonError     string
+	ring            *audio.RingBuffer
+	session         *captureSession
+	sessionID       string
+	sessionLessonID string
+	lessonStarted   time.Time
+	target          string
+	permission      capture.Permission
+	micLevel        float64
+	remoteLevel     float64
+	lastLevelEmit   time.Time
+	settings        RuntimeSettings
+	settingsLoaded  bool
+	eventHook       EventHook
+	databasePath    string
+	syncEnabled     bool
 }
 
 func New(store *storage.Store, source capture.Source, secrets SecretStore, router *openrouter.Client) *Service {
@@ -94,6 +98,16 @@ func (s *Service) Initialize(ctx context.Context) error {
 	}
 	if err := s.loadSettingsIfNeeded(ctx); err != nil {
 		return fmt.Errorf("service: load settings: %w", err)
+	}
+	if _, err := s.store.Lessons().EndOrphaned(ctx, time.Now().UTC()); err != nil {
+		return fmt.Errorf("service: recover lessons: %w", err)
+	}
+	if lesson, err := s.store.Lessons().Latest(ctx); err == nil {
+		s.mu.Lock()
+		s.lastLesson = lesson.ID
+		s.mu.Unlock()
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("service: load latest lesson: %w", err)
 	}
 	return nil
 }
@@ -168,6 +182,9 @@ func (s *Service) ClearAPIKey(ctx context.Context) error {
 	if err := s.secrets.Delete(ctx, secretOpenRouterAPIKey); err != nil {
 		return err
 	}
+	if s.HasAPIKey(ctx) {
+		return errors.New("OpenRouter API key is supplied by the environment and cannot be cleared in the app")
+	}
 	s.emit("config.changed", s.Config(ctx))
 	return nil
 }
@@ -193,11 +210,35 @@ func (s *Service) ConfigureOpenRouter(config openrouter.Config) error {
 }
 
 func (s *Service) StartLesson(ctx context.Context, title string, startedAt time.Time) (domain.Lesson, error) {
+	s.mu.RLock()
+	target := s.target
+	s.mu.RUnlock()
+	metadata := storage.LessonMetadata{Target: target}
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		return domain.Lesson{}, err
+	}
+	metadata.STTModel = settings.STTModel
+	metadata.AnalyzerModel = settings.AnalyzerModel
+	metadata.RetentionPolicy = settings.AudioRetention
+	return s.StartLessonWithMetadata(ctx, title, startedAt, metadata)
+}
+
+func (s *Service) StartLessonWithMetadata(
+	ctx context.Context,
+	title string,
+	startedAt time.Time,
+	metadata storage.LessonMetadata,
+) (domain.Lesson, error) {
 	if s.store == nil {
 		return domain.Lesson{}, errors.New("service: storage is not configured")
 	}
-	lesson, err := s.store.Lessons().Start(ctx, title, startedAt)
+	lesson, err := s.store.Lessons().StartWithMetadata(ctx, title, startedAt, metadata)
 	if err == nil {
+		s.mu.Lock()
+		s.lastLesson = lesson.ID
+		s.lessonError = ""
+		s.mu.Unlock()
 		s.emit("lesson.started", lesson)
 	}
 	return lesson, err
@@ -207,8 +248,24 @@ func (s *Service) EndLesson(ctx context.Context, id string, endedAt time.Time) (
 	if s.store == nil {
 		return domain.Lesson{}, errors.New("service: storage is not configured")
 	}
-	lesson, err := s.store.Lessons().End(ctx, id, endedAt)
+	finalCost := 0.0
+	s.mu.RLock()
+	sessionID := s.sessionID
+	sessionLessonID := s.sessionLessonID
+	s.mu.RUnlock()
+	if sessionID != "" && sessionLessonID == id {
+		if cost, costErr := s.store.Usage().SumBySession(ctx, sessionID); costErr == nil {
+			finalCost = cost
+		}
+	}
+	lesson, err := s.store.Lessons().EndWithCost(ctx, id, endedAt, finalCost)
 	if err == nil {
+		s.mu.Lock()
+		if s.sessionLessonID == id {
+			s.sessionID = ""
+			s.sessionLessonID = ""
+		}
+		s.mu.Unlock()
 		s.emit("lesson.ended", lesson)
 	}
 	return lesson, err
@@ -227,16 +284,84 @@ func (s *Service) DeleteLesson(ctx context.Context, id string) error {
 	}
 	err := s.store.Lessons().Delete(ctx, id)
 	if err == nil {
+		s.mu.Lock()
+		if s.currentLesson == id {
+			s.currentLesson = ""
+		}
+		if s.lastLesson == id {
+			s.lastLesson = ""
+		}
+		if s.sessionLessonID == id {
+			s.sessionID = ""
+			s.sessionLessonID = ""
+		}
+		if s.lessonError != "" && s.currentLesson == "" {
+			s.lessonError = ""
+		}
+		s.mu.Unlock()
+		if latest, latestErr := s.store.Lessons().Latest(ctx); latestErr == nil {
+			s.mu.Lock()
+			if s.currentLesson == "" {
+				s.lastLesson = latest.ID
+			}
+			s.mu.Unlock()
+		} else if !errors.Is(latestErr, sql.ErrNoRows) {
+			return latestErr
+		}
 		s.emit("lesson.deleted", id)
 	}
 	return err
 }
 
+func (s *Service) DeleteLastLesson(ctx context.Context) error {
+	if s.store == nil {
+		return errors.New("service: storage is not configured")
+	}
+	s.mu.RLock()
+	live := s.capturing || s.currentLesson != ""
+	s.mu.RUnlock()
+	if live {
+		return errors.New("service: cannot delete the last lesson while capture is live")
+	}
+	lesson, err := s.store.Lessons().LatestComplete(ctx)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("service: no completed lesson to delete")
+		}
+		return err
+	}
+	if err := s.store.Lessons().Delete(ctx, lesson.ID); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.currentLesson = ""
+	s.lastLesson = ""
+	s.session = nil
+	s.sessionID = ""
+	s.sessionLessonID = ""
+	s.ring = nil
+	s.lessonStarted = time.Time{}
+	s.lessonError = ""
+	s.mu.Unlock()
+	if latest, latestErr := s.store.Lessons().Latest(ctx); latestErr == nil {
+		s.mu.Lock()
+		s.lastLesson = latest.ID
+		s.mu.Unlock()
+	} else if !errors.Is(latestErr, sql.ErrNoRows) {
+		return latestErr
+	}
+	s.emit("lesson.deleted", lesson.ID)
+	return nil
+}
+
 func (s *Service) StartCapture(ctx context.Context, lessonID string) error {
 	if s.source == nil {
-		return errors.New("service: capture source is not configured")
+		err := errors.New("service: capture source is not configured")
+		s.diagnostic(err.Error(), nil)
+		return err
 	}
 	if err := s.loadSettingsIfNeeded(ctx); err != nil {
+		s.diagnostic("loading capture settings failed", err)
 		return err
 	}
 	s.mu.Lock()
@@ -249,13 +374,17 @@ func (s *Service) StartCapture(ctx context.Context, lessonID string) error {
 	}
 	s.mu.Unlock()
 	if lessonID == "" {
-		return errors.New("service: lesson id is required")
+		err := errors.New("service: lesson id is required")
+		s.diagnostic(err.Error(), nil)
+		return err
 	}
 	lesson, err := s.store.Lessons().Get(ctx, lessonID)
 	if err != nil {
-		return fmt.Errorf("service: load lesson: %w", err)
+		err = fmt.Errorf("service: load lesson: %w", err)
+		s.diagnostic(err.Error(), nil)
+		return err
 	}
-	ring, err := audio.NewRingBuffer(audio.DefaultPreRoll + audio.DefaultPostRoll)
+	ring, err := audio.NewRingBuffer(audio.DefaultRingCapacity)
 	if err != nil {
 		return err
 	}
@@ -270,8 +399,12 @@ func (s *Service) StartCapture(ctx context.Context, lessonID string) error {
 	s.ring = ring
 	s.lessonStarted = lesson.StartedAt
 	s.sessionID = session.sessionID
+	s.sessionLessonID = lessonID
 	s.session = session
 	s.capturing = true
+	s.micLevel = 0
+	s.remoteLevel = 0
+	s.lastLevelEmit = time.Time{}
 	s.mu.Unlock()
 	if eventSource, ok := s.source.(capture.EventSource); ok {
 		eventSource.SetEventHandler(s.receiveEvent)
@@ -289,6 +422,7 @@ func (s *Service) StartCapture(ctx context.Context, lessonID string) error {
 			s.ring = nil
 			s.session = nil
 			s.mu.Unlock()
+			s.diagnostic("capture configuration failed", err)
 			return err
 		}
 	}
@@ -300,6 +434,7 @@ func (s *Service) StartCapture(ctx context.Context, lessonID string) error {
 		s.ring = nil
 		s.session = nil
 		s.mu.Unlock()
+		s.diagnostic("starting capture failed", err)
 		return err
 	}
 	session.start(s)
@@ -309,7 +444,9 @@ func (s *Service) StartCapture(ctx context.Context, lessonID string) error {
 
 func (s *Service) StopCapture(ctx context.Context) error {
 	if s.source == nil {
-		return errors.New("service: capture source is not configured")
+		err := errors.New("service: capture source is not configured")
+		s.diagnostic(err.Error(), nil)
+		return err
 	}
 	s.mu.RLock()
 	running := s.capturing
@@ -328,7 +465,13 @@ func (s *Service) StopCapture(ctx context.Context) error {
 	s.currentLesson = ""
 	s.session = nil
 	s.ring = nil
+	s.micLevel = 0
+	s.remoteLevel = 0
+	s.lastLevelEmit = time.Time{}
 	s.mu.Unlock()
+	if sourceErr != nil {
+		s.diagnostic("stopping capture failed", sourceErr)
+	}
 	s.emit("capture.stopped", map[string]string{"lessonId": lessonID})
 	return sourceErr
 }
@@ -336,6 +479,9 @@ func (s *Service) StopCapture(ctx context.Context) error {
 func (s *Service) StopAndEndCurrentLesson(ctx context.Context) (domain.Lesson, error) {
 	s.mu.RLock()
 	lessonID := s.currentLesson
+	lessonStart := s.lessonStarted
+	sessionID := s.sessionID
+	router := s.router
 	s.mu.RUnlock()
 	if lessonID == "" {
 		return domain.Lesson{}, errors.New("service: no active lesson")
@@ -343,6 +489,20 @@ func (s *Service) StopAndEndCurrentLesson(ctx context.Context) (domain.Lesson, e
 	flushCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	stopErr := s.StopCapture(flushCtx)
+	if router == nil || !router.BudgetStatus().HardExceeded {
+		reconcileCtx, reconcileCancel := context.WithTimeout(ctx, 20*time.Second)
+		reconcileErr := s.reconcileLesson(
+			reconcileCtx,
+			lessonID,
+			sessionID,
+			lessonStart,
+			router,
+		)
+		reconcileCancel()
+		if reconcileErr != nil && !errors.Is(reconcileErr, context.Canceled) {
+			s.diagnostic("post-lesson reconciliation failed", reconcileErr)
+		}
+	}
 	lesson, endErr := s.EndLesson(ctx, lessonID, time.Time{})
 	if stopErr != nil {
 		return lesson, stopErr
@@ -385,7 +545,19 @@ func (s *Service) updateAudioLevel(frame capture.AudioFrame) {
 	default:
 		s.micLevel = level
 	}
+	shouldEmit := time.Since(s.lastLevelEmit) >= 500*time.Millisecond
+	if shouldEmit {
+		s.lastLevelEmit = time.Now()
+	}
+	micLevel := s.micLevel
+	remoteLevel := s.remoteLevel
 	s.mu.Unlock()
+	if shouldEmit {
+		s.emit("capture.levels", map[string]float64{
+			"mic":    micLevel,
+			"remote": remoteLevel,
+		})
+	}
 }
 
 func (s *Service) MarkMoment(ctx context.Context, label string) (capture.Moment, error) {
@@ -400,9 +572,27 @@ func (s *Service) MarkMoment(ctx context.Context, label string) (capture.Moment,
 		if session == nil {
 			return capture.Moment{}, errors.New("service: no active lesson")
 		}
+		offset := moment.At.Sub(session.lessonStart).Milliseconds()
+		if offset < 0 {
+			offset = 0
+		}
+		marker, markerErr := s.store.Transcripts().Insert(ctx, domain.TranscriptSegment{
+			LessonID:   session.lessonID,
+			StartMS:    offset,
+			EndMS:      offset,
+			Text:       "Marked moment",
+			Source:     "system/mark",
+			Confidence: 1,
+		})
+		if markerErr != nil {
+			return capture.Moment{}, fmt.Errorf("service: persist lesson mark: %w", markerErr)
+		}
+		s.emit("transcript.segment", marker)
 		session.manualWG.Add(1)
 		go s.waitForManualMoment(session, moment)
 		s.emit("capture.moment", moment)
+	} else {
+		s.diagnostic("manual mark failed", err)
 	}
 	return moment, err
 }
@@ -417,6 +607,26 @@ func (s *Service) waitForManualMoment(session *captureSession, moment capture.Mo
 		audio.DefaultPostRoll,
 	)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			window, fallbackErr := session.ring.SnapshotClamped(
+				moment.At,
+				session.lessonStart,
+				audio.DefaultPreRoll,
+				audio.DefaultPostRoll,
+			)
+			if fallbackErr == nil {
+				if !session.enqueueJob(analysisJob{
+					window: window,
+					source: "system/manual",
+					manual: true,
+				}, true) {
+					s.diagnostic("manual moment queue full", nil)
+				}
+				return
+			}
+			s.diagnostic("manual moment window unavailable", fallbackErr)
+			return
+		}
 		if !errors.Is(err, context.Canceled) {
 			s.diagnostic("manual moment window failed", err)
 		}
@@ -424,7 +634,7 @@ func (s *Service) waitForManualMoment(session *captureSession, moment capture.Mo
 	}
 	if !session.enqueueJob(analysisJob{
 		window: window,
-		source: "system",
+		source: "system/manual",
 		manual: true,
 	}, true) {
 		s.diagnostic("manual moment queue full", nil)
@@ -456,6 +666,25 @@ func (s *Service) ListTargets(ctx context.Context) ([]capture.Target, error) {
 	}, nil
 }
 
+func (s *Service) ValidateTarget(ctx context.Context, target string) error {
+	if target != "zoom" && target != "us.zoom.xos" {
+		return nil
+	}
+	targets, err := s.ListTargets(ctx)
+	if err != nil {
+		return fmt.Errorf("open Zoom before starting a lesson: could not inspect available targets: %w", err)
+	}
+	for _, candidate := range targets {
+		if !candidate.Available {
+			continue
+		}
+		if candidate.ID == "zoom" || candidate.ID == "us.zoom.xos" {
+			return nil
+		}
+	}
+	return errors.New("open Zoom before starting a lesson, then try again")
+}
+
 func (s *Service) CapturePermission() capture.Permission {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -466,6 +695,9 @@ func (s *Service) CapturePermission() capture.Permission {
 }
 
 func (s *Service) SetTarget(target string) {
+	if target == "us.zoom.xos" {
+		target = "zoom"
+	}
 	s.mu.Lock()
 	s.target = target
 	s.mu.Unlock()
@@ -504,6 +736,12 @@ func (s *Service) CurrentLesson(ctx context.Context) (domain.Lesson, bool, error
 	return lesson, running, err
 }
 
+func (s *Service) LessonError() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lessonError
+}
+
 func (s *Service) CurrentSessionID() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -513,7 +751,14 @@ func (s *Service) CurrentSessionID() string {
 func (s *Service) CurrentCost(ctx context.Context) (float64, error) {
 	sessionID := s.CurrentSessionID()
 	if sessionID == "" {
-		return 0, nil
+		lesson, _, err := s.CurrentLesson(ctx)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return 0, nil
+			}
+			return 0, err
+		}
+		return lesson.FinalCost, nil
 	}
 	return s.store.Usage().SumBySession(ctx, sessionID)
 }
@@ -581,6 +826,13 @@ func (s *Service) EditCandidate(ctx context.Context, id string, edit domain.Cand
 		if edit.MarkedPinyin == nil {
 			edit.MarkedPinyin = &marked
 		}
+	}
+	if edit.ExamplePinyin != nil {
+		numbered, _, err := vocabulary.CanonicalPinyin(*edit.ExamplePinyin)
+		if err != nil {
+			return domain.VocabularyEntry{}, fmt.Errorf("service: example pinyin: %w", err)
+		}
+		edit.ExamplePinyin = &numbered
 	}
 	entry, err := s.store.Vocabulary().Edit(ctx, id, edit)
 	if err == nil {
@@ -665,6 +917,13 @@ func (s *Service) GetStudyState(ctx context.Context, entryID string) (domain.Stu
 		return domain.StudyState{}, errors.New("service: storage is not configured")
 	}
 	return s.store.Study().GetState(ctx, entryID)
+}
+
+func (s *Service) ObservationStats(ctx context.Context, entryID string) (int, time.Time, error) {
+	if s.store == nil {
+		return 0, time.Time{}, errors.New("service: storage is not configured")
+	}
+	return s.store.Vocabulary().ObservationStats(ctx, entryID)
 }
 
 func (s *Service) RecordReview(ctx context.Context, entryID string, rating int, reviewedAt time.Time, metadata string) (domain.ReviewEvent, domain.StudyState, error) {

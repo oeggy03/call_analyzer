@@ -47,6 +47,32 @@ func TestRingBufferBoundsAndPostRoll(t *testing.T) {
 	}
 }
 
+func TestSnapshotClampedUsesFinalFramesWhenPostRollIsIncomplete(t *testing.T) {
+	ring, err := NewRingBuffer(DefaultRingCapacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Unix(500, 0).UTC()
+	for i := 0; i < 5; i++ {
+		if err := ring.Append(Frame{
+			Timestamp:  start.Add(time.Duration(i) * time.Second),
+			Samples:    []int16{int16(i), int16(i)},
+			SampleRate: 2,
+			Channels:   1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mark := start.Add(2 * time.Second)
+	window, err := ring.SnapshotClamped(mark, start, DefaultPreRoll, DefaultPostRoll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !window.Start.Equal(start) || !window.End.Equal(start.Add(5*time.Second)) {
+		t.Fatalf("unexpected clamped bounds %s-%s", window.Start, window.End)
+	}
+}
+
 func TestWaitForWindow(t *testing.T) {
 	ring, err := NewRingBuffer(10 * time.Second)
 	if err != nil {

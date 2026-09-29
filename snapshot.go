@@ -6,15 +6,23 @@ import (
 	"time"
 
 	"github.com/oeggy03/call_analyzer/internal/domain"
+	"github.com/oeggy03/call_analyzer/internal/vocabulary"
 )
 
 func validTarget(target string) bool {
 	switch target {
-	case "zoom", "googleMeet", "teams":
+	case "zoom", "us.zoom.xos", "googleMeet", "teams":
 		return true
 	default:
 		return false
 	}
+}
+
+func normalizeTarget(target string) string {
+	if target == "us.zoom.xos" {
+		return "zoom"
+	}
+	return target
 }
 
 func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
@@ -44,14 +52,16 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 		}
 		for _, segment := range segments {
 			source := segment.Source
-			if source == "" {
+			isMoment := source == "system/mark"
+			if isMoment || source == "" {
 				source = "system"
 			}
 			transcriptLines = append(transcriptLines, TranscriptLine{
 				ID:        segment.ID,
 				Text:      segment.Text,
 				Source:    source,
-				Timestamp: timestamp(segment.CreatedAt),
+				Timestamp: timestamp(lesson.StartedAt.Add(time.Duration(segment.StartMS) * time.Millisecond)),
+				IsMoment:  isMoment,
 			})
 		}
 	}
@@ -59,6 +69,20 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 	cost, err := a.service.CurrentCost(ctx)
 	if err != nil {
 		return AppSnapshot{}, err
+	}
+	projected := cost
+	if running && !lesson.StartedAt.IsZero() {
+		elapsed := time.Since(lesson.StartedAt)
+		if elapsed > 0 {
+			projectionWindow := elapsed
+			if projectionWindow < 5*time.Minute {
+				projectionWindow = 5 * time.Minute
+			}
+			runRate := cost / projectionWindow.Hours()
+			if runRate > projected {
+				projected = runRate
+			}
+		}
 	}
 	target := a.service.Target()
 	if target == "" {
@@ -70,12 +94,14 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 	}
 	lessonState := LessonSnapshot{Status: "idle"}
 	if lesson.ID != "" {
+		lessonState.ID = lesson.ID
 		lessonState.StartedAt = timestamp(lesson.StartedAt)
+		lessonState.Error = a.service.LessonError()
 		if running {
 			lessonState.Status = "live"
 		}
 	}
-	uiCandidates := makeCandidateSnapshots(candidates)
+	uiCandidates := a.makeCandidateSnapshots(ctx, candidates)
 	uiVocabulary := make([]VocabularySnapshot, 0, len(vocabulary))
 	for _, entry := range vocabulary {
 		uiVocabulary = append(uiVocabulary, a.toVocabularySnapshot(ctx, entry))
@@ -91,8 +117,10 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 		Vocabulary:        uiVocabulary,
 		Cost: CostSummary{
 			CurrentUSD:    cost,
-			ProjectedUSD:  cost,
+			ProjectedUSD:  projected,
 			HardBudgetUSD: settings.HardBudgetUSD,
+			Warning:       cost >= 0.35,
+			HardExceeded:  cost >= settings.HardBudgetUSD,
 			Currency:      "USD",
 		},
 		Privacy: PrivacyState{
@@ -112,7 +140,7 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 	}, nil
 }
 
-func makeCandidateSnapshots(entries []domain.VocabularyEntry) []CandidateSnapshot {
+func (a *App) makeCandidateSnapshots(ctx context.Context, entries []domain.VocabularyEntry) []CandidateSnapshot {
 	result := make([]CandidateSnapshot, 0, len(entries))
 	seen := make(map[string]string)
 	for _, entry := range entries {
@@ -131,7 +159,7 @@ func makeCandidateSnapshots(entries []domain.VocabularyEntry) []CandidateSnapsho
 			seen[key] = entry.ID
 		}
 		meaning, partOfSpeech, classifier := firstSense(entry)
-		example, translation := firstExample(entry)
+		example, examplePinyin, translation := firstExample(entry)
 		status := "pending"
 		switch entry.Status {
 		case domain.VocabularyStatusConfirmed:
@@ -140,6 +168,25 @@ func makeCandidateSnapshots(entries []domain.VocabularyEntry) []CandidateSnapsho
 			status = "rejected"
 		}
 		provenance := string(entry.Provenance)
+		candidateTimestamp := entry.CreatedAt
+		if len(entry.Evidence) > 0 {
+			evidence := entry.Evidence[0]
+			if lesson, err := a.store.Lessons().Get(ctx, evidence.LessonID); err == nil {
+				candidateTimestamp = lesson.StartedAt.Add(time.Duration(evidence.StartMS) * time.Millisecond)
+			}
+			if segment, err := a.store.Transcripts().Get(ctx, evidence.SegmentID); err == nil {
+				switch {
+				case strings.HasPrefix(segment.Source, "system/ocr"):
+					provenance = "Screen OCR"
+				case segment.Source == "remote":
+					provenance = "Remote transcript"
+				case segment.Source == "microphone":
+					provenance = "Microphone transcript"
+				case segment.Source != "":
+					provenance = "Lesson transcript"
+				}
+			}
+		}
 		if entry.Manual {
 			provenance = "Manual mark"
 		}
@@ -152,11 +199,12 @@ func makeCandidateSnapshots(entries []domain.VocabularyEntry) []CandidateSnapsho
 			PartOfSpeech:       partOfSpeech,
 			Classifier:         classifier,
 			Example:            example,
+			ExamplePinyin:      examplePinyin,
 			ExampleTranslation: translation,
 			Provenance:         provenance,
 			Confidence:         entry.Confidence,
 			Evidence:           firstEvidence(entry),
-			Timestamp:          timestamp(entry.CreatedAt),
+			Timestamp:          timestamp(candidateTimestamp),
 			Bucket:             bucket,
 			Status:             status,
 			DuplicateOf:        duplicateOf,
@@ -169,12 +217,14 @@ func makeCandidateSnapshots(entries []domain.VocabularyEntry) []CandidateSnapsho
 func (a *App) toVocabularySnapshot(ctx context.Context, entry domain.VocabularyEntry) VocabularySnapshot {
 	status := "learning"
 	lastSeen := entry.UpdatedAt
-	seenCount := 0
-	if state, err := a.service.GetStudyState(ctx, entry.ID); err == nil {
-		seenCount = state.Repetitions
-		if state.LastReviewedAt != nil {
-			lastSeen = *state.LastReviewedAt
+	seenCount := len(entry.Evidence)
+	if count, observedAt, err := a.service.ObservationStats(ctx, entry.ID); err == nil {
+		seenCount = count
+		if observedAt.After(lastSeen) {
+			lastSeen = observedAt
 		}
+	}
+	if state, err := a.service.GetStudyState(ctx, entry.ID); err == nil {
 		if state.Repetitions >= 5 {
 			status = "mastered"
 		} else if state.DueAt != nil && !state.DueAt.After(time.Now()) {
@@ -182,18 +232,22 @@ func (a *App) toVocabularySnapshot(ctx context.Context, entry domain.VocabularyE
 		}
 	}
 	meaning, partOfSpeech, classifier := firstSense(entry)
+	example, examplePinyin, exampleTranslation := firstExample(entry)
 	return VocabularySnapshot{
-		ID:           entry.ID,
-		Simplified:   entry.Simplified,
-		Traditional:  entry.Traditional,
-		Pinyin:       firstNonEmpty(entry.MarkedPinyin, entry.Reading),
-		Meaning:      meaning,
-		PartOfSpeech: partOfSpeech,
-		Classifier:   classifier,
-		Status:       status,
-		Tags:         tagNames(entry.Tags),
-		LastSeen:     timestamp(lastSeen),
-		SeenCount:    seenCount,
+		ID:                 entry.ID,
+		Simplified:         entry.Simplified,
+		Traditional:        entry.Traditional,
+		Pinyin:             firstNonEmpty(entry.MarkedPinyin, entry.Reading),
+		Meaning:            meaning,
+		PartOfSpeech:       partOfSpeech,
+		Classifier:         classifier,
+		Example:            example,
+		ExamplePinyin:      examplePinyin,
+		ExampleTranslation: exampleTranslation,
+		Status:             status,
+		Tags:               tagNames(entry.Tags),
+		LastSeen:           timestamp(lastSeen),
+		SeenCount:          seenCount,
 	}
 }
 
@@ -204,11 +258,16 @@ func firstSense(entry domain.VocabularyEntry) (string, string, string) {
 	return entry.Senses[0].Gloss, entry.Senses[0].PartOfSpeech, entry.Senses[0].Classifier
 }
 
-func firstExample(entry domain.VocabularyEntry) (string, string) {
+func firstExample(entry domain.VocabularyEntry) (string, string, string) {
 	if len(entry.Examples) == 0 {
-		return "", ""
+		return "", "", ""
 	}
-	return entry.Examples[0].Simplified, entry.Examples[0].Translation
+	example := entry.Examples[0]
+	pinyin := example.Reading
+	if _, marked, err := vocabulary.CanonicalPinyin(example.Reading); err == nil {
+		pinyin = marked
+	}
+	return example.Simplified, pinyin, example.Translation
 }
 
 func firstEvidence(entry domain.VocabularyEntry) string {

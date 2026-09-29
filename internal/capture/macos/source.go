@@ -7,14 +7,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/oeggy03/call_analyzer/internal/capture"
 )
 
 const defaultBundleID = "us.zoom.xos"
+
+var helperReadyTimeout = 20 * time.Second
 
 // Source adapts the native helper to capture.Source. It intentionally keeps
 // the parent's pre/post-roll buffering out of this package.
@@ -43,9 +48,12 @@ var (
 
 // NewSource creates a shared capture-contract adapter.
 func NewSource(config Config) *Source {
+	config = normalizeConfig(config)
+	parent, prefix := sessionSpoolLocation(config.SpoolDir)
+	_ = cleanupStaleSessionSpools(parent, prefix)
 	return &Source{
 		adapter: NewAdapter(config),
-		config:  normalizeConfig(config),
+		config:  config,
 	}
 }
 
@@ -134,6 +142,8 @@ func (s *Source) Start(
 
 	startup := make(chan error, 1)
 	go s.consumeEvents(events, done, startup, startedAt, onFrame, sessionDir)
+	readyTimer := time.NewTimer(helperReadyTimeout)
+	defer readyTimer.Stop()
 
 	select {
 	case err := <-startup:
@@ -149,6 +159,11 @@ func (s *Source) Start(
 		_ = s.Stop(stopContext)
 		cancel()
 		return ctx.Err()
+	case <-readyTimer.C:
+		stopContext, cancel := context.WithTimeout(context.Background(), time.Second)
+		_ = s.Stop(stopContext)
+		cancel()
+		return fmt.Errorf("macos capture helper did not become ready within %s", helperReadyTimeout)
 	}
 }
 
@@ -387,19 +402,75 @@ func normalizeConfig(config Config) Config {
 		config.BundleID = defaultBundleID
 	}
 	if config.ChunkSeconds == 0 {
-		config.ChunkSeconds = 10
+		config.ChunkSeconds = 2
 	}
 	return config
 }
 
 func createSessionSpool(parent string) (string, error) {
-	if parent == "" {
-		return os.MkdirTemp("", "call-analyzer-capture-")
-	}
+	parent, prefix := sessionSpoolLocation(parent)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return "", err
 	}
-	return os.MkdirTemp(parent, "session-")
+	if err := cleanupStaleSessionSpools(parent, prefix); err != nil {
+		return "", err
+	}
+	sessionDir, err := os.MkdirTemp(parent, prefix)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(
+		filepath.Join(sessionDir, ".owner-pid"),
+		[]byte(strconv.Itoa(os.Getpid())),
+		0o600,
+	); err != nil {
+		_ = os.RemoveAll(sessionDir)
+		return "", err
+	}
+	return sessionDir, nil
+}
+
+func sessionSpoolLocation(parent string) (string, string) {
+	if parent == "" {
+		return os.TempDir(), "call-analyzer-capture-"
+	}
+	return parent, "session-"
+}
+
+func cleanupStaleSessionSpools(parent, prefix string) error {
+	matches, err := filepath.Glob(filepath.Join(parent, prefix+"*"))
+	if err != nil {
+		return err
+	}
+	for _, path := range matches {
+		info, statErr := os.Stat(path)
+		if statErr != nil || !info.IsDir() {
+			continue
+		}
+		ownerBytes, readErr := os.ReadFile(filepath.Join(path, ".owner-pid"))
+		ownerPID, parseErr := strconv.Atoi(strings.TrimSpace(string(ownerBytes)))
+		if readErr == nil && parseErr == nil && processIsAlive(ownerPID) {
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func processIsAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return pid == os.Getpid()
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return process.Signal(syscall.Signal(0)) == nil
 }
 
 func safeChunkPath(path, sessionDir string) (string, error) {

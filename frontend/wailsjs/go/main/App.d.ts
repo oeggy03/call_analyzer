@@ -4,6 +4,8 @@ import {main} from '../models';
 
 export function ConfirmCandidate(arg1:string):Promise<main.AppSnapshot>;
 
+export function DeleteLastLesson():Promise<main.AppSnapshot>;
+
 export function EditCandidate(arg1:string,arg2:main.CandidateEditPatch):Promise<main.AppSnapshot>;
 
 export function GetAppSnapshot():Promise<main.AppSnapshot>;

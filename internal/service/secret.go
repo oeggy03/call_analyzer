@@ -128,13 +128,23 @@ func (s ChainedSecretStore) Set(ctx context.Context, name, value string) error {
 }
 
 func (s ChainedSecretStore) Delete(ctx context.Context, name string) error {
+	var writable bool
+	var lastErr error
 	for _, store := range s.Stores {
 		if store == nil {
 			continue
 		}
 		if err := store.Delete(ctx, name); err == nil {
-			return nil
+			writable = true
+		} else {
+			lastErr = err
 		}
+	}
+	if writable {
+		return nil
+	}
+	if lastErr != nil {
+		return lastErr
 	}
 	return errors.New("secret: no writable store")
 }

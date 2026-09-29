@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	DefaultPreRoll  = 25 * time.Second
-	DefaultPostRoll = 10 * time.Second
+	DefaultPreRoll      = 25 * time.Second
+	DefaultPostRoll     = 10 * time.Second
+	DefaultRingCapacity = 60 * time.Second
 )
 
 var (
@@ -173,6 +174,39 @@ func (r *RingBuffer) SnapshotAround(mark time.Time, preRoll, postRoll time.Durat
 		return AudioWindow{}, ErrInvalidWindow
 	}
 	return r.Snapshot(mark.Add(-preRoll), mark.Add(postRoll))
+}
+
+// SnapshotClamped returns the best available portion of a requested window.
+// It is used when capture is stopping and the full post-roll cannot arrive.
+func (r *RingBuffer) SnapshotClamped(
+	mark, minimumStart time.Time,
+	preRoll, postRoll time.Duration,
+) (AudioWindow, error) {
+	if preRoll < 0 || postRoll < 0 {
+		return AudioWindow{}, ErrInvalidWindow
+	}
+	start := mark.Add(-preRoll)
+	if start.Before(minimumStart) {
+		start = minimumStart
+	}
+	end := mark.Add(postRoll)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.frames) == 0 {
+		return AudioWindow{}, ErrOutsideBuffer
+	}
+	oldest := r.frames[0].Timestamp
+	newest := r.frames[len(r.frames)-1].Timestamp.Add(frameDuration(r.frames[len(r.frames)-1]))
+	if start.Before(oldest) {
+		start = oldest
+	}
+	if end.After(newest) {
+		end = newest
+	}
+	if !end.After(start) {
+		return AudioWindow{}, ErrOutsideBuffer
+	}
+	return r.snapshotLocked(start, end)
 }
 
 func (r *RingBuffer) Bounds() (oldest, newest time.Time, ok bool) {

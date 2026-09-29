@@ -16,4 +16,8 @@ func TestScoreWords(t *testing.T) {
 	if score.Precision != 0.5 || score.Recall != 0.5 || score.Matched != 1 {
 		t.Fatalf("unexpected score: %+v", score)
 	}
+	abstention := ScoreWords(nil, nil)
+	if abstention.Precision != 1 || abstention.Recall != 1 {
+		t.Fatalf("correct abstention should score perfectly: %+v", abstention)
+	}
 }

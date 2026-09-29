@@ -1,6 +1,10 @@
 import Darwin
 import Foundation
 
+enum CaptureDefaults {
+    static let chunkSeconds = 2
+}
+
 private enum CLICommand {
     case list
     case capture(CaptureOptions)
@@ -36,7 +40,7 @@ private struct CLI {
         var spoolDirectory: URL?
         var microphone = false
         var ocr = false
-        var chunkSeconds = 10
+        var chunkSeconds = CaptureDefaults.chunkSeconds
 
         var index = 0
         while index < arguments.count {
@@ -118,7 +122,7 @@ private struct CLI {
     private static let usage = """
     Usage:
       call-analyzer-capture list
-      call-analyzer-capture capture --bundle-id <id> --spool <dir> [--microphone] [--ocr] [--chunk-seconds 10]
+      call-analyzer-capture capture --bundle-id <id> --spool <dir> [--microphone] [--ocr] [--chunk-seconds 2]
       call-analyzer-capture stop --pid <capture-process-id>
     """
 }

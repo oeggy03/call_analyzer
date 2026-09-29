@@ -7,7 +7,7 @@ export type ConnectionState = 'connected' | 'connecting' | 'offline' | 'unavaila
 export type CapturePermission = 'unknown' | 'requesting' | 'granted' | 'denied'
 export type TargetApp = 'zoom' | 'googleMeet' | 'teams'
 export type LessonStatus = 'idle' | 'starting' | 'live' | 'stopping' | 'error'
-export type TranscriptSource = 'microphone' | 'remote' | 'system'
+export type TranscriptSource = 'microphone' | 'remote' | 'system' | 'system/ocr' | 'system/manual'
 export type CandidateBucket = 'manual' | 'highConfidence' | 'possibleDuplicate' | 'lowConfidence'
 export type CandidateStatus = 'pending' | 'confirmed' | 'rejected'
 export type VocabularyStatus = 'learning' | 'review' | 'mastered'
@@ -18,6 +18,7 @@ export interface AudioLevels {
 }
 
 export interface LessonState {
+  id?: string
   status: LessonStatus
   startedAt?: string
   error?: string
@@ -41,6 +42,7 @@ export interface Candidate {
   partOfSpeech?: string
   classifier?: string
   example: string
+  examplePinyin: string
   exampleTranslation: string
   provenance: string
   confidence: number
@@ -60,6 +62,9 @@ export interface VocabularyEntry {
   meaning: string
   partOfSpeech?: string
   classifier?: string
+  example: string
+  examplePinyin: string
+  exampleTranslation: string
   status: VocabularyStatus
   tags: string[]
   lastSeen: string
@@ -71,6 +76,8 @@ export interface CostSummary {
   projectedUsd: number
   hardBudgetUsd: number
   currency: 'USD'
+  warning: boolean
+  hardExceeded: boolean
 }
 
 export interface PrivacyState {
@@ -109,8 +116,16 @@ export interface StartLessonInput {
 }
 
 export interface CandidateEditPatch {
+  simplified?: string
+  traditional?: string
   pinyin?: string
   meaning?: string
+  partOfSpeech?: string
+  classifier?: string
+  example?: string
+  examplePinyin?: string
+  exampleTranslation?: string
+  tags?: string[]
 }
 
 export interface SettingsPatch {

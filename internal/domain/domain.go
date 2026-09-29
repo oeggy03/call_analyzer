@@ -6,11 +6,17 @@ package domain
 import "time"
 
 type Lesson struct {
-	ID        string     `json:"id"`
-	Title     string     `json:"title"`
-	StartedAt time.Time  `json:"startedAt"`
-	EndedAt   *time.Time `json:"endedAt,omitempty"`
-	CreatedAt time.Time  `json:"createdAt"`
+	ID              string     `json:"id"`
+	Title           string     `json:"title"`
+	StartedAt       time.Time  `json:"startedAt"`
+	EndedAt         *time.Time `json:"endedAt,omitempty"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	ConsentRecorded bool       `json:"consentRecorded"`
+	Target          string     `json:"target,omitempty"`
+	STTModel        string     `json:"sttModel,omitempty"`
+	AnalyzerModel   string     `json:"analyzerModel,omitempty"`
+	RetentionPolicy string     `json:"retentionPolicy,omitempty"`
+	FinalCost       float64    `json:"finalCost"`
 }
 
 type TranscriptSegment struct {
@@ -116,6 +122,7 @@ type CandidateEdit struct {
 	PartOfSpeech       *string   `json:"partOfSpeech,omitempty"`
 	Classifier         *string   `json:"classifier,omitempty"`
 	Example            *string   `json:"example,omitempty"`
+	ExamplePinyin      *string   `json:"examplePinyin,omitempty"`
 	ExampleTranslation *string   `json:"exampleTranslation,omitempty"`
 	Tags               *[]string `json:"tags,omitempty"`
 }

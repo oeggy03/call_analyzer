@@ -42,7 +42,7 @@ func TestDefaultConfigAndMarkBeforeStart(t *testing.T) {
 	if source.config.BundleID != defaultBundleID {
 		t.Fatalf("default bundle id = %q", source.config.BundleID)
 	}
-	if source.config.ChunkSeconds != 10 {
+	if source.config.ChunkSeconds != 2 {
 		t.Fatalf("default chunk seconds = %d", source.config.ChunkSeconds)
 	}
 	if _, err := source.Mark(context.Background(), "before-start"); !errors.Is(err, ErrNotRunning) {
@@ -165,6 +165,59 @@ func TestSourceCancellationCleansSession(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("canceled session spool was not cleaned: %+v", entries)
+	}
+}
+
+func TestSourceTimesOutWhenHelperNeverBecomesReady(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("fake native helper process test runs on macOS")
+	}
+	helper := filepath.Join(t.TempDir(), "never-ready.sh")
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\ntrap 'exit 0' INT TERM\nwhile :; do sleep 1; done\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	previousTimeout := helperReadyTimeout
+	helperReadyTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { helperReadyTimeout = previousTimeout })
+
+	source := NewSource(Config{
+		HelperPath: helper,
+		BundleID:   "example.app",
+		SpoolDir:   t.TempDir(),
+	})
+	startedAt := time.Now()
+	err := source.Start(context.Background(), func(capture.AudioFrame) {})
+	if err == nil {
+		t.Fatal("expected helper startup timeout")
+	}
+	if time.Since(startedAt) > 2*time.Second {
+		t.Fatalf("startup timeout took too long: %v", time.Since(startedAt))
+	}
+}
+
+func TestCreateSessionSpoolRemovesCrashedSessionAudio(t *testing.T) {
+	parent := t.TempDir()
+	stale := filepath.Join(parent, "session-stale")
+	if err := os.Mkdir(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "remote.wav"), []byte("private audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, ".owner-pid"), []byte("99999999"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionDir, err := createSessionSpool(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sessionDir) })
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale private audio was not removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sessionDir, ".owner-pid")); err != nil {
+		t.Fatalf("new session did not record its owner: %v", err)
 	}
 }
 

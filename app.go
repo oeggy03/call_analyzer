@@ -120,14 +120,36 @@ func (a *App) StartLesson(input StartLessonInput) (AppSnapshot, error) {
 	if !input.Consent {
 		return AppSnapshot{}, errors.New("consent is required before starting a lesson")
 	}
-	if !validTarget(input.Target) {
+	target := normalizeTarget(input.Target)
+	if !validTarget(target) {
 		return AppSnapshot{}, errors.New("unsupported lesson target")
+	}
+	if !a.service.HasAPIKey(a.context()) {
+		return AppSnapshot{}, errors.New("OpenRouter API key is not configured; add it in Settings before starting a lesson")
+	}
+	if err := a.service.ValidateTarget(a.context(), target); err != nil {
+		return AppSnapshot{}, err
 	}
 	if _, err := a.service.RequestCapturePermission(a.context()); err != nil {
 		return AppSnapshot{}, err
 	}
-	a.service.SetTarget(input.Target)
-	lesson, err := a.service.StartLesson(a.context(), input.Target, time.Time{})
+	a.service.SetTarget(target)
+	settings, err := a.service.Settings(a.context())
+	if err != nil {
+		return AppSnapshot{}, err
+	}
+	lesson, err := a.service.StartLessonWithMetadata(
+		a.context(),
+		target,
+		time.Time{},
+		storage.LessonMetadata{
+			ConsentRecorded: true,
+			Target:          target,
+			STTModel:        settings.STTModel,
+			AnalyzerModel:   settings.AnalyzerModel,
+			RetentionPolicy: settings.AudioRetention,
+		},
+	)
 	if err != nil {
 		return AppSnapshot{}, err
 	}
@@ -167,6 +189,7 @@ func (a *App) EditCandidate(candidateID string, patch CandidateEditPatch) (AppSn
 		PartOfSpeech:       patch.PartOfSpeech,
 		Classifier:         patch.Classifier,
 		Example:            patch.Example,
+		ExamplePinyin:      patch.ExamplePinyin,
 		ExampleTranslation: patch.ExampleTranslation,
 		Tags:               patch.Tags,
 	}
@@ -177,6 +200,17 @@ func (a *App) EditCandidate(candidateID string, patch CandidateEditPatch) (AppSn
 		return AppSnapshot{}, err
 	}
 	return a.GetAppSnapshot()
+}
+
+func (a *App) DeleteLastLesson() (AppSnapshot, error) {
+	if err := a.service.DeleteLastLesson(a.context()); err != nil {
+		return AppSnapshot{}, err
+	}
+	snapshot, err := a.GetAppSnapshot()
+	if err == nil {
+		a.emit("snapshot_changed", snapshot)
+	}
+	return snapshot, err
 }
 
 func (a *App) RejectCandidate(candidateID string) (AppSnapshot, error) {

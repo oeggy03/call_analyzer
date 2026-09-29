@@ -128,6 +128,16 @@ func NormalizeCandidate(candidate Candidate, transcriptText string) (domain.Voca
 		return domain.VocabularyEntry{}, errors.New("vocabulary: confidence must be between 0 and 1")
 	}
 	for i := range candidate.Examples {
+		if strings.TrimSpace(candidate.Examples[i].Simplified) == "" ||
+			strings.TrimSpace(candidate.Examples[i].Reading) == "" ||
+			strings.TrimSpace(candidate.Examples[i].Translation) == "" {
+			return domain.VocabularyEntry{}, errors.New("vocabulary: example sentence, pinyin, and translation are required")
+		}
+		exampleReading, _, err := CanonicalPinyin(candidate.Examples[i].Reading)
+		if err != nil {
+			return domain.VocabularyEntry{}, fmt.Errorf("vocabulary: example pinyin: %w", err)
+		}
+		candidate.Examples[i].Reading = exampleReading
 		if candidate.Examples[i].Generated {
 			candidate.Examples[i].Provenance = domain.ProvenanceModel
 		}
@@ -327,7 +337,7 @@ func CanonicalPinyin(input string) (numbered, marked string, err error) {
 
 func splitPinyin(input string) []string {
 	fields := strings.FieldsFunc(input, func(r rune) bool {
-		return unicode.IsSpace(r) || r == '\'' || r == '’' || r == '-' || r == '·'
+		return unicode.IsSpace(r) || unicode.IsPunct(r) || r == '·'
 	})
 	var result []string
 	for _, field := range fields {
@@ -380,6 +390,9 @@ func canonicalSyllable(token string) (string, string, error) {
 	if len(base) == 0 {
 		return "", "", fmt.Errorf("vocabulary: invalid pinyin syllable %q", token)
 	}
+	if !validPinyinBase(string(base)) {
+		return "", "", fmt.Errorf("vocabulary: invalid pinyin syllable %q", token)
+	}
 	if tone == 0 {
 		tone = 5
 	}
@@ -426,4 +439,32 @@ func canonicalSyllable(token string) (string, string, error) {
 
 func isPinyinLetter(value rune) bool {
 	return (value >= 'a' && value <= 'z') || value == 'ü'
+}
+
+func validPinyinBase(value string) bool {
+	finals := map[string]struct{}{
+		"a": {}, "ai": {}, "an": {}, "ang": {}, "ao": {},
+		"e": {}, "ei": {}, "en": {}, "eng": {}, "er": {},
+		"i": {}, "ia": {}, "ian": {}, "iang": {}, "iao": {},
+		"ie": {}, "in": {}, "ing": {}, "iong": {}, "iu": {},
+		"o": {}, "ong": {}, "ou": {},
+		"u": {}, "ua": {}, "uai": {}, "uan": {}, "uang": {},
+		"ue": {}, "ui": {}, "un": {}, "uo": {},
+		"ü": {}, "üan": {}, "üe": {}, "ün": {},
+	}
+	initials := []string{
+		"zh", "ch", "sh",
+		"b", "c", "d", "f", "g", "h", "j", "k", "l",
+		"m", "n", "p", "q", "r", "s", "t", "w", "x", "y", "z",
+		"",
+	}
+	for _, initial := range initials {
+		if !strings.HasPrefix(value, initial) {
+			continue
+		}
+		if _, ok := finals[strings.TrimPrefix(value, initial)]; ok {
+			return true
+		}
+	}
+	return false
 }

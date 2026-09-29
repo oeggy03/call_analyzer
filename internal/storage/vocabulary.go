@@ -82,7 +82,7 @@ func (r *VocabularyRepository) UpsertCandidate(ctx context.Context, candidate do
 					ELSE vocabulary_entries.priority
 				END,
 				status = CASE
-					WHEN vocabulary_entries.status IN ('confirmed', 'merged')
+					WHEN vocabulary_entries.status IN ('confirmed', 'rejected', 'merged')
 						THEN vocabulary_entries.status
 					ELSE 'candidate'
 				END,
@@ -217,6 +217,25 @@ func (r *VocabularyRepository) ListCandidates(ctx context.Context, limit int) ([
 
 func (r *VocabularyRepository) ListVocabulary(ctx context.Context, limit int) ([]domain.VocabularyEntry, error) {
 	return r.listByStatus(ctx, domain.VocabularyStatusConfirmed, limit)
+}
+
+func (r *VocabularyRepository) ObservationStats(
+	ctx context.Context,
+	entryID string,
+) (int, time.Time, error) {
+	var count int
+	var latest sql.NullInt64
+	err := r.store.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), MAX(created_at)
+		FROM observations WHERE entry_id = ?`, entryID,
+	).Scan(&count, &latest)
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("vocabulary: observation stats: %w", err)
+	}
+	if !latest.Valid {
+		return count, time.Time{}, nil
+	}
+	return count, timeFromValue(latest.Int64), nil
 }
 
 func (r *VocabularyRepository) ListAll(ctx context.Context, limit int) ([]domain.VocabularyEntry, error) {
@@ -401,7 +420,7 @@ func (r *VocabularyRepository) Edit(ctx context.Context, id string, edit domain.
 		args = append(args, *edit.TeachingCue)
 	}
 	hasPresentation := edit.Meaning != nil || edit.PartOfSpeech != nil || edit.Classifier != nil ||
-		edit.Example != nil || edit.ExampleTranslation != nil || edit.Tags != nil
+		edit.Example != nil || edit.ExamplePinyin != nil || edit.ExampleTranslation != nil || edit.Tags != nil
 	if len(updates) == 0 && !hasPresentation {
 		return r.Get(ctx, id)
 	}
@@ -477,23 +496,26 @@ func (r *VocabularyRepository) Edit(ctx context.Context, id string, edit domain.
 				}
 			}
 		}
-		if edit.Example != nil || edit.ExampleTranslation != nil {
-			var exampleID, exampleText, translation string
+		if edit.Example != nil || edit.ExamplePinyin != nil || edit.ExampleTranslation != nil {
+			var exampleID, exampleText, examplePinyin, translation string
 			err := tx.QueryRowContext(ctx, `
-				SELECT id, simplified, translation FROM examples
+				SELECT id, simplified, reading, translation FROM examples
 				WHERE entry_id = ? ORDER BY id LIMIT 1`, id,
-			).Scan(&exampleID, &exampleText, &translation)
+			).Scan(&exampleID, &exampleText, &examplePinyin, &translation)
 			if errors.Is(err, sql.ErrNoRows) {
 				if edit.Example != nil {
 					exampleText = *edit.Example
+				}
+				if edit.ExamplePinyin != nil {
+					examplePinyin = *edit.ExamplePinyin
 				}
 				if edit.ExampleTranslation != nil {
 					translation = *edit.ExampleTranslation
 				}
 				if _, err := tx.ExecContext(ctx, `
-					INSERT INTO examples(id, entry_id, simplified, translation, provenance, generated)
-					VALUES (?, ?, ?, ?, ?, 0)`,
-					newID(), id, exampleText, translation, domain.ProvenanceUser,
+					INSERT INTO examples(id, entry_id, simplified, reading, translation, provenance, generated)
+					VALUES (?, ?, ?, ?, ?, ?, 0)`,
+					newID(), id, exampleText, examplePinyin, translation, domain.ProvenanceUser,
 				); err != nil {
 					return err
 				}
@@ -503,13 +525,16 @@ func (r *VocabularyRepository) Edit(ctx context.Context, id string, edit domain.
 				if edit.Example != nil {
 					exampleText = *edit.Example
 				}
+				if edit.ExamplePinyin != nil {
+					examplePinyin = *edit.ExamplePinyin
+				}
 				if edit.ExampleTranslation != nil {
 					translation = *edit.ExampleTranslation
 				}
 				if _, err := tx.ExecContext(ctx, `
-					UPDATE examples SET simplified = ?, translation = ?, provenance = ?, generated = 0
+					UPDATE examples SET simplified = ?, reading = ?, translation = ?, provenance = ?, generated = 0
 					WHERE id = ?`,
-					exampleText, translation, domain.ProvenanceUser, exampleID,
+					exampleText, examplePinyin, translation, domain.ProvenanceUser, exampleID,
 				); err != nil {
 					return err
 				}

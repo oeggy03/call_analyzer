@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,7 +63,7 @@ func TestSQLiteRepositoriesAndLifecycle(t *testing.T) {
 		Evidence: []domain.Evidence{{
 			LessonID:  lesson.ID,
 			SegmentID: segment.ID,
-			Text:      "你好",
+			Text:      "老师说你好",
 		}},
 		Senses: []domain.Sense{{Gloss: "hello", SortOrder: 0}},
 		Examples: []domain.Example{{
@@ -160,6 +161,56 @@ func TestSQLiteRepositoriesAndLifecycle(t *testing.T) {
 	if observationCount != 0 {
 		t.Fatalf("lesson delete did not cascade observations: %d", observationCount)
 	}
+	preserved, err := store.Vocabulary().Get(ctx, candidate.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preserved.Evidence) != 0 {
+		t.Fatalf("confirmed vocabulary retained deleted lesson evidence: %#v", preserved.Evidence)
+	}
+	pending, err = store.Outbox().ListPending(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range pending {
+		if strings.Contains(event.PayloadJSON, "老师说你好") {
+			t.Fatalf("outbox retained deleted lesson text: %s", event.PayloadJSON)
+		}
+	}
+}
+
+func TestLessonDeleteRemovesOrphanCandidate(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	lesson, err := store.Lessons().Start(ctx, "private lesson", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	segment, err := store.Transcripts().Insert(ctx, domain.TranscriptSegment{
+		LessonID: lesson.ID, EndMS: 1_000, Text: "秘密",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := store.Vocabulary().UpsertCandidate(ctx, domain.VocabularyEntry{
+		Simplified: "秘密", Traditional: "秘密", Reading: "mi4 mi4",
+		Evidence: []domain.Evidence{{
+			LessonID: lesson.ID, SegmentID: segment.ID, Text: "秘密",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Lessons().Delete(ctx, lesson.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Vocabulary().Get(ctx, candidate.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("orphan candidate survived lesson deletion: %v", err)
+	}
 }
 
 func TestSettingsAndContextCancellation(t *testing.T) {
@@ -196,6 +247,58 @@ func TestSettingsAndContextCancellation(t *testing.T) {
 	}
 }
 
+func TestLessonRecoveryMetadataAndLatestComplete(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	orphan, err := store.Lessons().StartWithMetadata(ctx, "orphan", timeAt(1000), LessonMetadata{
+		ConsentRecorded: true,
+		Target:          "zoom",
+		STTModel:        "asr",
+		AnalyzerModel:   "chat",
+		RetentionPolicy: "sessionOnly",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, err := store.Lessons().Start(ctx, "latest", timeAt(2000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredAt := timeAt(3000)
+	count, err := store.Lessons().EndOrphaned(ctx, recoveredAt)
+	if err != nil || count != 2 {
+		t.Fatalf("unexpected orphan recovery count=%d err=%v", count, err)
+	}
+	recovered, err := store.Lessons().Get(ctx, orphan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.EndedAt == nil || !recovered.EndedAt.Equal(recoveredAt) ||
+		!recovered.ConsentRecorded || recovered.Target != "zoom" ||
+		recovered.STTModel != "asr" || recovered.AnalyzerModel != "chat" {
+		t.Fatalf("recovery metadata was not preserved: %#v", recovered)
+	}
+	ended, err := store.Lessons().EndWithCost(ctx, latest.ID, timeAt(4000), .42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ended.FinalCost != .42 {
+		t.Fatalf("final lesson cost was not persisted: %#v", ended)
+	}
+	gotLatest, err := store.Lessons().LatestComplete(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotLatest.ID != latest.ID {
+		t.Fatalf("latest complete lesson = %s, want %s", gotLatest.ID, latest.ID)
+	}
+}
+
 func TestCandidateEditRejectAndMerge(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, ":memory:")
@@ -225,6 +328,19 @@ func TestCandidateEditRejectAndMerge(t *testing.T) {
 	if err != nil || edited.Confidence != confidence {
 		t.Fatalf("unexpected edit %#v err=%v", edited, err)
 	}
+	example := "我学习中文。"
+	examplePinyin := "wo3 xue2 xi2 zhong1 wen2"
+	translation := "I study Chinese."
+	edited, err = store.Vocabulary().Edit(ctx, source.ID, domain.CandidateEdit{
+		Example:            &example,
+		ExamplePinyin:      &examplePinyin,
+		ExampleTranslation: &translation,
+	})
+	if err != nil || len(edited.Examples) != 1 ||
+		edited.Examples[0].Reading != examplePinyin ||
+		edited.Examples[0].Translation != translation {
+		t.Fatalf("example edit did not persist pinyin: %#v err=%v", edited, err)
+	}
 	merged, err := store.Vocabulary().Merge(ctx, target.ID, source.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -252,6 +368,16 @@ func TestCandidateEditRejectAndMerge(t *testing.T) {
 	rejectedAfter, err := store.Vocabulary().Get(ctx, rejected.ID)
 	if err != nil || rejectedAfter.Status != domain.VocabularyStatusRejected {
 		t.Fatalf("unexpected rejected entry %#v err=%v", rejectedAfter, err)
+	}
+	repeated, err := store.Vocabulary().UpsertCandidate(ctx, domain.VocabularyEntry{
+		Simplified: "再见",
+		Reading:    "zai4 jian4",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeated.Status != domain.VocabularyStatusRejected {
+		t.Fatalf("automatic extraction reopened rejected entry: %#v", repeated)
 	}
 }
 

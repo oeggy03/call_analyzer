@@ -80,7 +80,6 @@ func NewDefaultSecretStore() SecretStore {
 		Stores: []SecretStore{
 			EnvSecretStore{},
 			NewKeychainSecretStore(),
-			NewMemorySecretStore(),
 		},
 	}
 }

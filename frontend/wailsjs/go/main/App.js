@@ -6,6 +6,10 @@ export function ConfirmCandidate(arg1) {
   return window['go']['main']['App']['ConfirmCandidate'](arg1);
 }
 
+export function DeleteLastLesson() {
+  return window['go']['main']['App']['DeleteLastLesson']();
+}
+
 export function EditCandidate(arg1, arg2) {
   return window['go']['main']['App']['EditCandidate'](arg1, arg2);
 }

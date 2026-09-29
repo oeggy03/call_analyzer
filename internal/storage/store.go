@@ -32,11 +32,16 @@ func Open(ctx context.Context, path string) (*Store, error) {
 
 	dsn := path
 	inMemory := path == ":memory:"
+	localFile := !inMemory && !strings.HasPrefix(path, "file:")
 	if inMemory {
 		dsn = "file:call-analyzer-" + uuid.NewString() + "?mode=memory&cache=shared"
-	} else if !strings.HasPrefix(path, "file:") {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	} else if localFile {
+		directory := filepath.Dir(path)
+		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return nil, fmt.Errorf("storage: create database directory: %w", err)
+		}
+		if err := os.Chmod(directory, 0o700); err != nil {
+			return nil, fmt.Errorf("storage: protect database directory: %w", err)
 		}
 	}
 	dsn = withSQLitePragmas(dsn)
@@ -61,6 +66,12 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err := store.migrate(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if localFile {
+		if err := os.Chmod(path, 0o600); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("storage: protect database file: %w", err)
+		}
 	}
 	return store, nil
 }

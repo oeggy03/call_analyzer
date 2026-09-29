@@ -76,9 +76,33 @@ The helper can be overridden with
 6. Confirm, edit, merge, or reject suggestions in Candidate Inbox.
 7. Confirmed entries appear in Vocabulary immediately.
 
+Automatic audio is transcribed in utterance-aware 8–15 second windows, with
+two seconds of overlap. Vocabulary extraction batches roughly 20 seconds of
+new transcript to control cost. A manual mark analyzes the complete 25-second
+pre-roll and 10-second post-roll immediately. At the configured hard budget,
+cloud work pauses while local capture and mark timestamps continue.
+
 Provider requests enforce Zero Data Retention routing and deny endpoints marked
 for data collection. Local audio retention is controlled separately; the
-default is session-only temporary chunks.
+default is session-only temporary chunks. Session spools are deleted after
+processing, and orphaned spools from a crashed process are purged at next
+startup.
+
+## MVP boundaries
+
+- The bundled dictionary is a small starter lexicon with an interface for a
+  future full CC-CEDICT import.
+- The evaluation manifest contains deterministic synthetic fixtures. Accuracy
+  should be recalibrated with consent-cleared real lessons before relying on
+  unattended automatic capture.
+- OCR follows the display containing the active Zoom window, but there is no
+  user-selectable crop or image-model escalation yet.
+- Windows capture and hosted sync are extension boundaries only; this release
+  implements macOS ScreenCaptureKit, local SQLite, and a disabled outbox API.
+- Audio is session-only in this MVP. Evidence is retained as transcript text
+  and timestamps, not encrypted replayable clips.
+- A native stream failure is surfaced in the lesson UI but does not
+  automatically restart ScreenCaptureKit.
 
 ## Verification
 

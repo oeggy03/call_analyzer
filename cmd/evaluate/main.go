@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -36,6 +37,23 @@ type caseResult struct {
 	VocabularyScore evaluation.SetScore `json:"vocabularyScore"`
 	CostUSD         float64             `json:"costUsd"`
 	LatencyMS       int64               `json:"latencyMs"`
+	AudioEvaluated  bool                `json:"audioEvaluated"`
+}
+
+type report struct {
+	Cases   []caseResult  `json:"cases"`
+	Summary reportSummary `json:"summary"`
+}
+
+type reportSummary struct {
+	Cases                  int     `json:"cases"`
+	AudioCases             int     `json:"audioCases"`
+	CharacterErrorRate     float64 `json:"characterErrorRate,omitempty"`
+	VocabularyPrecision    float64 `json:"vocabularyPrecision"`
+	VocabularyRecall       float64 `json:"vocabularyRecall"`
+	TotalCostUSD           float64 `json:"totalCostUsd"`
+	P95LatencyMS           int64   `json:"p95LatencyMs"`
+	MeetsVocabularyTargets bool    `json:"meetsVocabularyTargets"`
 }
 
 type envKey struct{}
@@ -122,11 +140,58 @@ func main() {
 			VocabularyScore: evaluation.ScoreWords(item.ExpectedWords, words),
 			CostUSD:         cost,
 			LatencyMS:       time.Since(started).Milliseconds(),
+			AudioEvaluated:  item.AudioPath != "",
 		})
 	}
-	output, err := json.MarshalIndent(results, "", "  ")
+	output, err := json.MarshalIndent(report{
+		Cases:   results,
+		Summary: summarize(results),
+	}, "", "  ")
 	fatalIf(err)
 	fmt.Println(string(output))
+}
+
+func summarize(results []caseResult) reportSummary {
+	summary := reportSummary{Cases: len(results)}
+	var (
+		matched   int
+		expected  int
+		predicted int
+		latencies = make([]int64, 0, len(results))
+	)
+	for _, result := range results {
+		matched += result.VocabularyScore.Matched
+		expected += result.VocabularyScore.Expected
+		predicted += result.VocabularyScore.Predicted
+		summary.TotalCostUSD += result.CostUSD
+		latencies = append(latencies, result.LatencyMS)
+		if result.AudioEvaluated {
+			summary.AudioCases++
+			summary.CharacterErrorRate += result.CharacterError
+		}
+	}
+	if predicted == 0 && expected == 0 {
+		summary.VocabularyPrecision = 1
+		summary.VocabularyRecall = 1
+	} else {
+		if predicted > 0 {
+			summary.VocabularyPrecision = float64(matched) / float64(predicted)
+		}
+		if expected > 0 {
+			summary.VocabularyRecall = float64(matched) / float64(expected)
+		}
+	}
+	if summary.AudioCases > 0 {
+		summary.CharacterErrorRate /= float64(summary.AudioCases)
+	}
+	if len(latencies) > 0 {
+		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+		index := (95*len(latencies) + 99) / 100
+		summary.P95LatencyMS = latencies[index-1]
+	}
+	summary.MeetsVocabularyTargets =
+		summary.VocabularyRecall >= 0.90 && summary.VocabularyPrecision >= 0.85
+	return summary
 }
 
 func fatalIf(err error) {

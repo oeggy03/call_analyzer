@@ -116,7 +116,7 @@ func (a *Adapter) Start(
 		return nil, err
 	}
 	if options.ChunkSeconds == 0 {
-		options.ChunkSeconds = 10
+		options.ChunkSeconds = 2
 	}
 	helper, err := resolveHelperPath(a.config)
 	if err != nil {
