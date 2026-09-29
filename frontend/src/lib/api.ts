@@ -1,0 +1,671 @@
+import type {
+  AppSnapshot,
+  Candidate,
+  CandidateEditPatch,
+  SettingsPatch,
+  StartLessonInput,
+} from './types'
+import type {
+  CapturePermission,
+  CandidateStatus,
+  ConnectionState,
+  TargetApp,
+} from './types'
+import type { VocabularyEntry } from './types'
+import type { LessonStatus } from './types'
+import type { TranscriptLine } from './types'
+import type { AudioLevels } from './types'
+import type { CostSummary } from './types'
+import type { PrivacyState } from './types'
+import type { Settings } from './types'
+import type { CandidateBucket } from './types'
+import type { VocabularyStatus } from './types'
+
+/**
+ * Keep Wails method names in one place. If the generated binding changes,
+ * update this map rather than changing UI code.
+ */
+export const BACKEND_METHODS = {
+  getSnapshot: 'GetAppSnapshot',
+  requestCapturePermission: 'RequestCapturePermission',
+  startLesson: 'StartLesson',
+  stopLesson: 'StopLesson',
+  markMoment: 'MarkMoment',
+  confirmCandidate: 'ConfirmCandidate',
+  editCandidate: 'EditCandidate',
+  rejectCandidate: 'RejectCandidate',
+  mergeCandidates: 'MergeCandidates',
+  saveSettings: 'SaveSettings',
+  refresh: 'Refresh',
+} as const
+
+export const BACKEND_EVENTS = {
+  snapshotChanged: 'call_analyzer:snapshot_changed',
+} as const
+
+export type ApiMode = 'runtime' | 'demo' | 'unavailable'
+export type ApiModePreference = 'auto' | ApiMode
+
+export interface AppApi {
+  readonly mode: ApiMode
+  getSnapshot(): Promise<AppSnapshot>
+  requestCapturePermission(): Promise<AppSnapshot>
+  startLesson(input: StartLessonInput): Promise<AppSnapshot>
+  stopLesson(): Promise<AppSnapshot>
+  markMoment(): Promise<AppSnapshot>
+  confirmCandidate(candidateId: string): Promise<AppSnapshot>
+  editCandidate(candidateId: string, patch: CandidateEditPatch): Promise<AppSnapshot>
+  rejectCandidate(candidateId: string): Promise<AppSnapshot>
+  mergeCandidates(sourceId: string, targetId: string): Promise<AppSnapshot>
+  saveSettings(patch: SettingsPatch): Promise<AppSnapshot>
+  refresh(): Promise<AppSnapshot>
+  subscribe(listener: (snapshot: AppSnapshot) => void): () => void
+}
+
+export class ApiUnavailableError extends Error {
+  constructor(message = 'The Wails backend is unavailable.') {
+    super(message)
+    this.name = 'ApiUnavailableError'
+  }
+}
+
+export class ApiValidationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ApiValidationError'
+  }
+}
+
+type RuntimeApp = Record<string, unknown>
+type RuntimeEvents = {
+  EventsOn?: (
+    eventName: string,
+    callback: (...args: unknown[]) => void,
+  ) => (() => void) | void
+  EventsOff?: (eventName: string) => void
+}
+
+declare global {
+  interface Window {
+    go?: {
+      main?: {
+        App?: RuntimeApp
+      }
+    }
+    runtime?: RuntimeEvents
+  }
+}
+
+const DEMO_TIMESTAMP = '2026-09-29T14:30:00.000Z'
+const DEMO_MOMENT_TIMESTAMP = '2026-09-29T14:30:05.000Z'
+
+const demoTranscript: TranscriptLine[] = [
+  {
+    id: 'line-1',
+    text: '我们下周可以把这个方案再讨论一下。',
+    source: 'remote',
+    timestamp: '2026-09-29T14:29:42.000Z',
+    speaker: 'Remote',
+  },
+  {
+    id: 'line-2',
+    text: '好的，我先整理一下重点。',
+    source: 'microphone',
+    timestamp: '2026-09-29T14:29:49.000Z',
+    speaker: 'You',
+  },
+  {
+    id: 'line-3',
+    text: '这个表达在工作场景里很常见。',
+    source: 'remote',
+    timestamp: '2026-09-29T14:29:58.000Z',
+    speaker: 'Remote',
+  },
+]
+
+const demoCandidates: Candidate[] = [
+  {
+    id: 'candidate-manual-1',
+    simplified: '重点',
+    traditional: '重點',
+    pinyin: 'zhòngdiǎn',
+    meaning: 'key point; main focus',
+    partOfSpeech: 'noun',
+    classifier: undefined,
+    example: '请先说一下这个方案的重点。',
+    exampleTranslation: 'Please first explain the key points of this plan.',
+    provenance: 'Manual mark · Live Lesson',
+    confidence: 1,
+    evidence: '整理一下重点',
+    timestamp: '2026-09-29T14:29:49.000Z',
+    bucket: 'manual',
+    status: 'pending',
+    tags: ['work'],
+  },
+  {
+    id: 'candidate-high-1',
+    simplified: '方案',
+    traditional: '方案',
+    pinyin: 'fāng’àn',
+    meaning: 'plan; proposal; solution',
+    partOfSpeech: 'noun',
+    classifier: '个',
+    example: '我们下周可以把这个方案再讨论一下。',
+    exampleTranslation: 'We can discuss this proposal again next week.',
+    provenance: 'Remote transcript · 00:42',
+    confidence: 0.96,
+    evidence: '把这个方案再讨论一下',
+    timestamp: '2026-09-29T14:29:42.000Z',
+    bucket: 'highConfidence',
+    status: 'pending',
+    tags: ['work', 'meeting'],
+  },
+  {
+    id: 'candidate-duplicate-1',
+    simplified: '重点',
+    traditional: '重點',
+    pinyin: 'zhòngdiǎn',
+    meaning: 'key point; main focus',
+    partOfSpeech: 'noun',
+    example: '今天我们先确认重点。',
+    exampleTranslation: 'Today we will confirm the key points first.',
+    provenance: 'Mic transcript · 00:49',
+    confidence: 0.71,
+    evidence: '整理一下重点',
+    timestamp: '2026-09-29T14:29:49.000Z',
+    bucket: 'possibleDuplicate',
+    status: 'pending',
+    duplicateOf: 'candidate-manual-1',
+    tags: ['work'],
+  },
+  {
+    id: 'candidate-low-1',
+    simplified: '常见',
+    traditional: '常見',
+    pinyin: 'chángjiàn',
+    meaning: 'common; frequently seen',
+    partOfSpeech: 'adjective',
+    example: '这个表达在工作场景里很常见。',
+    exampleTranslation: 'This expression is common in work settings.',
+    provenance: 'Remote transcript · 01:02',
+    confidence: 0.54,
+    evidence: '表达在工作场景里很常见',
+    timestamp: '2026-09-29T14:29:58.000Z',
+    bucket: 'lowConfidence',
+    status: 'pending',
+    tags: ['work'],
+  },
+]
+
+const demoVocabulary: VocabularyEntry[] = [
+  {
+    id: 'vocab-1',
+    simplified: '重点',
+    traditional: '重點',
+    pinyin: 'zhòngdiǎn',
+    meaning: 'key point; main focus',
+    partOfSpeech: 'noun',
+    status: 'learning',
+    tags: ['work'],
+    lastSeen: 'Today, 2:30 PM',
+    seenCount: 3,
+  },
+  {
+    id: 'vocab-2',
+    simplified: '方案',
+    pinyin: 'fāng’àn',
+    meaning: 'plan; proposal; solution',
+    partOfSpeech: 'noun',
+    classifier: '个',
+    status: 'review',
+    tags: ['work', 'meeting'],
+    lastSeen: 'Today, 2:29 PM',
+    seenCount: 5,
+  },
+  {
+    id: 'vocab-3',
+    simplified: '场景',
+    traditional: '場景',
+    pinyin: 'chǎngjǐng',
+    meaning: 'scene; context; setting',
+    partOfSpeech: 'noun',
+    status: 'learning',
+    tags: ['work'],
+    lastSeen: 'Yesterday',
+    seenCount: 2,
+  },
+  {
+    id: 'vocab-4',
+    simplified: '确认',
+    traditional: '確認',
+    pinyin: 'quèrèn',
+    meaning: 'to confirm; confirmation',
+    partOfSpeech: 'verb',
+    status: 'mastered',
+    tags: ['work', 'meeting'],
+    lastSeen: 'Sep 26',
+    seenCount: 11,
+  },
+]
+
+function createDemoSnapshot(): AppSnapshot {
+  return {
+    connection: 'demo',
+    capturePermission: 'granted',
+    target: 'zoom',
+    lesson: { status: 'idle' },
+    levels: { mic: 0.18, remote: 0.36 },
+    transcript: demoTranscript,
+    candidates: demoCandidates,
+    vocabulary: demoVocabulary,
+    cost: {
+      currentUsd: 0.04,
+      projectedUsd: 0.18,
+      hardBudgetUsd: 0.5,
+      currency: 'USD',
+    },
+    privacy: {
+      zdrEnabled: true,
+      audioRetention: 'sessionOnly',
+    },
+    settings: {
+      openRouterKeyConfigured: false,
+      sttModel: 'qwen/qwen3-asr-1.7b',
+      analyzerModel: 'qwen/qwen3.8-flash',
+      hardBudgetUsd: 0.5,
+      audioRetention: 'sessionOnly',
+      ocrEnabled: false,
+      microphoneEnabled: true,
+    },
+    lastUpdated: DEMO_TIMESTAMP,
+  }
+}
+
+function cloneSnapshot(snapshot: AppSnapshot): AppSnapshot {
+  return JSON.parse(JSON.stringify(snapshot)) as AppSnapshot
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+export function isAppSnapshot(value: unknown): value is AppSnapshot {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.connection === 'string' &&
+    typeof value.capturePermission === 'string' &&
+    typeof value.target === 'string' &&
+    isRecord(value.lesson) &&
+    Array.isArray(value.transcript) &&
+    Array.isArray(value.candidates) &&
+    Array.isArray(value.vocabulary) &&
+    isRecord(value.cost) &&
+    isRecord(value.privacy) &&
+    isRecord(value.settings)
+  )
+}
+
+class DemoApi implements AppApi {
+  readonly mode = 'demo' as const
+  private snapshot = createDemoSnapshot()
+  private listener?: (snapshot: AppSnapshot) => void
+  private nextMoment = 1
+
+  async getSnapshot(): Promise<AppSnapshot> {
+    return cloneSnapshot(this.snapshot)
+  }
+
+  async requestCapturePermission(): Promise<AppSnapshot> {
+    this.snapshot.capturePermission = 'granted'
+    this.publish()
+    return this.getSnapshot()
+  }
+
+  async startLesson(input: StartLessonInput): Promise<AppSnapshot> {
+    if (!input.consent) {
+      throw new ApiValidationError('Consent is required before starting a lesson.')
+    }
+    this.snapshot.target = input.target
+    this.snapshot.capturePermission = 'granted'
+    this.snapshot.connection = 'demo'
+    this.snapshot.lesson = {
+      status: 'live',
+      startedAt: DEMO_TIMESTAMP,
+    }
+    this.snapshot.levels = { mic: 0.42, remote: 0.64 }
+    this.publish()
+    return this.getSnapshot()
+  }
+
+  async stopLesson(): Promise<AppSnapshot> {
+    this.snapshot.lesson = { status: 'idle' }
+    this.snapshot.levels = { mic: 0, remote: 0 }
+    this.publish()
+    return this.getSnapshot()
+  }
+
+  async markMoment(): Promise<AppSnapshot> {
+    const momentId = `candidate-manual-${this.nextMoment + 1}`
+    this.nextMoment += 1
+    this.snapshot.transcript = [
+      ...this.snapshot.transcript,
+      {
+        id: `moment-${this.nextMoment}`,
+        text: '已标记当前对话片段。',
+        source: 'system',
+        timestamp: DEMO_MOMENT_TIMESTAMP,
+        speaker: 'Moment',
+        isMoment: true,
+      },
+    ]
+    this.snapshot.candidates = [
+      ...this.snapshot.candidates,
+      {
+        id: momentId,
+        simplified: '对话片段',
+        traditional: '對話片段',
+        pinyin: 'duìhuà piànduàn',
+        meaning: 'conversation snippet',
+        partOfSpeech: 'noun',
+        example: '我标记了一个对话片段。',
+        exampleTranslation: 'I marked a conversation snippet.',
+        provenance: 'Manual mark · just now',
+        confidence: 1,
+        evidence: '当前对话片段',
+        timestamp: DEMO_MOMENT_TIMESTAMP,
+        bucket: 'manual',
+        status: 'pending',
+        tags: [],
+      },
+    ]
+    this.publish()
+    return this.getSnapshot()
+  }
+
+  async confirmCandidate(candidateId: string): Promise<AppSnapshot> {
+    const candidate = this.findCandidate(candidateId)
+    candidate.status = 'confirmed'
+    if (!this.snapshot.vocabulary.some((entry) => entry.simplified === candidate.simplified)) {
+      this.snapshot.vocabulary = [
+        {
+          id: `vocab-${candidate.id}`,
+          simplified: candidate.simplified,
+          traditional: candidate.traditional,
+          pinyin: candidate.pinyin,
+          meaning: candidate.meaning,
+          partOfSpeech: candidate.partOfSpeech,
+          classifier: candidate.classifier,
+          status: 'learning',
+          tags: candidate.tags,
+          lastSeen: 'Just now',
+          seenCount: 1,
+        },
+        ...this.snapshot.vocabulary,
+      ]
+    }
+    this.publish()
+    return this.getSnapshot()
+  }
+
+  async editCandidate(candidateId: string, patch: CandidateEditPatch): Promise<AppSnapshot> {
+    const candidate = this.findCandidate(candidateId)
+    Object.assign(candidate, patch)
+    this.publish()
+    return this.getSnapshot()
+  }
+
+  async rejectCandidate(candidateId: string): Promise<AppSnapshot> {
+    const candidate = this.findCandidate(candidateId)
+    candidate.status = 'rejected'
+    this.publish()
+    return this.getSnapshot()
+  }
+
+  async mergeCandidates(sourceId: string, targetId: string): Promise<AppSnapshot> {
+    const source = this.findCandidate(sourceId)
+    const target = this.findCandidate(targetId)
+    source.status = 'rejected'
+    source.duplicateOf = target.id
+    if (!target.tags.includes('merged')) target.tags = [...target.tags, 'merged']
+    this.publish()
+    return this.getSnapshot()
+  }
+
+  async saveSettings(patch: SettingsPatch): Promise<AppSnapshot> {
+    const next = { ...this.snapshot.settings }
+    if (patch.openRouterKey !== undefined) {
+      next.openRouterKeyConfigured = patch.openRouterKey.trim().length > 0
+    }
+    if (patch.sttModel !== undefined) next.sttModel = patch.sttModel
+    if (patch.analyzerModel !== undefined) next.analyzerModel = patch.analyzerModel
+    if (patch.hardBudgetUsd !== undefined) next.hardBudgetUsd = patch.hardBudgetUsd
+    if (patch.audioRetention !== undefined) next.audioRetention = patch.audioRetention
+    if (patch.ocrEnabled !== undefined) next.ocrEnabled = patch.ocrEnabled
+    if (patch.microphoneEnabled !== undefined) next.microphoneEnabled = patch.microphoneEnabled
+    this.snapshot.settings = next
+    this.snapshot.cost.hardBudgetUsd = next.hardBudgetUsd
+    this.snapshot.privacy.audioRetention = next.audioRetention
+    this.publish()
+    return this.getSnapshot()
+  }
+
+  async refresh(): Promise<AppSnapshot> {
+    return this.getSnapshot()
+  }
+
+  subscribe(listener: (snapshot: AppSnapshot) => void): () => void {
+    this.listener = listener
+    return () => {
+      if (this.listener === listener) this.listener = undefined
+    }
+  }
+
+  private findCandidate(candidateId: string): Candidate {
+    const candidate = this.snapshot.candidates.find((item) => item.id === candidateId)
+    if (!candidate) throw new ApiValidationError('Candidate no longer exists.')
+    return candidate
+  }
+
+  private publish(): void {
+    this.listener?.(cloneSnapshot(this.snapshot))
+  }
+}
+
+class RuntimeApi implements AppApi {
+  readonly mode = 'runtime' as const
+
+  constructor(private readonly app: RuntimeApp) {}
+
+  async getSnapshot(): Promise<AppSnapshot> {
+    return this.callSnapshot(BACKEND_METHODS.getSnapshot)
+  }
+
+  async requestCapturePermission(): Promise<AppSnapshot> {
+    return this.callMutation(BACKEND_METHODS.requestCapturePermission)
+  }
+
+  async startLesson(input: StartLessonInput): Promise<AppSnapshot> {
+    return this.callMutation(BACKEND_METHODS.startLesson, input)
+  }
+
+  async stopLesson(): Promise<AppSnapshot> {
+    return this.callMutation(BACKEND_METHODS.stopLesson)
+  }
+
+  async markMoment(): Promise<AppSnapshot> {
+    return this.callMutation(BACKEND_METHODS.markMoment)
+  }
+
+  async confirmCandidate(candidateId: string): Promise<AppSnapshot> {
+    return this.callMutation(BACKEND_METHODS.confirmCandidate, candidateId)
+  }
+
+  async editCandidate(candidateId: string, patch: CandidateEditPatch): Promise<AppSnapshot> {
+    return this.callMutation(BACKEND_METHODS.editCandidate, candidateId, patch)
+  }
+
+  async rejectCandidate(candidateId: string): Promise<AppSnapshot> {
+    return this.callMutation(BACKEND_METHODS.rejectCandidate, candidateId)
+  }
+
+  async mergeCandidates(sourceId: string, targetId: string): Promise<AppSnapshot> {
+    return this.callMutation(BACKEND_METHODS.mergeCandidates, sourceId, targetId)
+  }
+
+  async saveSettings(patch: SettingsPatch): Promise<AppSnapshot> {
+    return this.callMutation(BACKEND_METHODS.saveSettings, patch)
+  }
+
+  async refresh(): Promise<AppSnapshot> {
+    return this.callSnapshot(BACKEND_METHODS.refresh)
+  }
+
+  subscribe(listener: (snapshot: AppSnapshot) => void): () => void {
+    const eventsOn = window.runtime?.EventsOn
+    if (!eventsOn) return () => undefined
+
+    const callback = (...args: unknown[]) => {
+      const possibleSnapshot = args[0]
+      if (isAppSnapshot(possibleSnapshot)) {
+        listener(possibleSnapshot)
+        return
+      }
+      void this.getSnapshot().then(listener).catch(() => undefined)
+    }
+    const cleanup = eventsOn(BACKEND_EVENTS.snapshotChanged, callback)
+    return typeof cleanup === 'function'
+      ? cleanup
+      : () => window.runtime?.EventsOff?.(BACKEND_EVENTS.snapshotChanged)
+  }
+
+  private async callSnapshot(methodName: string, ...args: unknown[]): Promise<AppSnapshot> {
+    const result = await this.call(methodName, args)
+    if (!isAppSnapshot(result)) {
+      throw new ApiUnavailableError(`Backend method ${methodName} returned an invalid snapshot.`)
+    }
+    return result
+  }
+
+  private async callMutation(methodName: string, ...args: unknown[]): Promise<AppSnapshot> {
+    const result = await this.call(methodName, args)
+    if (!isAppSnapshot(result)) {
+      throw new ApiUnavailableError(`Backend method ${methodName} returned an invalid snapshot.`)
+    }
+    return result
+  }
+
+  private async call(methodName: string, args: unknown[]): Promise<unknown> {
+    const method = this.app[methodName]
+    if (typeof method !== 'function') {
+      throw new ApiUnavailableError(`Backend method ${methodName} is not available.`)
+    }
+    return (method as (...parameters: unknown[]) => unknown).apply(this.app, args)
+  }
+}
+
+class UnavailableApi implements AppApi {
+  readonly mode = 'unavailable' as const
+
+  getSnapshot(): Promise<AppSnapshot> {
+    return Promise.reject(new ApiUnavailableError())
+  }
+
+  requestCapturePermission(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  startLesson(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  stopLesson(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  markMoment(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  confirmCandidate(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  editCandidate(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  rejectCandidate(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  mergeCandidates(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  saveSettings(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  refresh(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  subscribe(): () => void {
+    return () => undefined
+  }
+
+  private fail(): Promise<AppSnapshot> {
+    return Promise.reject(new ApiUnavailableError())
+  }
+}
+
+function getRuntimeApp(): RuntimeApp | undefined {
+  if (typeof window === 'undefined') return undefined
+  const app = window.go?.main?.App
+  return app && typeof app === 'object' ? app : undefined
+}
+
+function isDevBuild(): boolean {
+  return typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV)
+}
+
+export function createDemoApi(): AppApi {
+  return new DemoApi()
+}
+
+export function createUnavailableApi(): AppApi {
+  return new UnavailableApi()
+}
+
+export function createApi(options: { mode?: ApiModePreference } = {}): AppApi {
+  const preference = options.mode ?? 'auto'
+  if (preference === 'demo') return createDemoApi()
+  if (preference === 'unavailable') return createUnavailableApi()
+
+  const runtimeApp = getRuntimeApp()
+  if (runtimeApp) return new RuntimeApi(runtimeApp)
+  if (preference === 'runtime') return createUnavailableApi()
+  return isDevBuild() ? createDemoApi() : createUnavailableApi()
+}
+
+export const api = createApi()
+
+// Keep these imports type-visible in generated declaration output for backend
+// implementers reading this contract.
+export type BackendSnapshotContract = {
+  connection: ConnectionState
+  capturePermission: CapturePermission
+  target: TargetApp
+  lesson: { status: LessonStatus }
+  levels: AudioLevels
+  cost: CostSummary
+  privacy: PrivacyState
+  settings: Settings
+  candidates: Array<{
+    bucket: CandidateBucket
+    status: CandidateStatus
+  }>
+  vocabulary: Array<{
+    status: VocabularyStatus
+  }>
+}

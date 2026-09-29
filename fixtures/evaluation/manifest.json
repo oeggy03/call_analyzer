@@ -1,0 +1,19 @@
+{
+  "cases": [
+    {
+      "name": "explicit-definition",
+      "expectedTranscript": "老师：今天的新词是方案，拼音是 fāng àn，意思是 plan。比如：这个方案很好。",
+      "expectedWords": ["方案"]
+    },
+    {
+      "name": "teaching-cue-and-example",
+      "expectedTranscript": "“常见”就是 commonly seen 的意思。这个表达在工作场景里很常见。",
+      "expectedWords": ["常见"]
+    },
+    {
+      "name": "incidental-speech-should-abstain",
+      "expectedTranscript": "我们下周再讨论，好吗？好的。",
+      "expectedWords": []
+    }
+  ]
+}
