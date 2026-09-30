@@ -23,7 +23,7 @@ to trusted vocabulary without confirmation.
 - Zoom desktop app.
 - An OpenRouter API key with access to:
   - `qwen/qwen3-asr-1.7b`
-  - `qwen/qwen3.8-flash`
+  - `qwen/qwen3-32b`
 
 Full Xcode is only required to execute the Swift XCTest suite. The helper and
 desktop app build with the Command Line Tools available on the development Mac.
@@ -78,7 +78,7 @@ The helper can be overridden with
 
 You can also open **Add Word** outside a live lesson and enter only the
 simplified Chinese word. **Generate missing details** uses the configured
-analyzer (Qwen 3.8 Flash by default) to propose pinyin, meanings, usage,
+analyzer (Qwen 3 32B by default) to propose pinyin, meanings, usage,
 examples, and tags. Review or edit every field before saving. Fully completed
 forms can be saved without an API call. The UI displays the model and actual
 request cost for each generated draft.

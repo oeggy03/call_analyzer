@@ -47,7 +47,7 @@ const EMPTY_SNAPSHOT: AppSnapshot = {
   settings: {
     openRouterKeyConfigured: false,
     sttModel: 'qwen/qwen3-asr-1.7b',
-    analyzerModel: 'qwen/qwen3.8-flash',
+    analyzerModel: 'qwen/qwen3-32b',
     hardBudgetUsd: 0.5,
     audioRetention: 'sessionOnly',
     ocrEnabled: false,
@@ -91,8 +91,8 @@ const STT_MODEL_OPTIONS = [
 ] as const
 
 const ANALYZER_MODEL_OPTIONS = [
-  { value: 'qwen/qwen3.8-flash', label: 'Qwen 3.8 Flash' },
-  { value: 'qwen/qwen3.8-max-0902', label: 'Qwen 3.8 Max' },
+  { value: 'qwen/qwen3-32b', label: 'Qwen 3 32B · ZDR' },
+  { value: 'qwen/qwen3.5-9b', label: 'Qwen 3.5 9B · ZDR' },
 ] as const
 
 const DEFAULT_STT_MODEL = STT_MODEL_OPTIONS[0].value
@@ -1281,7 +1281,7 @@ function ManualVocabularyView({
               <div className="manual-generation-meta-icon"><Icon name="spark" /></div>
               <div>
                 <strong>Generated with {generatedDraft.model}</strong>
-                <p>Actual request cost: {formatUsd(generatedDraft.cost)}. Qwen 3.8 Flash is the inexpensive default for this workflow.</p>
+                <p>Actual request cost: {formatUsd(generatedDraft.cost)}. The default analyzer uses an OpenRouter zero-data-retention endpoint.</p>
               </div>
             </div>
           )}

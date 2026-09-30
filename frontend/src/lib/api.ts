@@ -106,7 +106,7 @@ declare global {
 
 const DEMO_TIMESTAMP = '2026-09-29T14:30:00.000Z'
 const DEMO_MOMENT_TIMESTAMP = '2026-09-29T14:30:05.000Z'
-const DEMO_MANUAL_VOCABULARY_MODEL = 'qwen/qwen3.8-flash'
+const DEMO_MANUAL_VOCABULARY_MODEL = 'qwen/qwen3-32b'
 const DEMO_MANUAL_VOCABULARY_COST = 0.0002
 
 const demoTranscript: TranscriptLine[] = [
@@ -300,7 +300,7 @@ function createDemoSnapshot(): AppSnapshot {
     settings: {
       openRouterKeyConfigured: true,
       sttModel: 'qwen/qwen3-asr-1.7b',
-      analyzerModel: 'qwen/qwen3.8-flash',
+      analyzerModel: 'qwen/qwen3-32b',
       hardBudgetUsd: 0.5,
       audioRetention: 'sessionOnly',
       ocrEnabled: false,

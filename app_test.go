@@ -272,7 +272,7 @@ func TestSaveSettingsIsRejectedWhileLessonIsActive(t *testing.T) {
 	if err := app.service.StartCapture(ctx, lesson.ID); err != nil {
 		t.Fatal(err)
 	}
-	model := "qwen/qwen3.8-max-0902"
+	model := "qwen/qwen3.5-9b"
 	if _, err := app.SaveSettings(SettingsPatch{AnalyzerModel: &model}); err == nil {
 		t.Fatal("settings changed while a lesson was active")
 	}

@@ -21,7 +21,7 @@ runtime is not present. This makes the UI useful in a browser and keeps tests
 independent of a running desktop backend. A production build without a Wails
 runtime shows the backend-unavailable state instead of pretending to capture.
 The demo defaults are `qwen/qwen3-asr-1.7b` for STT and
-`qwen/qwen3.8-flash` for analysis.
+`qwen/qwen3-32b` for analysis.
 
 ## Backend contract
 

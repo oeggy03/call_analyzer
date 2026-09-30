@@ -40,12 +40,57 @@ func TestApplyingSettingsDuringCapturePreservesSessionBudget(t *testing.T) {
 	}
 	budget.Add(0.20)
 
-	model := "qwen/qwen3.8-max-0902"
+	model := "qwen/qwen3.5-9b"
 	if err := svc.ApplySettings(ctx, SettingsPatch{AnalyzerModel: &model}); err != nil {
 		t.Fatal(err)
 	}
 	if got := svc.router.BudgetStatus().Spent; got != 0.20 {
 		t.Fatalf("settings reset live session spend to %v", got)
+	}
+}
+
+func TestInitializeMigratesLegacyNonZDRAnalyzerModel(t *testing.T) {
+	for _, legacyModel := range []string{
+		"qwen/qwen3.8-flash",
+		"qwen/qwen3.8-max-0902",
+	} {
+		t.Run(legacyModel, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := storage.Open(ctx, ":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if _, err := store.Settings().Set(
+				ctx,
+				settingAnalyzerModel,
+				`"`+legacyModel+`"`,
+			); err != nil {
+				t.Fatal(err)
+			}
+			svc := New(store, capture.NewMockSource(), NewMemorySecretStore(), nil)
+			if err := svc.Initialize(ctx); err != nil {
+				t.Fatal(err)
+			}
+			settings, err := svc.Settings(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if settings.AnalyzerModel != openrouter.DefaultChatModel {
+				t.Fatalf(
+					"legacy analyzer was not migrated: got %q want %q",
+					settings.AnalyzerModel,
+					openrouter.DefaultChatModel,
+				)
+			}
+			persisted, err := store.Settings().Get(ctx, settingAnalyzerModel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.ValueJSON != `"`+openrouter.DefaultChatModel+`"` {
+				t.Fatalf("migrated analyzer was not persisted: %s", persisted.ValueJSON)
+			}
+		})
 	}
 }
 

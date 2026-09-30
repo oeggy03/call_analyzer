@@ -21,7 +21,7 @@ import (
 const (
 	DefaultBaseURL   = "https://openrouter.ai"
 	DefaultASRModel  = "qwen/qwen3-asr-1.7b"
-	DefaultChatModel = "qwen/qwen3.8-flash"
+	DefaultChatModel = "qwen/qwen3-32b"
 )
 
 var ErrBudgetExceeded = errors.New("openrouter: session budget exceeded")

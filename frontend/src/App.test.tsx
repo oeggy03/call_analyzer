@@ -193,7 +193,7 @@ describe('Call Analyzer frontend', () => {
 
     expect(await screen.findByDisplayValue('xué xí')).toBeInTheDocument()
     expect(screen.getByDisplayValue('to study; to learn')).toBeInTheDocument()
-    expect(screen.getByText(/qwen\/qwen3\.8-flash/i)).toBeInTheDocument()
+    expect(screen.getByText(/qwen\/qwen3-32b/i)).toBeInTheDocument()
     expect(screen.getByText(/actual request cost: <\$0\.001/i)).toBeInTheDocument()
     expect(generateManualVocabulary).toHaveBeenCalledWith(expect.objectContaining({
       simplified: '学习',
@@ -273,7 +273,7 @@ describe('Call Analyzer frontend', () => {
       exampleTranslation: 'This is a new word.',
       tags: ['work'],
       aiGenerated: true,
-      model: 'qwen/qwen3.8-flash',
+      model: 'qwen/qwen3-32b',
       cost: 0.0002,
     }
     const fakeApp = {
@@ -401,7 +401,7 @@ describe('Call Analyzer frontend', () => {
           GetAppSnapshot: vi.fn().mockResolvedValue(snapshot),
           GenerateManualVocabulary: vi.fn().mockResolvedValue({
             simplified: '学习',
-            model: 'qwen/qwen3.8-flash',
+            model: 'qwen/qwen3-32b',
             cost: '0.0002',
           }),
         },

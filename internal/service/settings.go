@@ -70,7 +70,7 @@ func (s *Service) loadSettings(ctx context.Context) error {
 	if settings.STTModel == "" {
 		settings.STTModel = openrouter.DefaultASRModel
 	}
-	if settings.AnalyzerModel == "" {
+	if settings.AnalyzerModel == "" || isLegacyNonZDRAnalyzerModel(settings.AnalyzerModel) {
 		settings.AnalyzerModel = openrouter.DefaultChatModel
 	}
 	if settings.HardBudgetUSD <= 0 || settings.HardBudgetUSD > 0.50 {
@@ -204,4 +204,13 @@ func (s *Service) ApplySettings(ctx context.Context, patch SettingsPatch) error 
 	}
 	s.emit("settings.changed", next)
 	return nil
+}
+
+func isLegacyNonZDRAnalyzerModel(model string) bool {
+	switch strings.TrimSpace(model) {
+	case "qwen/qwen3.8-flash", "qwen/qwen3.8-max-0902":
+		return true
+	default:
+		return false
+	}
 }
