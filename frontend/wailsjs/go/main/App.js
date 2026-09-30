@@ -14,6 +14,10 @@ export function EditCandidate(arg1, arg2) {
   return window['go']['main']['App']['EditCandidate'](arg1, arg2);
 }
 
+export function GenerateManualVocabulary(arg1) {
+  return window['go']['main']['App']['GenerateManualVocabulary'](arg1);
+}
+
 export function GetAppSnapshot() {
   return window['go']['main']['App']['GetAppSnapshot']();
 }
@@ -36,6 +40,10 @@ export function RejectCandidate(arg1) {
 
 export function RequestCapturePermission() {
   return window['go']['main']['App']['RequestCapturePermission']();
+}
+
+export function SaveManualVocabulary(arg1) {
+  return window['go']['main']['App']['SaveManualVocabulary'](arg1);
 }
 
 export function SaveSettings(arg1) {

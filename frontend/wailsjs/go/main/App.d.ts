@@ -8,6 +8,8 @@ export function DeleteLastLesson():Promise<main.AppSnapshot>;
 
 export function EditCandidate(arg1:string,arg2:main.CandidateEditPatch):Promise<main.AppSnapshot>;
 
+export function GenerateManualVocabulary(arg1:main.ManualVocabularyInput):Promise<main.ManualVocabularyDraft>;
+
 export function GetAppSnapshot():Promise<main.AppSnapshot>;
 
 export function MarkMoment():Promise<main.AppSnapshot>;
@@ -19,6 +21,8 @@ export function Refresh():Promise<main.AppSnapshot>;
 export function RejectCandidate(arg1:string):Promise<main.AppSnapshot>;
 
 export function RequestCapturePermission():Promise<main.AppSnapshot>;
+
+export function SaveManualVocabulary(arg1:main.ManualVocabularyInput):Promise<main.AppSnapshot>;
 
 export function SaveSettings(arg1:main.SettingsPatch):Promise<main.AppSnapshot>;
 

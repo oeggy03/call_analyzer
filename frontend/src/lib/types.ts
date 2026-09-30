@@ -123,6 +123,25 @@ export interface StartLessonInput {
   consent: boolean
 }
 
+export interface ManualVocabularyInput {
+  simplified: string
+  traditional?: string
+  pinyin?: string
+  meaning?: string
+  partOfSpeech?: string
+  classifier?: string
+  example?: string
+  examplePinyin?: string
+  exampleTranslation?: string
+  tags?: string[]
+  aiGenerated?: boolean
+}
+
+export interface ManualVocabularyDraft extends ManualVocabularyInput {
+  model: string
+  cost: number
+}
+
 export interface CandidateEditPatch {
   simplified?: string
   traditional?: string

@@ -106,6 +106,60 @@ func (a *App) GetAppSnapshot() (AppSnapshot, error) {
 	return a.buildSnapshot(a.context())
 }
 
+func (a *App) GenerateManualVocabulary(input ManualVocabularyInput) (ManualVocabularyDraft, error) {
+	draft, err := a.service.GenerateManualVocabulary(a.context(), service.ManualVocabularyInput{
+		Simplified:         input.Simplified,
+		Traditional:        input.Traditional,
+		Pinyin:             input.Pinyin,
+		Meaning:            input.Meaning,
+		PartOfSpeech:       input.PartOfSpeech,
+		Classifier:         input.Classifier,
+		Example:            input.Example,
+		ExamplePinyin:      input.ExamplePinyin,
+		ExampleTranslation: input.ExampleTranslation,
+		Tags:               input.Tags,
+		AiGenerated:        input.AiGenerated,
+	})
+	if err != nil {
+		return ManualVocabularyDraft{}, err
+	}
+	return ManualVocabularyDraft{
+		Simplified:         draft.Simplified,
+		Traditional:        draft.Traditional,
+		Pinyin:             draft.Pinyin,
+		Meaning:            draft.Meaning,
+		PartOfSpeech:       draft.PartOfSpeech,
+		Classifier:         draft.Classifier,
+		Example:            draft.Example,
+		ExamplePinyin:      draft.ExamplePinyin,
+		ExampleTranslation: draft.ExampleTranslation,
+		Tags:               draft.Tags,
+		AiGenerated:        draft.AiGenerated,
+		Model:              draft.Model,
+		Cost:               draft.Cost,
+	}, nil
+}
+
+func (a *App) SaveManualVocabulary(input ManualVocabularyInput) (AppSnapshot, error) {
+	_, err := a.service.SaveManualVocabulary(a.context(), service.ManualVocabularyInput{
+		Simplified:         input.Simplified,
+		Traditional:        input.Traditional,
+		Pinyin:             input.Pinyin,
+		Meaning:            input.Meaning,
+		PartOfSpeech:       input.PartOfSpeech,
+		Classifier:         input.Classifier,
+		Example:            input.Example,
+		ExamplePinyin:      input.ExamplePinyin,
+		ExampleTranslation: input.ExampleTranslation,
+		Tags:               input.Tags,
+		AiGenerated:        input.AiGenerated,
+	})
+	if err != nil {
+		return AppSnapshot{}, err
+	}
+	return a.GetAppSnapshot()
+}
+
 func (a *App) RequestCapturePermission() (AppSnapshot, error) {
 	err := a.checkReadiness(a.context(), a.service.Target())
 	snapshot, snapshotErr := a.GetAppSnapshot()

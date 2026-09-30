@@ -198,6 +198,276 @@ func (r *VocabularyRepository) UpsertCandidate(ctx context.Context, candidate do
 	return r.Get(ctx, candidate.ID)
 }
 
+// SaveManual upserts an explicitly reviewed vocabulary entry as confirmed.
+// It is intentionally separate from UpsertCandidate: automatic extraction
+// must never reopen a rejected entry, while an explicit manual save is allowed
+// to restore that same Chinese-aware key.
+func (r *VocabularyRepository) SaveManual(ctx context.Context, entry domain.VocabularyEntry) (domain.VocabularyEntry, error) {
+	if strings.TrimSpace(entry.Simplified) == "" {
+		return domain.VocabularyEntry{}, errors.New("vocabulary: simplified form is required")
+	}
+	if strings.TrimSpace(entry.Traditional) == "" {
+		entry.Traditional = entry.Simplified
+	}
+	if strings.TrimSpace(entry.Reading) == "" {
+		return domain.VocabularyEntry{}, errors.New("vocabulary: reading is required")
+	}
+	numberedReading, markedPinyin, err := vocabulary.CanonicalPinyin(entry.Reading)
+	if err != nil {
+		return domain.VocabularyEntry{}, err
+	}
+	entry.Reading = numberedReading
+	entry.MarkedPinyin = markedPinyin
+	if len(entry.Senses) == 0 || strings.TrimSpace(entry.Senses[0].Gloss) == "" {
+		return domain.VocabularyEntry{}, errors.New("vocabulary: manual entry meaning is required")
+	}
+	if len(entry.Examples) == 0 {
+		return domain.VocabularyEntry{}, errors.New("vocabulary: manual entry example is required")
+	}
+	for index := range entry.Examples {
+		example := &entry.Examples[index]
+		if strings.TrimSpace(example.Simplified) == "" ||
+			strings.TrimSpace(example.Reading) == "" ||
+			strings.TrimSpace(example.Translation) == "" {
+			return domain.VocabularyEntry{}, fmt.Errorf(
+				"vocabulary: manual example %d requires sentence, pinyin, and translation",
+				index+1,
+			)
+		}
+		example.Reading, _, err = vocabulary.CanonicalPinyin(example.Reading)
+		if err != nil {
+			return domain.VocabularyEntry{}, fmt.Errorf("vocabulary: example pinyin: %w", err)
+		}
+		if example.Generated {
+			example.Provenance = domain.ProvenanceModel
+		} else {
+			example.Provenance = domain.ProvenanceUser
+		}
+	}
+
+	now := time.Now().UTC()
+	entry.Status = domain.VocabularyStatusConfirmed
+	entry.Provenance = domain.ProvenanceUser
+	entry.Manual = true
+	entry.Priority = "manual"
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = now
+	}
+	entry.UpdatedAt = now
+	if entry.ID == "" {
+		entry.ID = newID()
+	}
+
+	err = r.store.withTx(ctx, func(tx *sql.Tx) error {
+		var existingID string
+		var existingStatus domain.VocabularyStatus
+		lookupErr := tx.QueryRowContext(ctx, `
+			SELECT id, status FROM vocabulary_entries
+			WHERE simplified = ? AND traditional = ? AND reading = ?`,
+			entry.Simplified, entry.Traditional, entry.Reading,
+		).Scan(&existingID, &existingStatus)
+		switch {
+		case errors.Is(lookupErr, sql.ErrNoRows):
+			_, err := tx.ExecContext(ctx, `
+				INSERT INTO vocabulary_entries(
+					id, simplified, traditional, reading, marked_pinyin, status,
+					provenance, confidence, teaching_cue, manual, priority,
+					created_at, updated_at
+				) VALUES (?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, 1, 'manual', ?, ?)`,
+				entry.ID, entry.Simplified, entry.Traditional, entry.Reading,
+				entry.MarkedPinyin, entry.Provenance, entry.Confidence,
+				entry.TeachingCue, timeValue(entry.CreatedAt), timeValue(entry.UpdatedAt),
+			)
+			if err != nil {
+				return fmt.Errorf("vocabulary: save manual entry: %w", err)
+			}
+		case lookupErr != nil:
+			return fmt.Errorf("vocabulary: resolve manual entry: %w", lookupErr)
+		default:
+			if existingStatus == domain.VocabularyStatusMerged {
+				return fmt.Errorf("vocabulary: cannot restore merged entry %q", existingID)
+			}
+			entry.ID = existingID
+			if existingStatus == domain.VocabularyStatusConfirmed {
+				existing, err := scanVocabularyEntry(ctx, tx, existingID)
+				if err != nil {
+					return fmt.Errorf("vocabulary: load existing manual entry: %w", err)
+				}
+				if manualEntriesEqual(existing, entry) {
+					if _, err := tx.ExecContext(ctx, `
+						INSERT INTO study_state(entry_id) VALUES (?)
+						ON CONFLICT(entry_id) DO NOTHING`, entry.ID); err != nil {
+						return fmt.Errorf("vocabulary: initialize manual study state: %w", err)
+					}
+					return nil
+				}
+			}
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE vocabulary_entries
+				SET simplified = ?, traditional = ?, reading = ?, marked_pinyin = ?,
+					status = 'confirmed', provenance = ?, confidence = ?,
+					teaching_cue = ?, manual = 1, priority = 'manual',
+					merged_into_id = NULL, updated_at = ?
+				WHERE id = ?`,
+				entry.Simplified, entry.Traditional, entry.Reading, entry.MarkedPinyin,
+				entry.Provenance, entry.Confidence, entry.TeachingCue,
+				timeValue(entry.UpdatedAt), entry.ID,
+			); err != nil {
+				return fmt.Errorf("vocabulary: restore manual entry: %w", err)
+			}
+		}
+
+		if _, err := tx.ExecContext(ctx, "DELETE FROM senses WHERE entry_id = ?", entry.ID); err != nil {
+			return fmt.Errorf("vocabulary: replace manual senses: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM examples WHERE entry_id = ?", entry.ID); err != nil {
+			return fmt.Errorf("vocabulary: replace manual examples: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM entry_tags WHERE entry_id = ?", entry.ID); err != nil {
+			return fmt.Errorf("vocabulary: replace manual tags: %w", err)
+		}
+
+		for index := range entry.Senses {
+			sense := entry.Senses[index]
+			if sense.ID == "" {
+				sense.ID = newID()
+			}
+			sense.EntryID = entry.ID
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO senses(id, entry_id, gloss, part_of_speech, classifier, sort_order)
+				VALUES (?, ?, ?, ?, ?, ?)`,
+				sense.ID, sense.EntryID, sense.Gloss, sense.PartOfSpeech,
+				sense.Classifier, sense.SortOrder,
+			); err != nil {
+				return fmt.Errorf("vocabulary: save manual sense: %w", err)
+			}
+		}
+		for index := range entry.Examples {
+			example := entry.Examples[index]
+			if example.ID == "" {
+				example.ID = newID()
+			}
+			example.EntryID = entry.ID
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO examples(
+					id, entry_id, simplified, traditional, reading, translation,
+					provenance, generated
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				example.ID, example.EntryID, example.Simplified, example.Traditional,
+				example.Reading, example.Translation, example.Provenance, example.Generated,
+			); err != nil {
+				return fmt.Errorf("vocabulary: save manual example: %w", err)
+			}
+		}
+		for _, tag := range entry.Tags {
+			tagName := strings.TrimSpace(tag.Name)
+			if tagName == "" {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx,
+				"INSERT INTO tags(id, name) VALUES (?, ?) ON CONFLICT(name) DO NOTHING",
+				newID(), tagName,
+			); err != nil {
+				return fmt.Errorf("vocabulary: save manual tag: %w", err)
+			}
+			var tagID string
+			if err := tx.QueryRowContext(ctx, "SELECT id FROM tags WHERE name = ?", tagName).Scan(&tagID); err != nil {
+				return fmt.Errorf("vocabulary: resolve manual tag: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx,
+				"INSERT OR IGNORE INTO entry_tags(entry_id, tag_id) VALUES (?, ?)",
+				entry.ID, tagID,
+			); err != nil {
+				return fmt.Errorf("vocabulary: link manual tag: %w", err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO study_state(entry_id) VALUES (?)
+			ON CONFLICT(entry_id) DO NOTHING`, entry.ID); err != nil {
+			return fmt.Errorf("vocabulary: initialize manual study state: %w", err)
+		}
+
+		saved, err := scanVocabularyEntry(ctx, tx, entry.ID)
+		if err != nil {
+			return err
+		}
+		payload, err := json.Marshal(saved)
+		if err != nil {
+			return fmt.Errorf("vocabulary: marshal manual save event: %w", err)
+		}
+		return enqueueOutboxTx(ctx, tx, domain.OutboxEvent{
+			EventType:      "vocabulary.manual.saved",
+			AggregateType:  "vocabulary_entry",
+			AggregateID:    entry.ID,
+			PayloadJSON:    string(payload),
+			IdempotencyKey: "vocabulary:manual:" + entry.ID + ":" + fmt.Sprint(timeValue(now)),
+			CreatedAt:      now,
+		})
+	})
+	if err != nil {
+		return domain.VocabularyEntry{}, err
+	}
+	return r.Get(ctx, entry.ID)
+}
+
+func manualEntriesEqual(existing, desired domain.VocabularyEntry) bool {
+	if existing.Status != domain.VocabularyStatusConfirmed ||
+		existing.Simplified != desired.Simplified ||
+		existing.Traditional != desired.Traditional ||
+		existing.Reading != desired.Reading ||
+		existing.MarkedPinyin != desired.MarkedPinyin ||
+		existing.Provenance != domain.ProvenanceUser ||
+		existing.Manual != desired.Manual ||
+		existing.Priority != desired.Priority ||
+		existing.Confidence != desired.Confidence ||
+		existing.TeachingCue != desired.TeachingCue ||
+		len(existing.Senses) != len(desired.Senses) ||
+		len(existing.Examples) != len(desired.Examples) {
+		return false
+	}
+	for index := range desired.Senses {
+		got, want := existing.Senses[index], desired.Senses[index]
+		if got.Gloss != want.Gloss ||
+			got.PartOfSpeech != want.PartOfSpeech ||
+			got.Classifier != want.Classifier ||
+			got.SortOrder != want.SortOrder {
+			return false
+		}
+	}
+	for index := range desired.Examples {
+		got, want := existing.Examples[index], desired.Examples[index]
+		if got.Simplified != want.Simplified ||
+			got.Traditional != want.Traditional ||
+			got.Reading != want.Reading ||
+			got.Translation != want.Translation ||
+			got.Provenance != want.Provenance ||
+			got.Generated != want.Generated {
+			return false
+		}
+	}
+	return manualTagNamesEqual(existing.Tags, desired.Tags)
+}
+
+func manualTagNamesEqual(existing, desired []domain.Tag) bool {
+	counts := make(map[string]int, len(existing))
+	for _, tag := range existing {
+		counts[tag.Name]++
+	}
+	for _, tag := range desired {
+		name := strings.TrimSpace(tag.Name)
+		if name == "" {
+			continue
+		}
+		counts[name]--
+	}
+	for _, count := range counts {
+		if count != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (r *VocabularyRepository) Get(ctx context.Context, id string) (domain.VocabularyEntry, error) {
 	var entry domain.VocabularyEntry
 	err := r.store.withTx(ctx, func(tx *sql.Tx) error {

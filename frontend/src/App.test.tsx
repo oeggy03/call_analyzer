@@ -182,6 +182,70 @@ describe('Call Analyzer frontend', () => {
     expect(screen.queryByText('重点')).not.toBeInTheDocument()
   })
 
+  it('generates an editable Add Word draft, then saves it to Vocabulary', async () => {
+    const api = createDemoApi()
+    const generateManualVocabulary = vi.spyOn(api, 'generateManualVocabulary')
+    render(<App apiClient={api} />)
+    await openView('Add Word')
+
+    fireEvent.change(screen.getByLabelText(/Chinese word \(simplified\)/i), { target: { value: '学习' } })
+    fireEvent.click(screen.getByRole('button', { name: /Generate missing details/i }))
+
+    expect(await screen.findByDisplayValue('xué xí')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('to study; to learn')).toBeInTheDocument()
+    expect(screen.getByText(/qwen\/qwen3\.8-flash/i)).toBeInTheDocument()
+    expect(screen.getByText(/actual request cost: <\$0\.001/i)).toBeInTheDocument()
+    expect(generateManualVocabulary).toHaveBeenCalledWith(expect.objectContaining({
+      simplified: '学习',
+      pinyin: '',
+    }))
+
+    fireEvent.change(screen.getByLabelText('English meaning'), { target: { value: 'to learn carefully' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save to Vocabulary/i }))
+
+    expect(await screen.findByRole('heading', { name: 'Vocabulary' })).toBeInTheDocument()
+    expect(await screen.findByText('学习')).toBeInTheDocument()
+    expect(await screen.findByText('to learn carefully')).toBeInTheDocument()
+    expect(await screen.findByText(/学习 saved to Vocabulary/i)).toBeInTheDocument()
+  })
+
+  it('saves a complete manual form without an API key or generation', async () => {
+    const api = createDemoApi()
+    await api.saveSettings({ openRouterKey: '' })
+    const generateManualVocabulary = vi.spyOn(api, 'generateManualVocabulary')
+    render(<App apiClient={api} />)
+    await openView('Add Word')
+
+    fireEvent.change(screen.getByLabelText(/Chinese word \(simplified\)/i), { target: { value: '你好' } })
+    fireEvent.change(screen.getByLabelText('Pinyin'), { target: { value: 'nǐ hǎo' } })
+    fireEvent.change(screen.getByLabelText('English meaning'), { target: { value: 'hello' } })
+    fireEvent.change(screen.getByLabelText('Chinese sample sentence'), { target: { value: '你好，老师！' } })
+    fireEvent.change(screen.getByLabelText('Sample pinyin'), { target: { value: 'Nǐ hǎo, lǎo shī!' } })
+    fireEvent.change(screen.getByLabelText('Sample English translation'), { target: { value: 'Hello, teacher!' } })
+
+    expect(screen.getByRole('button', { name: /Save to Vocabulary/i })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /Generate missing details/i })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: /Save to Vocabulary/i }))
+
+    expect(generateManualVocabulary).not.toHaveBeenCalled()
+    expect(await screen.findByRole('heading', { name: 'Vocabulary' })).toBeInTheDocument()
+    expect(await screen.findByText('你好')).toBeInTheDocument()
+  })
+
+  it('blocks incomplete generation without an API key and offers Settings', async () => {
+    const api = createDemoApi()
+    await api.saveSettings({ openRouterKey: '' })
+    const generateManualVocabulary = vi.spyOn(api, 'generateManualVocabulary')
+    render(<App apiClient={api} />)
+    await openView('Add Word')
+
+    fireEvent.change(screen.getByLabelText(/Chinese word \(simplified\)/i), { target: { value: '学习' } })
+    const generateButton = screen.getByRole('button', { name: /Generate missing details/i })
+    expect(generateButton).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Open Settings' })).toBeInTheDocument()
+    expect(generateManualVocabulary).not.toHaveBeenCalled()
+  })
+
   it('shows a useful unavailable-backend state', async () => {
     render(<App apiClient={createUnavailableApi()} />)
 
@@ -197,8 +261,25 @@ describe('Call Analyzer frontend', () => {
 
   it('passes the exact positional Wails argument shapes', async () => {
     const snapshot = await createDemoApi().getSnapshot()
+    const manualDraft = {
+      simplified: '新词',
+      traditional: '新詞',
+      pinyin: 'xīn cí',
+      meaning: 'new word',
+      partOfSpeech: 'noun',
+      classifier: '个',
+      example: '这是新词。',
+      examplePinyin: 'Zhè shì xīn cí.',
+      exampleTranslation: 'This is a new word.',
+      tags: ['work'],
+      aiGenerated: true,
+      model: 'qwen/qwen3.8-flash',
+      cost: 0.0002,
+    }
     const fakeApp = {
       GetAppSnapshot: vi.fn().mockResolvedValue(snapshot),
+      GenerateManualVocabulary: vi.fn().mockResolvedValue(manualDraft),
+      SaveManualVocabulary: vi.fn().mockResolvedValue(snapshot),
       RequestCapturePermission: vi.fn().mockResolvedValue(snapshot),
       StartLesson: vi.fn().mockResolvedValue(snapshot),
       StopLesson: vi.fn().mockResolvedValue(snapshot),
@@ -227,9 +308,24 @@ describe('Call Analyzer frontend', () => {
       tags: ['work'],
     }
     const settingsPatch = { sttModel: 'qwen/qwen3-asr-1.7b' }
+    const manualInput = {
+      simplified: '新词',
+      traditional: '',
+      pinyin: '',
+      meaning: '',
+      partOfSpeech: '',
+      classifier: '',
+      example: '',
+      examplePinyin: '',
+      exampleTranslation: '',
+      tags: [],
+      aiGenerated: false,
+    }
 
     expect(runtimeApi.mode).toBe('runtime')
     await runtimeApi.getSnapshot()
+    await runtimeApi.generateManualVocabulary(manualInput)
+    await runtimeApi.saveManualVocabulary(manualInput)
     await runtimeApi.requestCapturePermission()
     await runtimeApi.startLesson({ target: 'zoom', consent: true })
     await runtimeApi.stopLesson()
@@ -242,6 +338,8 @@ describe('Call Analyzer frontend', () => {
     await runtimeApi.deleteLastLesson()
     await runtimeApi.refresh()
 
+    expect(fakeApp.GenerateManualVocabulary).toHaveBeenCalledWith(manualInput)
+    expect(fakeApp.SaveManualVocabulary).toHaveBeenCalledWith(manualInput)
     expect(fakeApp.StartLesson).toHaveBeenCalledWith({ target: 'zoom', consent: true })
     expect(fakeApp.ConfirmCandidate).toHaveBeenCalledWith('candidate-1')
     expect(fakeApp.EditCandidate).toHaveBeenCalledWith('candidate-1', editPatch)
@@ -293,5 +391,26 @@ describe('Call Analyzer frontend', () => {
     }
 
     await expect(createApi({ mode: 'runtime' }).getSnapshot()).rejects.toThrow('invalid snapshot')
+  })
+
+  it('rejects an invalid runtime manual vocabulary draft', async () => {
+    const snapshot = await createDemoApi().getSnapshot()
+    window.go = {
+      main: {
+        App: {
+          GetAppSnapshot: vi.fn().mockResolvedValue(snapshot),
+          GenerateManualVocabulary: vi.fn().mockResolvedValue({
+            simplified: '学习',
+            model: 'qwen/qwen3.8-flash',
+            cost: '0.0002',
+          }),
+        },
+      },
+    }
+
+    const runtimeApi = createApi({ mode: 'runtime' })
+    await expect(runtimeApi.generateManualVocabulary({ simplified: '学习' })).rejects.toThrow(
+      'invalid manual vocabulary draft',
+    )
   })
 })

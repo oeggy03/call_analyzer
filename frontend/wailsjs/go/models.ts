@@ -313,6 +313,75 @@ export namespace main {
     }
   }
 
+  export class ManualVocabularyDraft {
+    simplified: string;
+    traditional?: string;
+    pinyin?: string;
+    meaning?: string;
+    partOfSpeech?: string;
+    classifier?: string;
+    example?: string;
+    examplePinyin?: string;
+    exampleTranslation?: string;
+    tags?: string[];
+    aiGenerated?: boolean;
+    model: string;
+    cost: number;
+
+    static createFrom(source: any = {}) {
+      return new ManualVocabularyDraft(source);
+    }
+
+    constructor(source: any = {}) {
+      if ("string" === typeof source) source = JSON.parse(source);
+      this.simplified = source["simplified"];
+      this.traditional = source["traditional"];
+      this.pinyin = source["pinyin"];
+      this.meaning = source["meaning"];
+      this.partOfSpeech = source["partOfSpeech"];
+      this.classifier = source["classifier"];
+      this.example = source["example"];
+      this.examplePinyin = source["examplePinyin"];
+      this.exampleTranslation = source["exampleTranslation"];
+      this.tags = source["tags"];
+      this.aiGenerated = source["aiGenerated"];
+      this.model = source["model"];
+      this.cost = source["cost"];
+    }
+  }
+  export class ManualVocabularyInput {
+    simplified: string;
+    traditional?: string;
+    pinyin?: string;
+    meaning?: string;
+    partOfSpeech?: string;
+    classifier?: string;
+    example?: string;
+    examplePinyin?: string;
+    exampleTranslation?: string;
+    tags?: string[];
+    aiGenerated?: boolean;
+
+    static createFrom(source: any = {}) {
+      return new ManualVocabularyInput(source);
+    }
+
+    constructor(source: any = {}) {
+      if ("string" === typeof source) source = JSON.parse(source);
+      this.simplified = source["simplified"];
+      this.traditional = source["traditional"];
+      this.pinyin = source["pinyin"];
+      this.meaning = source["meaning"];
+      this.partOfSpeech = source["partOfSpeech"];
+      this.classifier = source["classifier"];
+      this.example = source["example"];
+      this.examplePinyin = source["examplePinyin"];
+      this.exampleTranslation = source["exampleTranslation"];
+      this.tags = source["tags"];
+      this.aiGenerated = source["aiGenerated"];
+    }
+  }
+
   export class SettingsPatch {
     openRouterKey?: string;
     sttModel?: string;

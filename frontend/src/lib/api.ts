@@ -20,6 +20,7 @@ import type { PrivacyState } from './types'
 import type { Settings } from './types'
 import type { CandidateBucket } from './types'
 import type { VocabularyStatus } from './types'
+import type { ManualVocabularyDraft, ManualVocabularyInput } from './types'
 
 /**
  * Keep Wails method names in one place. If the generated binding changes,
@@ -27,6 +28,8 @@ import type { VocabularyStatus } from './types'
  */
 export const BACKEND_METHODS = {
   getSnapshot: 'GetAppSnapshot',
+  generateManualVocabulary: 'GenerateManualVocabulary',
+  saveManualVocabulary: 'SaveManualVocabulary',
   requestCapturePermission: 'RequestCapturePermission',
   startLesson: 'StartLesson',
   stopLesson: 'StopLesson',
@@ -51,6 +54,8 @@ export type ApiModePreference = 'auto' | ApiMode
 export interface AppApi {
   readonly mode: ApiMode
   getSnapshot(): Promise<AppSnapshot>
+  generateManualVocabulary(input: ManualVocabularyInput): Promise<ManualVocabularyDraft>
+  saveManualVocabulary(input: ManualVocabularyInput): Promise<AppSnapshot>
   requestCapturePermission(): Promise<AppSnapshot>
   startLesson(input: StartLessonInput): Promise<AppSnapshot>
   stopLesson(): Promise<AppSnapshot>
@@ -101,6 +106,8 @@ declare global {
 
 const DEMO_TIMESTAMP = '2026-09-29T14:30:00.000Z'
 const DEMO_MOMENT_TIMESTAMP = '2026-09-29T14:30:05.000Z'
+const DEMO_MANUAL_VOCABULARY_MODEL = 'qwen/qwen3.8-flash'
+const DEMO_MANUAL_VOCABULARY_COST = 0.0002
 
 const demoTranscript: TranscriptLine[] = [
   {
@@ -307,6 +314,73 @@ function cloneSnapshot(snapshot: AppSnapshot): AppSnapshot {
   return JSON.parse(JSON.stringify(snapshot)) as AppSnapshot
 }
 
+function normalizeManualVocabularyInput(input: ManualVocabularyInput): ManualVocabularyInput {
+  const simplified = input.simplified.trim()
+  if (!simplified) throw new ApiValidationError('Chinese word (simplified) is required.')
+  return {
+    simplified,
+    traditional: input.traditional?.trim() ?? '',
+    pinyin: input.pinyin?.trim() ?? '',
+    meaning: input.meaning?.trim() ?? '',
+    partOfSpeech: input.partOfSpeech?.trim() ?? '',
+    classifier: input.classifier?.trim() ?? '',
+    example: input.example?.trim() ?? '',
+    examplePinyin: input.examplePinyin?.trim() ?? '',
+    exampleTranslation: input.exampleTranslation?.trim() ?? '',
+    tags: Array.from(new Set((input.tags ?? []).map((tag) => tag.trim()).filter(Boolean))),
+    aiGenerated: Boolean(input.aiGenerated),
+  }
+}
+
+function hasCompleteManualVocabulary(input: ManualVocabularyInput): boolean {
+  return Boolean(
+    input.pinyin?.trim() &&
+      input.meaning?.trim() &&
+      input.example?.trim() &&
+      input.examplePinyin?.trim() &&
+      input.exampleTranslation?.trim(),
+  )
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string'
+}
+
+export function isManualVocabularyDraft(value: unknown): value is ManualVocabularyDraft {
+  if (!isRecord(value)) return false
+  const requiredStrings = ['simplified', 'pinyin', 'meaning', 'example', 'examplePinyin', 'exampleTranslation', 'model']
+  if (requiredStrings.some((field) => typeof value[field] !== 'string' || !value[field].trim())) return false
+  if (typeof value.cost !== 'number' || !Number.isFinite(value.cost) || value.cost < 0) return false
+  if (!['traditional', 'partOfSpeech', 'classifier'].every((field) => isOptionalString(value[field]))) return false
+  if (value.aiGenerated !== undefined && typeof value.aiGenerated !== 'boolean') return false
+  return value.tags === undefined || (Array.isArray(value.tags) && value.tags.every((tag) => typeof tag === 'string'))
+}
+
+const DEMO_MANUAL_VOCABULARY_EXAMPLES: Record<string, ManualVocabularyInput> = {
+  学习: {
+    simplified: '学习',
+    traditional: '學習',
+    pinyin: 'xué xí',
+    meaning: 'to study; to learn',
+    partOfSpeech: 'verb',
+    example: '我每天学习中文。',
+    examplePinyin: 'Wǒ měi tiān xué xí Zhōng wén.',
+    exampleTranslation: 'I study Chinese every day.',
+    tags: ['study'],
+  },
+  你好: {
+    simplified: '你好',
+    traditional: '你好',
+    pinyin: 'nǐ hǎo',
+    meaning: 'hello',
+    partOfSpeech: 'greeting',
+    example: '你好，很高兴认识你。',
+    examplePinyin: 'Nǐ hǎo, hěn gāo xìng rèn shi nǐ.',
+    exampleTranslation: 'Hello, nice to meet you.',
+    tags: ['conversation'],
+  },
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -345,6 +419,87 @@ class DemoApi implements AppApi {
 
   async getSnapshot(): Promise<AppSnapshot> {
     return cloneSnapshot(this.snapshot)
+  }
+
+  async generateManualVocabulary(input: ManualVocabularyInput): Promise<ManualVocabularyDraft> {
+    if (!this.snapshot.settings.openRouterKeyConfigured) {
+      throw new ApiValidationError('Add an OpenRouter API key in Settings before generating details.')
+    }
+    const normalized = normalizeManualVocabularyInput(input)
+    const fallback: ManualVocabularyInput = {
+      simplified: normalized.simplified,
+      traditional: normalized.simplified,
+      pinyin: 'hǎo',
+      meaning: 'a useful Mandarin word',
+      partOfSpeech: 'word',
+      example: '我正在学习这个词。',
+      examplePinyin: 'Wǒ zhèng zài xué xí zhè ge cí.',
+      exampleTranslation: 'I am learning this word.',
+      tags: ['manual'],
+    }
+    const generated = DEMO_MANUAL_VOCABULARY_EXAMPLES[normalized.simplified] ?? fallback
+    const cost = DEMO_MANUAL_VOCABULARY_COST
+    const draft: ManualVocabularyDraft = {
+      simplified: normalized.simplified,
+      traditional: normalized.traditional || generated.traditional || normalized.simplified,
+      pinyin: normalized.pinyin || generated.pinyin,
+      meaning: normalized.meaning || generated.meaning,
+      partOfSpeech: normalized.partOfSpeech || generated.partOfSpeech,
+      classifier: normalized.classifier || generated.classifier || '',
+      example: normalized.example || generated.example,
+      examplePinyin: normalized.examplePinyin || generated.examplePinyin,
+      exampleTranslation: normalized.exampleTranslation || generated.exampleTranslation,
+      tags: normalized.tags && normalized.tags.length > 0 ? normalized.tags : generated.tags ?? [],
+      aiGenerated: Boolean(normalized.aiGenerated) || !hasCompleteManualVocabulary(normalized),
+      model: DEMO_MANUAL_VOCABULARY_MODEL,
+      cost,
+    }
+    this.snapshot.cost = {
+      ...this.snapshot.cost,
+      currentUsd: this.snapshot.cost.currentUsd + cost,
+      projectedUsd: Math.max(this.snapshot.cost.projectedUsd, this.snapshot.cost.currentUsd + cost),
+    }
+    this.publish()
+    return { ...draft, tags: [...(draft.tags ?? [])] }
+  }
+
+  async saveManualVocabulary(input: ManualVocabularyInput): Promise<AppSnapshot> {
+    const normalized = normalizeManualVocabularyInput(input)
+    const missingFields = [
+      ['pinyin', normalized.pinyin],
+      ['English meaning', normalized.meaning],
+      ['Chinese sample sentence', normalized.example],
+      ['sample pinyin', normalized.examplePinyin],
+      ['sample English translation', normalized.exampleTranslation],
+    ]
+      .filter(([, value]) => !value)
+      .map(([label]) => label)
+    if (missingFields.length > 0) {
+      throw new ApiValidationError(`Complete the required details before saving: ${missingFields.join(', ')}.`)
+    }
+    const existing = this.snapshot.vocabulary.find((entry) => entry.simplified === normalized.simplified)
+    const nextEntry: VocabularyEntry = {
+      id: existing?.id ?? `vocab-manual-${normalized.simplified}`,
+      simplified: normalized.simplified,
+      traditional: normalized.traditional || normalized.simplified,
+      pinyin: normalized.pinyin ?? '',
+      meaning: normalized.meaning ?? '',
+      partOfSpeech: normalized.partOfSpeech || undefined,
+      classifier: normalized.classifier || undefined,
+      example: normalized.example ?? '',
+      examplePinyin: normalized.examplePinyin ?? '',
+      exampleTranslation: normalized.exampleTranslation ?? '',
+      status: existing?.status ?? 'learning',
+      tags: [...(normalized.tags ?? [])],
+      lastSeen: 'Just now',
+      seenCount: (existing?.seenCount ?? 0) + 1,
+    }
+    this.snapshot.vocabulary = [
+      nextEntry,
+      ...this.snapshot.vocabulary.filter((entry) => entry.simplified !== normalized.simplified),
+    ]
+    this.publish()
+    return this.getSnapshot()
   }
 
   async requestCapturePermission(): Promise<AppSnapshot> {
@@ -537,6 +692,20 @@ class RuntimeApi implements AppApi {
     return this.callSnapshot(BACKEND_METHODS.getSnapshot)
   }
 
+  async generateManualVocabulary(input: ManualVocabularyInput): Promise<ManualVocabularyDraft> {
+    const result = await this.call(BACKEND_METHODS.generateManualVocabulary, [input])
+    if (!isManualVocabularyDraft(result)) {
+      throw new ApiUnavailableError(
+        `Backend method ${BACKEND_METHODS.generateManualVocabulary} returned an invalid manual vocabulary draft.`,
+      )
+    }
+    return result
+  }
+
+  async saveManualVocabulary(input: ManualVocabularyInput): Promise<AppSnapshot> {
+    return this.callMutation(BACKEND_METHODS.saveManualVocabulary, input)
+  }
+
   async requestCapturePermission(): Promise<AppSnapshot> {
     return this.callMutation(BACKEND_METHODS.requestCapturePermission)
   }
@@ -659,6 +828,14 @@ class UnavailableApi implements AppApi {
 
   getSnapshot(): Promise<AppSnapshot> {
     return Promise.reject(new ApiUnavailableError())
+  }
+
+  generateManualVocabulary(): Promise<ManualVocabularyDraft> {
+    return Promise.reject(new ApiUnavailableError())
+  }
+
+  saveManualVocabulary(): Promise<AppSnapshot> {
+    return this.fail()
   }
 
   requestCapturePermission(): Promise<AppSnapshot> {

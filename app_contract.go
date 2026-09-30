@@ -7,6 +7,36 @@ type StartLessonInput struct {
 	Consent bool   `json:"consent"`
 }
 
+type ManualVocabularyInput struct {
+	Simplified         string   `json:"simplified"`
+	Traditional        string   `json:"traditional,omitempty"`
+	Pinyin             string   `json:"pinyin,omitempty"`
+	Meaning            string   `json:"meaning,omitempty"`
+	PartOfSpeech       string   `json:"partOfSpeech,omitempty"`
+	Classifier         string   `json:"classifier,omitempty"`
+	Example            string   `json:"example,omitempty"`
+	ExamplePinyin      string   `json:"examplePinyin,omitempty"`
+	ExampleTranslation string   `json:"exampleTranslation,omitempty"`
+	Tags               []string `json:"tags,omitempty"`
+	AiGenerated        bool     `json:"aiGenerated,omitempty"`
+}
+
+type ManualVocabularyDraft struct {
+	Simplified         string   `json:"simplified"`
+	Traditional        string   `json:"traditional,omitempty"`
+	Pinyin             string   `json:"pinyin,omitempty"`
+	Meaning            string   `json:"meaning,omitempty"`
+	PartOfSpeech       string   `json:"partOfSpeech,omitempty"`
+	Classifier         string   `json:"classifier,omitempty"`
+	Example            string   `json:"example,omitempty"`
+	ExamplePinyin      string   `json:"examplePinyin,omitempty"`
+	ExampleTranslation string   `json:"exampleTranslation,omitempty"`
+	Tags               []string `json:"tags,omitempty"`
+	AiGenerated        bool     `json:"aiGenerated,omitempty"`
+	Model              string   `json:"model"`
+	Cost               float64  `json:"cost"`
+}
+
 type CandidateEditPatch struct {
 	Simplified         *string   `json:"simplified,omitempty"`
 	Traditional        *string   `json:"traditional,omitempty"`

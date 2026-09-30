@@ -7,6 +7,8 @@ import type {
   Candidate,
   CandidateBucket,
   CandidateEditPatch,
+  ManualVocabularyDraft,
+  ManualVocabularyInput,
   SettingsPatch,
   TargetApp,
   TranscriptSource,
@@ -14,7 +16,7 @@ import type {
 } from './lib/types'
 import './styles.css'
 
-type View = 'live' | 'inbox' | 'vocabulary' | 'settings'
+type View = 'live' | 'inbox' | 'add-word' | 'vocabulary' | 'settings'
 
 interface AppProps {
   apiClient?: AppApi
@@ -57,6 +59,7 @@ const EMPTY_SNAPSHOT: AppSnapshot = {
 const NAV_ITEMS: Array<{ id: View; label: string; description: string; icon: IconName }> = [
   { id: 'live', label: 'Live Lesson', description: 'Capture and review a live call', icon: 'waveform' },
   { id: 'inbox', label: 'Candidate Inbox', description: 'Review new vocabulary', icon: 'inbox' },
+  { id: 'add-word', label: 'Add Word', description: 'Create a vocabulary entry', icon: 'spark' },
   { id: 'vocabulary', label: 'Vocabulary', description: 'Browse your saved words', icon: 'book' },
   { id: 'settings', label: 'Settings', description: 'Models, privacy, and access', icon: 'settings' },
 ]
@@ -108,6 +111,34 @@ type CandidateEditDraft = {
   tags: string
 }
 
+type ManualVocabularyForm = {
+  simplified: string
+  traditional: string
+  pinyin: string
+  meaning: string
+  partOfSpeech: string
+  classifier: string
+  example: string
+  examplePinyin: string
+  exampleTranslation: string
+  tags: string
+  aiGenerated: boolean
+}
+
+const EMPTY_MANUAL_VOCABULARY_FORM: ManualVocabularyForm = {
+  simplified: '',
+  traditional: '',
+  pinyin: '',
+  meaning: '',
+  partOfSpeech: '',
+  classifier: '',
+  example: '',
+  examplePinyin: '',
+  exampleTranslation: '',
+  tags: '',
+  aiGenerated: false,
+}
+
 export function App({ apiClient = defaultApi }: AppProps) {
   const [activeView, setActiveView] = useState<View>('live')
   const [snapshot, setSnapshot] = useState<AppSnapshot>()
@@ -133,6 +164,8 @@ export function App({ apiClient = defaultApi }: AppProps) {
     tags: '',
   })
   const [editError, setEditError] = useState<string>()
+  const [manualForm, setManualForm] = useState<ManualVocabularyForm>(EMPTY_MANUAL_VOCABULARY_FORM)
+  const [manualGeneration, setManualGeneration] = useState<ManualVocabularyDraft>()
 
   const current = snapshot ?? EMPTY_SNAPSHOT
   const backendUnavailable = apiClient.mode === 'unavailable' || Boolean(loadError)
@@ -335,6 +368,67 @@ export function App({ apiClient = defaultApi }: AppProps) {
     void runAction('save-settings', () => apiClient.saveSettings(patch), successMessage)
   }
 
+  const updateManualForm = (nextForm: ManualVocabularyForm) => {
+    setManualForm(nextForm)
+    setActionError(undefined)
+  }
+
+  const handleGenerateManualVocabulary = () => {
+    const input = manualVocabularyFormToInput(manualForm)
+    if (!input.simplified.trim()) {
+      setActionError('Enter a Chinese word (simplified) before generating details.')
+      setActionMessage(undefined)
+      return
+    }
+    if (!current.settings.openRouterKeyConfigured) {
+      setActionError('Add an OpenRouter API key in Settings before generating missing details.')
+      setActionMessage(undefined)
+      return
+    }
+    if (hasCompleteManualVocabularyForm(manualForm)) {
+      setActionError(undefined)
+      setActionMessage('All learning details are already complete; generation is not needed.')
+      return
+    }
+    setBusyAction('generate-manual-vocabulary')
+    setActionError(undefined)
+    setActionMessage(undefined)
+    void apiClient
+      .generateManualVocabulary(input)
+      .then((draft) => {
+        setManualForm(manualVocabularyDraftToForm(draft))
+        setManualGeneration(draft)
+        setActionMessage('Missing details generated. Review every field before saving.')
+      })
+      .catch((error: unknown) => {
+        setActionError(getErrorMessage(error))
+      })
+      .finally(() => {
+        setBusyAction(undefined)
+      })
+  }
+
+  const handleSaveManualVocabulary = (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault()
+    const missingFields = manualVocabularyMissingFields(manualForm)
+    if (missingFields.length > 0) {
+      setActionError(`Complete the required details before saving: ${missingFields.join(', ')}.`)
+      setActionMessage(undefined)
+      return
+    }
+    const input = manualVocabularyFormToInput(manualForm)
+    void runAction(
+      'save-manual-vocabulary',
+      () => apiClient.saveManualVocabulary(input),
+      `${input.simplified} saved to Vocabulary.`,
+    ).then((didSave) => {
+      if (!didSave) return
+      setManualForm({ ...EMPTY_MANUAL_VOCABULARY_FORM })
+      setManualGeneration(undefined)
+      setActiveView('vocabulary')
+    })
+  }
+
   const handleDeleteLastLesson = () => {
     if (['live', 'starting', 'stopping'].includes(current.lesson.status) || !current.lesson.id || busyAction) return
     if (
@@ -414,6 +508,19 @@ export function App({ apiClient = defaultApi }: AppProps) {
                   onEdit={openEdit}
                   onReject={rejectCandidate}
                   onMerge={setMergeCandidate}
+                />
+              )}
+              {activeView === 'add-word' && (
+                <ManualVocabularyView
+                  form={manualForm}
+                  generatedDraft={manualGeneration}
+                  hasApiKey={current.settings.openRouterKeyConfigured}
+                  lessonActive={['live', 'starting', 'stopping'].includes(current.lesson.status)}
+                  busyAction={busyAction}
+                  onFormChange={updateManualForm}
+                  onGenerate={handleGenerateManualVocabulary}
+                  onSave={handleSaveManualVocabulary}
+                  onOpenSettings={() => setActiveView('settings')}
                 />
               )}
               {activeView === 'vocabulary' && (
@@ -954,6 +1061,285 @@ function CandidateCard({
         </button>
       </div>
     </article>
+  )
+}
+
+function ManualVocabularyView({
+  form,
+  generatedDraft,
+  hasApiKey,
+  lessonActive,
+  busyAction,
+  onFormChange,
+  onGenerate,
+  onSave,
+  onOpenSettings,
+}: {
+  form: ManualVocabularyForm
+  generatedDraft?: ManualVocabularyDraft
+  hasApiKey: boolean
+  lessonActive: boolean
+  busyAction?: string
+  onFormChange: (form: ManualVocabularyForm) => void
+  onGenerate: () => void
+  onSave: (event: FormEvent<HTMLFormElement>) => void
+  onOpenSettings: () => void
+}) {
+  const isGenerating = busyAction === 'generate-manual-vocabulary'
+  const isSaving = busyAction === 'save-manual-vocabulary'
+  const isBusy = Boolean(busyAction)
+  const missingFields = manualVocabularyMissingFields(form)
+  const hasCompleteDetails = missingFields.length === 0
+  const canGenerate = Boolean(form.simplified.trim()) && hasApiKey && !lessonActive && !hasCompleteDetails && !isBusy
+
+  return (
+    <div className="view-stack">
+      <section className="page-heading">
+        <div>
+          <p className="eyebrow">Vocabulary builder</p>
+          <h1>Add Word</h1>
+          <p className="page-intro">
+            Start with one Chinese word. Add anything you already know, then let AI fill only the missing details.
+          </p>
+        </div>
+        <div className="heading-actions">
+          <span className="soft-badge"><Icon name="spark" /> Editable draft</span>
+        </div>
+      </section>
+
+      <div className="manual-vocabulary-layout">
+        <form className="panel manual-vocabulary-form" onSubmit={onSave}>
+          <div className="panel-heading">
+            <p className="eyebrow">Word details</p>
+            <h2>Build your vocabulary card</h2>
+            <p>Only the simplified Chinese word is required to begin. Every other field is optional until you save.</p>
+          </div>
+
+          <div className="manual-form-grid manual-form-grid-top">
+            <div className="field-group">
+              <label className="field-label field-label-required" htmlFor="manual-simplified">
+                Chinese word (simplified)
+              </label>
+              <input
+                id="manual-simplified"
+                className="text-input"
+                value={form.simplified}
+                onChange={(event) => onFormChange({ ...form, simplified: event.target.value })}
+                aria-required="true"
+                required
+                autoFocus
+                placeholder="例如：学习"
+              />
+            </div>
+            <div className="field-group">
+              <label className="field-label field-label-optional" htmlFor="manual-traditional">
+                Traditional
+              </label>
+              <input
+                id="manual-traditional"
+                className="text-input"
+                value={form.traditional}
+                onChange={(event) => onFormChange({ ...form, traditional: event.target.value })}
+                placeholder="例如：學習"
+              />
+            </div>
+          </div>
+
+          <div className="manual-form-grid">
+            <div className="field-group">
+              <label className="field-label field-label-optional" htmlFor="manual-pinyin">
+                Pinyin
+              </label>
+              <input
+                id="manual-pinyin"
+                className="text-input"
+                value={form.pinyin}
+                onChange={(event) => onFormChange({ ...form, pinyin: event.target.value })}
+                placeholder="例如：xué xí"
+              />
+            </div>
+            <div className="field-group">
+              <label className="field-label field-label-optional" htmlFor="manual-meaning">
+                English meaning
+              </label>
+              <input
+                id="manual-meaning"
+                className="text-input"
+                value={form.meaning}
+                onChange={(event) => onFormChange({ ...form, meaning: event.target.value })}
+                placeholder="例如：to study; to learn"
+              />
+            </div>
+          </div>
+
+          <div className="manual-form-grid">
+            <div className="field-group">
+              <label className="field-label field-label-optional" htmlFor="manual-part-of-speech">
+                Part of speech
+              </label>
+              <input
+                id="manual-part-of-speech"
+                className="text-input"
+                value={form.partOfSpeech}
+                onChange={(event) => onFormChange({ ...form, partOfSpeech: event.target.value })}
+                placeholder="例如：verb"
+              />
+            </div>
+            <div className="field-group">
+              <label className="field-label field-label-optional" htmlFor="manual-classifier">
+                Classifier
+              </label>
+              <input
+                id="manual-classifier"
+                className="text-input"
+                value={form.classifier}
+                onChange={(event) => onFormChange({ ...form, classifier: event.target.value })}
+                placeholder="例如：本"
+              />
+            </div>
+          </div>
+
+          <div className="field-group manual-form-wide">
+            <label className="field-label field-label-optional" htmlFor="manual-example">
+              Chinese sample sentence
+            </label>
+            <textarea
+              id="manual-example"
+              className="text-input textarea"
+              value={form.example}
+              onChange={(event) => onFormChange({ ...form, example: event.target.value })}
+              rows={2}
+              placeholder="例如：我每天学习中文。"
+            />
+          </div>
+
+          <div className="manual-form-grid">
+            <div className="field-group">
+              <label className="field-label field-label-optional" htmlFor="manual-example-pinyin">
+                Sample pinyin
+              </label>
+              <input
+                id="manual-example-pinyin"
+                className="text-input"
+                value={form.examplePinyin}
+                onChange={(event) => onFormChange({ ...form, examplePinyin: event.target.value })}
+                placeholder="例如：Wǒ měi tiān xué xí Zhōng wén."
+              />
+            </div>
+            <div className="field-group">
+              <label className="field-label field-label-optional" htmlFor="manual-example-translation">
+                Sample English translation
+              </label>
+              <input
+                id="manual-example-translation"
+                className="text-input"
+                value={form.exampleTranslation}
+                onChange={(event) => onFormChange({ ...form, exampleTranslation: event.target.value })}
+                placeholder="例如：I study Chinese every day."
+              />
+            </div>
+          </div>
+
+          <div className="field-group manual-form-wide">
+            <label className="field-label field-label-optional field-label-tags" htmlFor="manual-tags">
+              Tags
+            </label>
+            <input
+              id="manual-tags"
+              className="text-input"
+              value={form.tags}
+              onChange={(event) => onFormChange({ ...form, tags: event.target.value })}
+              placeholder="例如：study, work"
+            />
+          </div>
+
+          {!hasApiKey && (
+            <div className="manual-key-alert" role="status">
+              <div className="manual-key-alert-icon"><Icon name="spark" /></div>
+              <div>
+                <strong>AI generation needs an API key</strong>
+                <p>Add an OpenRouter key in Settings to fill missing details. A complete manual form can still be saved.</p>
+              </div>
+              <button className="button button-secondary button-small" type="button" onClick={onOpenSettings} disabled={isBusy}>
+                Open Settings
+              </button>
+            </div>
+          )}
+
+          {lessonActive && (
+            <div className="manual-key-alert" role="status">
+              <div className="manual-key-alert-icon"><Icon name="waveform" /></div>
+              <div>
+                <strong>Generation pauses during live lessons</strong>
+                <p>Finish the lesson before using AI here so capture keeps the full processing budget.</p>
+              </div>
+            </div>
+          )}
+
+          {generatedDraft && (
+            <div className="manual-generation-meta" role="status" aria-live="polite">
+              <div className="manual-generation-meta-icon"><Icon name="spark" /></div>
+              <div>
+                <strong>Generated with {generatedDraft.model}</strong>
+                <p>Actual request cost: {formatUsd(generatedDraft.cost)}. Qwen 3.8 Flash is the inexpensive default for this workflow.</p>
+              </div>
+            </div>
+          )}
+
+          {hasCompleteDetails && (
+            <div className="manual-complete-note" role="status">
+              <Icon name="check" />
+              <span>All learning-critical details are complete. You can save directly; generation is not needed.</span>
+            </div>
+          )}
+
+          <div className="manual-action-row">
+            <button className="button button-secondary" type="button" onClick={onGenerate} disabled={!canGenerate}>
+              <Icon name="spark" />
+              {isGenerating ? 'Generating…' : 'Generate missing details'}
+            </button>
+            <button className="button button-primary" type="submit" disabled={isBusy || !form.simplified.trim() || !hasCompleteDetails}>
+              <Icon name="check" />
+              {isSaving ? 'Saving…' : 'Save to Vocabulary'}
+            </button>
+          </div>
+          {lessonActive
+            ? <p className="helper-text">AI generation is available again after the active lesson finishes.</p>
+            : !hasApiKey
+            ? <p className="helper-text">Generation is unavailable without a key, but saving does not use AI.</p>
+            : hasCompleteDetails
+            ? <p className="helper-text">Your form is ready to save without another AI request.</p>
+            : <p className="helper-text">Missing pinyin, meaning, or sample details must be completed before saving.</p>}
+        </form>
+
+        <aside className="manual-vocabulary-side">
+          <section className="panel manual-guide-card">
+            <PanelHeading
+              eyebrow="Simple workflow"
+              title="Review before you save"
+              description="Generation creates an editable draft. Your final review is always in control."
+            />
+            <ol className="manual-workflow-list">
+              <li><span>1</span><p>Enter the Chinese word and anything you already know.</p></li>
+              <li><span>2</span><p>Generate missing details when needed, then edit every value.</p></li>
+              <li><span>3</span><p>Save the confirmed card to your Vocabulary collection.</p></li>
+            </ol>
+          </section>
+          <section className="panel manual-guide-card">
+            <PanelHeading
+              eyebrow="Save requirements"
+              title="Useful context matters"
+              description="Traditional, part of speech, classifier, and tags are optional. A saved card needs the learning-critical details."
+            />
+            <div className="manual-requirement-list">
+              {['Pinyin', 'English meaning', 'Chinese sample sentence', 'Sample pinyin', 'Sample English translation'].map((label) => (
+                <span key={label}><Icon name="check" />{label}</span>
+              ))}
+            </div>
+          </section>
+        </aside>
+      </div>
+    </div>
   )
 }
 
@@ -1625,7 +2011,12 @@ function getErrorMessage(error: unknown): string {
 }
 
 function formatUsd(value: number): string {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value)
+  if (value !== 0 && Math.abs(value) < 0.001) return '<$0.001'
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: value !== 0 && Math.abs(value) < 0.01 ? 4 : 2,
+  }).format(value)
 }
 
 function formatTimestamp(value: string): string {
@@ -1671,6 +2062,55 @@ function normalizeModel(value: string, options: readonly { value: string }[], fa
 
 function parseTags(value: string): string[] {
   return Array.from(new Set(value.split(',').map((tag) => tag.trim()).filter(Boolean)))
+}
+
+function manualVocabularyFormToInput(form: ManualVocabularyForm): ManualVocabularyInput {
+  return {
+    simplified: form.simplified.trim(),
+    traditional: form.traditional.trim(),
+    pinyin: form.pinyin.trim(),
+    meaning: form.meaning.trim(),
+    partOfSpeech: form.partOfSpeech.trim(),
+    classifier: form.classifier.trim(),
+    example: form.example.trim(),
+    examplePinyin: form.examplePinyin.trim(),
+    exampleTranslation: form.exampleTranslation.trim(),
+    tags: parseTags(form.tags),
+    aiGenerated: form.aiGenerated,
+  }
+}
+
+function manualVocabularyDraftToForm(draft: ManualVocabularyDraft): ManualVocabularyForm {
+  return {
+    simplified: draft.simplified,
+    traditional: draft.traditional ?? '',
+    pinyin: draft.pinyin ?? '',
+    meaning: draft.meaning ?? '',
+    partOfSpeech: draft.partOfSpeech ?? '',
+    classifier: draft.classifier ?? '',
+    example: draft.example ?? '',
+    examplePinyin: draft.examplePinyin ?? '',
+    exampleTranslation: draft.exampleTranslation ?? '',
+    tags: (draft.tags ?? []).join(', '),
+    aiGenerated: Boolean(draft.aiGenerated),
+  }
+}
+
+function manualVocabularyMissingFields(form: ManualVocabularyForm): string[] {
+  return [
+    ['Chinese word (simplified)', form.simplified],
+    ['pinyin', form.pinyin],
+    ['English meaning', form.meaning],
+    ['Chinese sample sentence', form.example],
+    ['sample pinyin', form.examplePinyin],
+    ['sample English translation', form.exampleTranslation],
+  ]
+    .filter(([, value]) => !value.trim())
+    .map(([label]) => label)
+}
+
+function hasCompleteManualVocabularyForm(form: ManualVocabularyForm): boolean {
+  return manualVocabularyMissingFields(form).length === 0
 }
 
 type IconName =
