@@ -21,10 +21,11 @@ import (
 const appEventPrefix = "call_analyzer:"
 
 type App struct {
-	mu      sync.RWMutex
-	ctx     context.Context
-	service *service.Service
-	store   *storage.Store
+	mu        sync.RWMutex
+	ctx       context.Context
+	readiness ReadinessSnapshot
+	service   *service.Service
+	store     *storage.Store
 }
 
 func NewApp() (*App, error) {
@@ -106,14 +107,18 @@ func (a *App) GetAppSnapshot() (AppSnapshot, error) {
 }
 
 func (a *App) RequestCapturePermission() (AppSnapshot, error) {
-	if _, err := a.service.RequestCapturePermission(a.context()); err != nil {
-		return AppSnapshot{}, err
-	}
-	snapshot, err := a.GetAppSnapshot()
-	if err == nil {
+	err := a.checkReadiness(a.context(), a.service.Target())
+	snapshot, snapshotErr := a.GetAppSnapshot()
+	if snapshotErr == nil {
 		a.emit("snapshot_changed", snapshot)
 	}
-	return snapshot, err
+	if err != nil {
+		return snapshot, err
+	}
+	if snapshotErr != nil {
+		return AppSnapshot{}, snapshotErr
+	}
+	return snapshot, nil
 }
 
 func (a *App) StartLesson(input StartLessonInput) (AppSnapshot, error) {
@@ -127,10 +132,10 @@ func (a *App) StartLesson(input StartLessonInput) (AppSnapshot, error) {
 	if !a.service.HasAPIKey(a.context()) {
 		return AppSnapshot{}, errors.New("OpenRouter API key is not configured; add it in Settings before starting a lesson")
 	}
-	if err := a.service.ValidateTarget(a.context(), target); err != nil {
-		return AppSnapshot{}, err
-	}
-	if _, err := a.service.RequestCapturePermission(a.context()); err != nil {
+	if err := a.checkReadiness(a.context(), target); err != nil {
+		if snapshot, snapshotErr := a.GetAppSnapshot(); snapshotErr == nil {
+			a.emit("snapshot_changed", snapshot)
+		}
 		return AppSnapshot{}, err
 	}
 	a.service.SetTarget(target)
@@ -255,4 +260,30 @@ func (a *App) SaveSettings(patch SettingsPatch) (AppSnapshot, error) {
 
 func (a *App) Refresh() (AppSnapshot, error) {
 	return a.GetAppSnapshot()
+}
+
+func (a *App) checkReadiness(ctx context.Context, target string) error {
+	target = normalizeTarget(target)
+	if target == "" {
+		target = "zoom"
+	}
+	err := a.service.ValidateTarget(ctx, target)
+	readiness := ReadinessSnapshot{
+		Checked:         true,
+		TargetAvailable: err == nil,
+		CheckedAt:       timestamp(time.Now()),
+	}
+	if err != nil {
+		readiness.Error = err.Error()
+	}
+	a.mu.Lock()
+	a.readiness = readiness
+	a.mu.Unlock()
+	return err
+}
+
+func (a *App) readinessSnapshot() ReadinessSnapshot {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.readiness
 }

@@ -111,6 +111,7 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 	return AppSnapshot{
 		Connection:        connection,
 		CapturePermission: string(a.service.CapturePermission()),
+		Readiness:         a.readinessSnapshot(),
 		Target:            target,
 		Lesson:            lessonState,
 		Levels:            AudioLevelsSnapshot{Mic: mic, Remote: remote},

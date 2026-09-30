@@ -844,6 +844,116 @@ select:hover,
   line-height: 1.45;
 }
 
+.setup-checklist {
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--line);
+}
+
+.setup-checklist-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #fafbfd;
+  padding: 10px 11px;
+}
+
+.setup-checklist-heading strong,
+.setup-checklist-heading p {
+  display: block;
+  margin: 0;
+}
+
+.setup-checklist-heading strong {
+  color: var(--ink-800);
+  font-size: 11px;
+}
+
+.setup-checklist-heading p {
+  margin-top: 2px;
+  color: var(--ink-500);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.setup-check {
+  display: grid;
+  grid-template-columns: 20px minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  background: var(--paper);
+  padding: 8px 11px;
+}
+
+.setup-check-icon {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 50%;
+}
+
+.setup-check-icon .icon {
+  width: 11px;
+  height: 11px;
+}
+
+.setup-check strong {
+  color: var(--ink-700);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.setup-check > span:last-child {
+  color: var(--ink-500);
+  font-size: 9px;
+  text-align: right;
+}
+
+.setup-check-ready .setup-check-icon {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.setup-check-blocked .setup-check-icon {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.setup-check-pending .setup-check-icon {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+.setup-check-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  background: var(--red-soft);
+  padding: 9px 11px;
+  color: var(--red);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.setup-check-error .icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.setup-settings-button {
+  justify-self: stretch;
+  border-radius: 0;
+  background: var(--paper);
+}
+
 .start-button {
   width: 100%;
   min-height: 43px;

@@ -73,6 +73,10 @@ func TestAppCapturePipelineContract(t *testing.T) {
 	if started.Lesson.Status != "live" {
 		t.Fatalf("lesson did not start: %#v", started.Lesson)
 	}
+	if !started.Readiness.Checked || !started.Readiness.TargetAvailable ||
+		started.CapturePermission != string(capture.PermissionGranted) {
+		t.Fatalf("successful startup checks were not exposed: %#v", started.Readiness)
+	}
 
 	base := time.Now().UTC()
 	if err := source.FeedEvent(capture.Event{
@@ -271,5 +275,49 @@ func TestSaveSettingsIsRejectedWhileLessonIsActive(t *testing.T) {
 	model := "qwen/qwen3.8-max-0902"
 	if _, err := app.SaveSettings(SettingsPatch{AnalyzerModel: &model}); err == nil {
 		t.Fatal("settings changed while a lesson was active")
+	}
+}
+
+type noZoomSource struct {
+	*capture.MockSource
+}
+
+func (s *noZoomSource) ListTargets(ctx context.Context) ([]capture.Target, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return []capture.Target{{ID: "com.apple.Safari", Name: "Safari", Available: true}}, nil
+}
+
+func TestReadinessExposesMissingZoom(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	app := NewAppWithDependencies(
+		store,
+		&noZoomSource{MockSource: capture.NewMockSource()},
+		service.NewMemorySecretStore(),
+		nil,
+	)
+	if err := app.service.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := app.RequestCapturePermission(); err == nil || !strings.Contains(err.Error(), "open Zoom") {
+		t.Fatalf("expected actionable Zoom error, got %v", err)
+	}
+	snapshot, err := app.GetAppSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Readiness.Checked || snapshot.Readiness.TargetAvailable {
+		t.Fatalf("unexpected readiness state: %#v", snapshot.Readiness)
+	}
+	if !strings.Contains(snapshot.Readiness.Error, "open Zoom") {
+		t.Fatalf("missing readiness error detail: %#v", snapshot.Readiness)
 	}
 }

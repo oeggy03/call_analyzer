@@ -33,6 +33,7 @@ type SettingsPatch struct {
 type AppSnapshot struct {
 	Connection        string               `json:"connection"`
 	CapturePermission string               `json:"capturePermission"`
+	Readiness         ReadinessSnapshot    `json:"readiness"`
 	Target            string               `json:"target"`
 	Lesson            LessonSnapshot       `json:"lesson"`
 	Levels            AudioLevelsSnapshot  `json:"levels"`
@@ -43,6 +44,13 @@ type AppSnapshot struct {
 	Privacy           PrivacyState         `json:"privacy"`
 	Settings          SettingsSnapshot     `json:"settings"`
 	LastUpdated       string               `json:"lastUpdated"`
+}
+
+type ReadinessSnapshot struct {
+	Checked         bool   `json:"checked"`
+	TargetAvailable bool   `json:"targetAvailable"`
+	Error           string `json:"error,omitempty"`
+	CheckedAt       string `json:"checkedAt,omitempty"`
 }
 
 type LessonSnapshot struct {

@@ -41,10 +41,24 @@ describe('Call Analyzer frontend', () => {
     render(<App apiClient={api} />)
 
     expect(await screen.findByRole('button', { name: /start lesson/i })).toBeDisabled()
-    expect(screen.getByText(/API key required/i)).toBeInTheDocument()
+    expect(screen.getByText(/Add a key in Settings/i)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Open Settings' }))
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument()
+  })
+
+  it('displays actionable backend string errors without replacing them', async () => {
+    const api = createDemoApi()
+    vi.spyOn(api, 'requestCapturePermission').mockRejectedValue(
+      'Screen Recording permission is required. Open System Settings and retry.',
+    )
+    render(<App apiClient={api} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Check setup' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Screen Recording permission is required. Open System Settings and retry.',
+    )
   })
 
   it('confirms and rejects candidates with safe feedback', async () => {

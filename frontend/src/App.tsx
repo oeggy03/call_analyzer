@@ -23,6 +23,7 @@ interface AppProps {
 const EMPTY_SNAPSHOT: AppSnapshot = {
   connection: 'unavailable',
   capturePermission: 'unknown',
+  readiness: { checked: false, targetAvailable: false },
   target: 'zoom',
   lesson: { status: 'idle' },
   levels: { mic: 0, remote: 0 },
@@ -584,8 +585,11 @@ function LiveLessonView({
   const isStarting = busyAction === 'start-lesson'
   const isStopping = busyAction === 'stop-lesson'
   const canInteract = snapshot.connection !== 'unavailable'
-  const targetAvailable = selectedTarget === 'zoom'
+  const targetSupported = selectedTarget === 'zoom'
   const hasApiKey = snapshot.settings.openRouterKeyConfigured
+  const captureReady = snapshot.capturePermission === 'granted'
+  const zoomReady = snapshot.readiness.checked && snapshot.readiness.targetAvailable
+  const setupReady = hasApiKey && captureReady && zoomReady
   const pendingCandidates = snapshot.candidates.filter((candidate) => candidate.status === 'pending').length
 
   return (
@@ -647,11 +651,6 @@ function LiveLessonView({
                     : 'Allow screen and system audio access. Microphone permission is separate and may be requested at lesson start when enabled.'}
               </p>
             </div>
-            {snapshot.capturePermission !== 'granted' && (
-              <button className="button button-secondary button-small" type="button" onClick={onPermission} disabled={!canInteract || busyAction === 'permission'}>
-                {busyAction === 'permission' ? 'Requesting…' : 'Allow'}
-              </button>
-            )}
           </div>
           <div className="level-grid">
             <AudioMeter label="Your microphone" value={snapshot.levels.mic} color="blue" />
@@ -686,25 +685,56 @@ function LiveLessonView({
                   I confirm that all participants have consented to capturing this conversation for this lesson and understand that the transcript is processed for vocabulary suggestions.
                 </label>
               </div>
-              {!hasApiKey && (
-                <div className="readiness-card" role="status">
+              <div className="setup-checklist" aria-label="Startup checks">
+                <div className="setup-checklist-heading">
                   <div>
-                    <strong>OpenRouter API key required</strong>
-                    <p>Add your key in Settings before starting a lesson. It is saved securely by the local desktop runtime.</p>
+                    <strong>Startup checks</strong>
+                    <p>Run these checks again after opening Zoom or changing macOS permissions.</p>
                   </div>
-                  <button className="button button-secondary button-small" type="button" onClick={onOpenSettings}>
-                    Open Settings
+                  <button className="button button-secondary button-small" type="button" onClick={onPermission} disabled={!canInteract || Boolean(busyAction)}>
+                    {busyAction === 'permission' ? 'Checking…' : 'Check setup'}
                   </button>
                 </div>
-              )}
-              <button className="button button-primary start-button" type="button" onClick={onStart} disabled={!consent || !canInteract || !targetAvailable || !hasApiKey || isStarting}>
+                <SetupCheck label="OpenRouter API key" detail={hasApiKey ? 'Saved securely' : 'Add a key in Settings'} status={hasApiKey ? 'ready' : 'blocked'} />
+                <SetupCheck
+                  label="Screen and system audio"
+                  detail={captureReady ? 'Permission granted' : snapshot.capturePermission === 'denied' ? 'Permission denied' : 'Not checked'}
+                  status={captureReady ? 'ready' : snapshot.capturePermission === 'denied' ? 'blocked' : 'pending'}
+                />
+                <SetupCheck
+                  label="Zoom"
+                  detail={zoomReady
+                    ? 'Open and available to capture'
+                    : !snapshot.readiness.checked
+                    ? 'Not checked'
+                    : !captureReady
+                    ? 'Waiting for capture access'
+                    : 'Zoom is not open'}
+                  status={zoomReady ? 'ready' : snapshot.readiness.checked && captureReady ? 'blocked' : 'pending'}
+                />
+                <SetupCheck label="Participant consent" detail={consent ? 'Confirmed' : 'Confirmation required'} status={consent ? 'ready' : 'pending'} />
+                {snapshot.readiness.error && (
+                  <div className="setup-check-error" role="alert">
+                    <Icon name="warning" />
+                    <span>{snapshot.readiness.error}</span>
+                  </div>
+                )}
+                {!hasApiKey && (
+                  <button className="button button-secondary button-small setup-settings-button" type="button" onClick={onOpenSettings}>
+                    Open Settings
+                  </button>
+                )}
+              </div>
+              <button className="button button-primary start-button" type="button" onClick={onStart} disabled={!consent || !canInteract || !targetSupported || !setupReady || isStarting}>
                 <Icon name="play" />
                 {isStarting ? 'Starting lesson…' : 'Start lesson'}
               </button>
               {!hasApiKey
                 ? <p className="helper-text">Configure an API key in Settings to enable lesson capture.</p>
-                : !targetAvailable
+                : !targetSupported
                 ? <p className="helper-text">Zoom is the only supported target in this macOS MVP.</p>
+                : !setupReady
+                ? <p className="helper-text">Complete the startup checks before beginning capture.</p>
                 : !consent && <p className="helper-text">Consent is required before capture can begin.</p>}
             </>
           ) : (
@@ -1501,6 +1531,24 @@ function CostStatusAlert({ cost }: { cost: AppSnapshot['cost'] }) {
   )
 }
 
+function SetupCheck({
+  label,
+  detail,
+  status,
+}: {
+  label: string
+  detail: string
+  status: 'ready' | 'blocked' | 'pending'
+}) {
+  return (
+    <div className={`setup-check setup-check-${status}`}>
+      <span className="setup-check-icon"><Icon name={status === 'ready' ? 'check' : status === 'blocked' ? 'warning' : 'refresh'} /></span>
+      <strong>{label}</strong>
+      <span>{detail}</span>
+    </div>
+  )
+}
+
 function InlineAlert({ tone, children, onDismiss }: { tone: 'error' | 'success'; children: string; onDismiss?: () => void }) {
   return (
     <div className={`inline-alert alert-${tone}`} role={tone === 'error' ? 'alert' : 'status'}>
@@ -1559,7 +1607,21 @@ function getConnectionStatus(connection: AppSnapshot['connection'], mode: AppApi
 }
 
 function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Something went wrong. Please try again.'
+  if (error instanceof Error && error.message.trim()) return error.message
+  if (typeof error === 'string' && error.trim()) return error
+  if (error && typeof error === 'object') {
+    for (const key of ['message', 'error', 'detail']) {
+      const value = (error as Record<string, unknown>)[key]
+      if (typeof value === 'string' && value.trim()) return value
+    }
+    try {
+      const serialized = JSON.stringify(error)
+      if (serialized && serialized !== '{}') return serialized
+    } catch {
+      // Fall through to the stable generic message for non-serializable values.
+    }
+  }
+  return 'Something went wrong. Please try again.'
 }
 
 function formatUsd(value: number): string {

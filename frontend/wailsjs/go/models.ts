@@ -197,9 +197,28 @@ export namespace main {
       this.error = source["error"];
     }
   }
+  export class ReadinessSnapshot {
+    checked: boolean;
+    targetAvailable: boolean;
+    error?: string;
+    checkedAt?: string;
+
+    static createFrom(source: any = {}) {
+      return new ReadinessSnapshot(source);
+    }
+
+    constructor(source: any = {}) {
+      if ("string" === typeof source) source = JSON.parse(source);
+      this.checked = source["checked"];
+      this.targetAvailable = source["targetAvailable"];
+      this.error = source["error"];
+      this.checkedAt = source["checkedAt"];
+    }
+  }
   export class AppSnapshot {
     connection: string;
     capturePermission: string;
+    readiness: ReadinessSnapshot;
     target: string;
     lesson: LessonSnapshot;
     levels: AudioLevelsSnapshot;
@@ -219,6 +238,10 @@ export namespace main {
       if ("string" === typeof source) source = JSON.parse(source);
       this.connection = source["connection"];
       this.capturePermission = source["capturePermission"];
+      this.readiness = this.convertValues(
+        source["readiness"],
+        ReadinessSnapshot,
+      );
       this.target = source["target"];
       this.lesson = this.convertValues(source["lesson"], LessonSnapshot);
       this.levels = this.convertValues(source["levels"], AudioLevelsSnapshot);

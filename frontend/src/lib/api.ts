@@ -271,6 +271,7 @@ function createDemoSnapshot(): AppSnapshot {
   return {
     connection: 'demo',
     capturePermission: 'granted',
+    readiness: { checked: true, targetAvailable: true, checkedAt: DEMO_TIMESTAMP },
     target: 'zoom',
     lesson: { id: 'demo-lesson-1', status: 'idle' },
     levels: { mic: 0.18, remote: 0.36 },
@@ -749,6 +750,7 @@ export const api = createApi()
 export type BackendSnapshotContract = {
   connection: ConnectionState
   capturePermission: CapturePermission
+  readiness: AppSnapshot['readiness']
   target: TargetApp
   lesson: { id?: string; status: LessonStatus }
   levels: AudioLevels

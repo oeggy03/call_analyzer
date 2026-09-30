@@ -95,9 +95,17 @@ export interface Settings {
   microphoneEnabled: boolean
 }
 
+export interface Readiness {
+  checked: boolean
+  targetAvailable: boolean
+  error?: string
+  checkedAt?: string
+}
+
 export interface AppSnapshot {
   connection: ConnectionState
   capturePermission: CapturePermission
+  readiness: Readiness
   target: TargetApp
   lesson: LessonState
   levels: AudioLevels

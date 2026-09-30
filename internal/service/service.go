@@ -697,8 +697,14 @@ func (s *Service) ValidateTarget(ctx context.Context, target string) error {
 	}
 	targets, err := s.ListTargets(ctx)
 	if err != nil {
-		return fmt.Errorf("open Zoom before starting a lesson: could not inspect available targets: %w", err)
+		s.mu.Lock()
+		s.permission = capture.PermissionDenied
+		s.mu.Unlock()
+		return fmt.Errorf("capture setup check failed: %w", err)
 	}
+	s.mu.Lock()
+	s.permission = capture.PermissionGranted
+	s.mu.Unlock()
 	for _, candidate := range targets {
 		if !candidate.Available {
 			continue
