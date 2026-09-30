@@ -621,7 +621,6 @@ function LiveLessonView({
               Target app
             </label>
             <div className="select-with-icon">
-              <Icon name="video" />
               <select
                 id="target-app"
                 value={selectedTarget}

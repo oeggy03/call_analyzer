@@ -511,15 +511,6 @@ textarea {
   align-items: center;
 }
 
-.select-with-icon > .icon {
-  position: absolute;
-  left: 13px;
-  width: 16px;
-  height: 16px;
-  color: var(--blue);
-  pointer-events: none;
-}
-
 select,
 .text-input {
   width: 100%;
@@ -533,7 +524,7 @@ select,
 }
 
 .select-with-icon select {
-  padding-left: 38px;
+  padding-left: 12px;
 }
 
 select:hover,
@@ -796,7 +787,6 @@ select:hover,
   padding: 12px;
 }
 
-.consent-box input,
 .toggle-row input {
   position: absolute;
   width: 1px;
@@ -804,7 +794,17 @@ select:hover,
   opacity: 0;
 }
 
+.consent-box input {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  margin: 1px 0 0;
+  accent-color: var(--blue);
+  cursor: pointer;
+}
+
 .consent-box label {
+  flex: 1;
   color: var(--ink-700);
   font-size: 11px;
   line-height: 1.55;
@@ -1761,7 +1761,12 @@ textarea.text-input {
 }
 
 .inline-alert {
-  margin-bottom: -7px;
+  margin: 0;
+}
+
+.page-content > .inline-alert,
+.page-content > .backend-alert {
+  margin-bottom: 22px;
 }
 
 .inline-alert > .icon {
