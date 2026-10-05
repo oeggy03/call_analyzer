@@ -85,7 +85,7 @@ Use a narrower command from `AGENTS.md` while iterating. Run the script before f
 
 `TestWailsMethodsMatchFrontendContract` fails when a name in `BACKEND_METHODS` is missing on `App`, or when a method other than `GenerateManualVocabulary` does not return `(AppSnapshot, error)`.
 
-GitHub Actions runs the same script on `macos-latest` after `npm ci --prefix frontend` (`.github/workflows/verify.yml`). That runner includes Xcode, so `swift test` runs there. A laptop with only Command Line Tools skips `swift test` and still prints `verify: ok` when everything else passes.
+GitHub Actions runs the same script on `macos-latest` after `npm ci --prefix frontend` (`.github/workflows/verify.yml`). The workflow uses `actions/checkout`, `actions/setup-go`, and `actions/setup-node` v7, which run on the Node.js 24 action runtime. The frontend itself is still installed as Node.js 22. That runner includes Xcode, so `swift test` runs there. A laptop with only Command Line Tools skips `swift test` and still prints `verify: ok` when everything else passes.
 
 ## Troubleshooting
 
