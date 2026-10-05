@@ -16,6 +16,20 @@ The MVP uses:
 Automatic suggestions always enter a candidate inbox. They are never promoted
 to trusted vocabulary without confirmation.
 
+## Documentation
+
+Coding agents start at `AGENTS.md`. Read a supporting doc when the change needs it, not before every edit.
+
+- `docs/architecture.md`: component boundaries and end-to-end flows.
+- `docs/behavior.md`: lesson, vocabulary, budget, and privacy rules.
+- `docs/development.md`: install, environment, startup, and checks.
+- `docs/operations.md`: the local app bundle, permissions, and data files.
+- `docs/decisions.md`: architectural choices recorded from the code.
+- `docs/limitations.md`: known gaps and unresolved questions.
+- `docs/work/README.md`: optional notes for work that spans sessions.
+- `frontend/README.md`: the React UI and its Wails boundary.
+- `internal/capture/macos/README.md`: the helper process boundary.
+
 ## Requirements
 
 - Apple Silicon Mac running macOS 15 or later.
@@ -30,11 +44,13 @@ desktop app build with the Command Line Tools available on the development Mac.
 
 ## Build and run locally
 
-Install the pinned Wails CLI once:
+Install frontend dependencies and the pinned Wails CLI:
 
 ```sh
-go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+./scripts/setup.sh
 ```
+
+`scripts/setup.sh` installs `github.com/wailsapp/wails/v2/cmd/wails@v2.10.2` when it is not already at `$(go env GOPATH)/bin/wails`.
 
 Build the complete signed local app bundle:
 
@@ -55,12 +71,13 @@ npm install
 npm run dev
 ```
 
-For a Wails development session, first build the helper, then run Wails:
+For a Wails development session:
 
 ```sh
-./scripts/build-macos-capture.sh
-$(go env GOPATH)/bin/wails dev
+./scripts/dev.sh
 ```
+
+That builds the helper, then starts Wails. The same two steps are `scripts/build-macos-capture.sh` and `wails dev`.
 
 The helper can be overridden with
 `CALL_ANALYZER_CAPTURE_HELPER=/absolute/path/to/call-analyzer-capture`.
@@ -92,8 +109,8 @@ cloud work pauses while local capture and mark timestamps continue.
 Provider requests enforce Zero Data Retention routing and deny endpoints marked
 for data collection. Local audio retention is controlled separately; the
 default is session-only temporary chunks. Session spools are deleted after
-processing, and orphaned spools from a crashed process are purged at next
-startup.
+processing. The next capture start removes leftover spools whose owner
+process is no longer running (`cleanupStaleSessionSpools`).
 
 ## MVP boundaries
 
@@ -114,31 +131,20 @@ startup.
 ## Verification
 
 ```sh
-gofmt -w .
-go test ./...
-go vet ./...
-
-cd frontend
-npm run typecheck
-npm test -- --run
-npm run lint
-npm run build
-
-cd ../native/macos-capture
-swift build -c release
+./scripts/verify.sh
 ```
+
+The script is the formatting, Go, frontend, fixture, and Swift check. It exits
+non-zero when a check fails. Command details, the XCTest skip, and narrower
+commands are in `docs/development.md`.
 
 End-to-end HTTP tests use local fake OpenRouter servers and deterministic PCM;
 they do not spend API credits. A real Zoom capture still requires the macOS
 permissions and a running Zoom process.
 
-Validate the model evaluation fixture manifest without spending credits:
-
-```sh
-go run ./cmd/evaluate
-```
-
-To run the transcript/vocabulary evaluation against OpenRouter (billable), set
+`./scripts/verify.sh` includes `go run ./cmd/evaluate`, which validates
+`fixtures/evaluation/manifest.json` and does not call OpenRouter. To run the
+transcript/vocabulary evaluation against OpenRouter (billable), set
 `OPENROUTER_API_KEY` and add consent-cleared WAV paths to the manifest:
 
 ```sh
@@ -146,6 +152,8 @@ go run ./cmd/evaluate -execute
 ```
 
 ## Architecture
+
+Flows and boundaries are in `docs/architecture.md`. Package roles:
 
 - `app.go`, `snapshot.go`: Wails application contract.
 - `internal/service`: live capture workers and end-to-end analysis pipeline.
