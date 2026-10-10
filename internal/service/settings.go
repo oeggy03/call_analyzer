@@ -12,6 +12,7 @@ import (
 const (
 	settingSTTModel       = "stt_model"
 	settingAnalyzerModel  = "analyzer_model"
+	settingVisionModel    = "vision_model"
 	settingHardBudget     = "hard_budget_usd"
 	settingAudioRetention = "audio_retention"
 	settingOCREnabled     = "ocr_enabled"
@@ -21,6 +22,7 @@ const (
 type RuntimeSettings struct {
 	STTModel          string
 	AnalyzerModel     string
+	VisionModel       string
 	HardBudgetUSD     float64
 	AudioRetention    string
 	OCREnabled        bool
@@ -30,6 +32,7 @@ type RuntimeSettings struct {
 type SettingsPatch struct {
 	STTModel          *string
 	AnalyzerModel     *string
+	VisionModel       *string
 	HardBudgetUSD     *float64
 	AudioRetention    *string
 	OCREnabled        *bool
@@ -40,6 +43,7 @@ func defaultRuntimeSettings() RuntimeSettings {
 	return RuntimeSettings{
 		STTModel:          openrouter.DefaultASRModel,
 		AnalyzerModel:     openrouter.DefaultChatModel,
+		VisionModel:       openrouter.DefaultVisionModel,
 		HardBudgetUSD:     0.50,
 		AudioRetention:    "sessionOnly",
 		OCREnabled:        false,
@@ -54,6 +58,9 @@ func (s *Service) loadSettings(ctx context.Context) error {
 	}
 	if value, err := s.store.Settings().Get(ctx, settingAnalyzerModel); err == nil {
 		_ = json.Unmarshal([]byte(value.ValueJSON), &settings.AnalyzerModel)
+	}
+	if value, err := s.store.Settings().Get(ctx, settingVisionModel); err == nil {
+		_ = json.Unmarshal([]byte(value.ValueJSON), &settings.VisionModel)
 	}
 	if value, err := s.store.Settings().Get(ctx, settingHardBudget); err == nil {
 		_ = json.Unmarshal([]byte(value.ValueJSON), &settings.HardBudgetUSD)
@@ -73,6 +80,10 @@ func (s *Service) loadSettings(ctx context.Context) error {
 	if settings.AnalyzerModel == "" || isLegacyNonZDRAnalyzerModel(settings.AnalyzerModel) {
 		settings.AnalyzerModel = openrouter.DefaultChatModel
 	}
+	settings.VisionModel = strings.TrimSpace(settings.VisionModel)
+	if !isAllowedVisionModel(settings.VisionModel) {
+		settings.VisionModel = openrouter.DefaultVisionModel
+	}
 	if settings.HardBudgetUSD <= 0 || settings.HardBudgetUSD > 0.50 {
 		settings.HardBudgetUSD = 0.50
 	}
@@ -87,6 +98,7 @@ func (s *Service) loadSettings(ctx context.Context) error {
 	for key, value := range map[string]any{
 		settingSTTModel:       settings.STTModel,
 		settingAnalyzerModel:  settings.AnalyzerModel,
+		settingVisionModel:    settings.VisionModel,
 		settingHardBudget:     settings.HardBudgetUSD,
 		settingAudioRetention: settings.AudioRetention,
 		settingOCREnabled:     settings.OCREnabled,
@@ -111,15 +123,18 @@ func (s *Service) rebuildRouter(settings RuntimeSettings) error {
 			budget = openrouter.NewBudget(0.35, settings.HardBudgetUSD)
 		}
 		s.mu.Lock()
-		s.router = existing.WithModels(settings.STTModel, settings.AnalyzerModel, budget)
+		s.router = existing.
+			WithModels(settings.STTModel, settings.AnalyzerModel, budget).
+			WithVisionModel(settings.VisionModel)
 		s.mu.Unlock()
 		s.emit("config.changed", s.Config(context.Background()))
 		return nil
 	}
 	return s.ConfigureOpenRouter(openrouter.Config{
-		ASRModel:  settings.STTModel,
-		ChatModel: settings.AnalyzerModel,
-		Budget:    openrouter.NewBudget(0.35, settings.HardBudgetUSD),
+		ASRModel:    settings.STTModel,
+		ChatModel:   settings.AnalyzerModel,
+		VisionModel: settings.VisionModel,
+		Budget:      openrouter.NewBudget(0.35, settings.HardBudgetUSD),
 	})
 }
 
@@ -158,6 +173,9 @@ func (s *Service) ApplySettings(ctx context.Context, patch SettingsPatch) error 
 	if patch.AnalyzerModel != nil {
 		next.AnalyzerModel = strings.TrimSpace(*patch.AnalyzerModel)
 	}
+	if patch.VisionModel != nil {
+		next.VisionModel = strings.TrimSpace(*patch.VisionModel)
+	}
 	if patch.HardBudgetUSD != nil {
 		next.HardBudgetUSD = *patch.HardBudgetUSD
 	}
@@ -173,6 +191,9 @@ func (s *Service) ApplySettings(ctx context.Context, patch SettingsPatch) error 
 	if next.STTModel == "" || next.AnalyzerModel == "" {
 		return errors.New("service: model names cannot be empty")
 	}
+	if !isAllowedVisionModel(next.VisionModel) {
+		return errors.New("service: invalid vision model")
+	}
 	if next.HardBudgetUSD <= 0 || next.HardBudgetUSD > 0.50 {
 		return errors.New("service: hard budget must be greater than zero and at most 0.50 USD")
 	}
@@ -184,6 +205,7 @@ func (s *Service) ApplySettings(ctx context.Context, patch SettingsPatch) error 
 	values := map[string]any{
 		settingSTTModel:       next.STTModel,
 		settingAnalyzerModel:  next.AnalyzerModel,
+		settingVisionModel:    next.VisionModel,
 		settingHardBudget:     next.HardBudgetUSD,
 		settingAudioRetention: next.AudioRetention,
 		settingOCREnabled:     next.OCREnabled,
@@ -209,6 +231,15 @@ func (s *Service) ApplySettings(ctx context.Context, patch SettingsPatch) error 
 func isLegacyNonZDRAnalyzerModel(model string) bool {
 	switch strings.TrimSpace(model) {
 	case "qwen/qwen3.8-flash", "qwen/qwen3.8-max-0902":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAllowedVisionModel(model string) bool {
+	switch strings.TrimSpace(model) {
+	case openrouter.DefaultVisionModel, "qwen/qwen3-vl-30b-a3b-instruct":
 		return true
 	default:
 		return false

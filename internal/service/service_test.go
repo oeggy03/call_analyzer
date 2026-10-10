@@ -41,11 +41,18 @@ func TestApplyingSettingsDuringCapturePreservesSessionBudget(t *testing.T) {
 	budget.Add(0.20)
 
 	model := "qwen/qwen3.5-9b"
-	if err := svc.ApplySettings(ctx, SettingsPatch{AnalyzerModel: &model}); err != nil {
+	visionModel := "qwen/qwen3-vl-30b-a3b-instruct"
+	if err := svc.ApplySettings(ctx, SettingsPatch{
+		AnalyzerModel: &model,
+		VisionModel:   &visionModel,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if got := svc.router.BudgetStatus().Spent; got != 0.20 {
 		t.Fatalf("settings reset live session spend to %v", got)
+	}
+	if got := svc.router.VisionModel(); got != visionModel {
+		t.Fatalf("settings did not apply vision model during capture: %q", got)
 	}
 }
 

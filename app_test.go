@@ -126,7 +126,8 @@ func TestAppCapturePipelineContract(t *testing.T) {
 		t.Fatalf("candidate enrichment was not persisted: %#v", stopped.Candidates[0])
 	}
 	if stopped.Settings.STTModel != openrouter.DefaultASRModel ||
-		stopped.Settings.AnalyzerModel != openrouter.DefaultChatModel {
+		stopped.Settings.AnalyzerModel != openrouter.DefaultChatModel ||
+		stopped.Settings.VisionModel != openrouter.DefaultVisionModel {
 		t.Fatalf("unexpected default models: %#v", stopped.Settings)
 	}
 }

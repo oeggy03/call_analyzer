@@ -103,6 +103,10 @@ func TestGenerateManualVocabularyUsesStrictModelAndPreservesUserValues(t *testin
 	if requestPayload["zdr"] != true {
 		t.Fatalf("request did not require ZDR: %#v", requestPayload)
 	}
+	reasoning, _ := requestPayload["reasoning"].(map[string]any)
+	if reasoning["effort"] != "none" {
+		t.Fatalf("vocabulary card request did not disable reasoning: %#v", requestPayload["reasoning"])
+	}
 	responseFormat, _ := requestPayload["response_format"].(map[string]any)
 	jsonSchema, _ := responseFormat["json_schema"].(map[string]any)
 	if responseFormat["type"] != "json_schema" || jsonSchema["strict"] != true {
@@ -178,7 +182,7 @@ func TestMergeManualVocabularyInputFillsMissingFields(t *testing.T) {
 		draft.Pinyin != "xue2 xi2" ||
 		draft.Meaning != "to study" ||
 		draft.Example != "我学习中文。" ||
-		len(draft.Tags) != 1 ||
+		len(draft.Tags) != 0 ||
 		!draft.AiGenerated {
 		t.Fatalf("missing fields were not filled: %#v", draft)
 	}

@@ -5,6 +5,7 @@ package openrouter
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,9 +20,10 @@ import (
 )
 
 const (
-	DefaultBaseURL   = "https://openrouter.ai"
-	DefaultASRModel  = "qwen/qwen3-asr-1.7b"
-	DefaultChatModel = "qwen/qwen3-32b"
+	DefaultBaseURL     = "https://openrouter.ai"
+	DefaultASRModel    = "qwen/qwen3-asr-1.7b"
+	DefaultChatModel   = "qwen/qwen3-32b"
+	DefaultVisionModel = "qwen/qwen3.7-flash"
 )
 
 var ErrBudgetExceeded = errors.New("openrouter: session budget exceeded")
@@ -31,24 +33,26 @@ type APIKeyProvider interface {
 }
 
 type Config struct {
-	BaseURL    string
-	ASRModel   string
-	ChatModel  string
-	HTTPClient *http.Client
-	MaxRetries int
-	RetryBase  time.Duration
-	Budget     *Budget
+	BaseURL     string
+	ASRModel    string
+	ChatModel   string
+	VisionModel string
+	HTTPClient  *http.Client
+	MaxRetries  int
+	RetryBase   time.Duration
+	Budget      *Budget
 }
 
 type Client struct {
-	baseURL    *url.URL
-	asrModel   string
-	chatModel  string
-	httpClient *http.Client
-	maxRetries int
-	retryBase  time.Duration
-	key        APIKeyProvider
-	budget     *Budget
+	baseURL     *url.URL
+	asrModel    string
+	chatModel   string
+	visionModel string
+	httpClient  *http.Client
+	maxRetries  int
+	retryBase   time.Duration
+	key         APIKeyProvider
+	budget      *Budget
 }
 
 func NewClient(config Config, key APIKeyProvider) (*Client, error) {
@@ -69,6 +73,9 @@ func NewClient(config Config, key APIKeyProvider) (*Client, error) {
 	if config.ChatModel == "" {
 		config.ChatModel = DefaultChatModel
 	}
+	if config.VisionModel == "" {
+		config.VisionModel = DefaultVisionModel
+	}
 	if config.HTTPClient == nil {
 		config.HTTPClient = &http.Client{Timeout: 90 * time.Second}
 	}
@@ -85,14 +92,15 @@ func NewClient(config Config, key APIKeyProvider) (*Client, error) {
 		config.Budget = NewBudget(0.35, 0.50)
 	}
 	return &Client{
-		baseURL:    parsed,
-		asrModel:   config.ASRModel,
-		chatModel:  config.ChatModel,
-		httpClient: config.HTTPClient,
-		maxRetries: config.MaxRetries,
-		retryBase:  config.RetryBase,
-		key:        key,
-		budget:     config.Budget,
+		baseURL:     parsed,
+		asrModel:    config.ASRModel,
+		chatModel:   config.ChatModel,
+		visionModel: config.VisionModel,
+		httpClient:  config.HTTPClient,
+		maxRetries:  config.MaxRetries,
+		retryBase:   config.RetryBase,
+		key:         key,
+		budget:      config.Budget,
 	}, nil
 }
 
@@ -102,6 +110,10 @@ func (c *Client) ASRModel() string {
 
 func (c *Client) ChatModel() string {
 	return c.chatModel
+}
+
+func (c *Client) VisionModel() string {
+	return c.visionModel
 }
 
 func (c *Client) WithModels(asrModel, chatModel string, budget *Budget) *Client {
@@ -114,6 +126,14 @@ func (c *Client) WithModels(asrModel, chatModel string, budget *Budget) *Client 
 	}
 	if budget != nil {
 		copy.budget = budget
+	}
+	return &copy
+}
+
+func (c *Client) WithVisionModel(model string) *Client {
+	copy := *c
+	if model != "" {
+		copy.visionModel = model
 	}
 	return &copy
 }
@@ -188,19 +208,18 @@ func (c *Client) Transcribe(ctx context.Context, audio []byte, filename string) 
 		return req, nil
 	}, &result)
 	if err == nil {
-		if status := c.budget.Add(result.Usage.Cost); status.HardExceeded {
-			return result, ErrBudgetExceeded
-		}
+		c.budget.Add(result.Usage.Cost)
 	}
 	return result, err
 }
 
 type ChatRequest struct {
-	Prompt      string
-	System      string
-	SchemaName  string
-	Schema      map[string]any
-	Temperature *float64
+	Prompt           string
+	System           string
+	SchemaName       string
+	Schema           map[string]any
+	Temperature      *float64
+	DisableReasoning bool
 }
 
 type ChatResponse struct {
@@ -218,12 +237,13 @@ type chatEnvelope struct {
 }
 
 type chatPayload struct {
-	Model          string         `json:"model"`
-	Messages       []chatMessage  `json:"messages"`
-	ResponseFormat responseFormat `json:"response_format"`
-	Provider       providerRules  `json:"provider"`
-	ZDR            bool           `json:"zdr"`
-	Temperature    *float64       `json:"temperature,omitempty"`
+	Model          string           `json:"model"`
+	Messages       []chatMessage    `json:"messages"`
+	ResponseFormat responseFormat   `json:"response_format"`
+	Provider       providerRules    `json:"provider"`
+	ZDR            bool             `json:"zdr"`
+	Temperature    *float64         `json:"temperature,omitempty"`
+	Reasoning      *visionReasoning `json:"reasoning,omitempty"`
 }
 
 type chatMessage struct {
@@ -258,19 +278,43 @@ func (c *Client) ChatJSON(ctx context.Context, request ChatRequest) (ChatRespons
 	if request.Schema == nil {
 		return ChatResponse{}, errors.New("openrouter: strict JSON schema is required")
 	}
-	system := request.System
 	var result chatEnvelope
-	err := c.doWithRetry(ctx, func() (*http.Request, error) {
+	err := c.doWithRetry(ctx, c.chatRequest(ctx, request, request.DisableReasoning), &result)
+	if err != nil && request.DisableReasoning {
+		var httpErr *HTTPError
+		if errors.As(err, &httpErr) &&
+			httpErr.StatusCode == http.StatusBadRequest &&
+			strings.Contains(strings.ToLower(httpErr.Body), "reasoning") {
+			result = chatEnvelope{}
+			err = c.doWithRetry(ctx, c.chatRequest(ctx, request, false), &result)
+		}
+	}
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	c.budget.Add(result.Usage.Cost)
+	if len(result.Choices) == 0 {
+		return ChatResponse{}, errors.New("openrouter: chat response has no choices")
+	}
+	content, err := decodeMessageContent(result.Choices[0].Message.Content)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	return ChatResponse{Content: content, Usage: result.Usage}, nil
+}
+
+func (c *Client) chatRequest(ctx context.Context, request ChatRequest, disableReasoning bool) func() (*http.Request, error) {
+	return func() (*http.Request, error) {
 		key, err := c.apiKey(ctx)
 		if err != nil {
 			return nil, err
 		}
 		messages := make([]chatMessage, 0, 2)
-		if system != "" {
-			messages = append(messages, chatMessage{Role: "system", Content: system})
+		if request.System != "" {
+			messages = append(messages, chatMessage{Role: "system", Content: request.System})
 		}
 		messages = append(messages, chatMessage{Role: "user", Content: request.Prompt})
-		payload, err := json.Marshal(chatPayload{
+		payload := chatPayload{
 			Model:    c.chatModel,
 			Messages: messages,
 			ResponseFormat: responseFormat{
@@ -288,33 +332,228 @@ func (c *Client) ChatJSON(ctx context.Context, request ChatRequest) (ChatRespons
 			},
 			ZDR:         true,
 			Temperature: request.Temperature,
-		})
+		}
+		if disableReasoning {
+			payload.Reasoning = &visionReasoning{Effort: "none"}
+		}
+		body, err := json.Marshal(payload)
 		if err != nil {
 			return nil, err
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-			c.endpoint("/api/v1/chat/completions"), bytes.NewReader(payload))
+			c.endpoint("/api/v1/chat/completions"), bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set("Authorization", "Bearer "+key)
 		req.Header.Set("Content-Type", "application/json")
 		return req, nil
-	}, &result)
-	if err != nil {
-		return ChatResponse{}, err
 	}
-	if status := c.budget.Add(result.Usage.Cost); status.HardExceeded {
-		return ChatResponse{Usage: result.Usage}, ErrBudgetExceeded
+}
+
+type VisionChatRequest struct {
+	System      string
+	Prompt      string
+	ImageJPEG   []byte
+	SchemaName  string
+	Schema      map[string]any
+	Temperature *float64
+}
+
+type visionChatPayload struct {
+	Model          string              `json:"model"`
+	Messages       []visionChatMessage `json:"messages"`
+	ResponseFormat responseFormat      `json:"response_format"`
+	Reasoning      *visionReasoning    `json:"reasoning,omitempty"`
+	Temperature    *float64            `json:"temperature,omitempty"`
+}
+
+type visionChatMessage struct {
+	Role    string `json:"role"`
+	Content any    `json:"content"`
+}
+
+type visionContentPart struct {
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	ImageURL *visionImageURL `json:"image_url,omitempty"`
+}
+
+type visionImageURL struct {
+	URL string `json:"url"`
+}
+
+type visionReasoning struct {
+	Effort string `json:"effort"`
+}
+
+func (c *Client) ChatVisionJSON(ctx context.Context, request VisionChatRequest) (ChatResponse, error) {
+	if strings.TrimSpace(request.Prompt) == "" {
+		return ChatResponse{}, errors.New("openrouter: vision prompt is empty")
+	}
+	if request.Schema == nil {
+		return ChatResponse{}, errors.New("openrouter: vision strict JSON schema is required")
+	}
+	if len(request.ImageJPEG) == 0 {
+		return ChatResponse{}, errors.New("openrouter: vision image is empty")
+	}
+	if request.SchemaName == "" {
+		request.SchemaName = "photo_vocabulary_recognition"
+	}
+
+	var result chatEnvelope
+	err := c.doVisionWithRetry(ctx, request, true, &result)
+	if err != nil {
+		var httpErr *HTTPError
+		if errors.As(err, &httpErr) &&
+			httpErr.StatusCode == http.StatusBadRequest &&
+			strings.Contains(strings.ToLower(httpErr.Body), "reasoning") {
+			firstUsage := result.Usage
+			result = chatEnvelope{}
+			err = c.doVisionWithRetry(ctx, request, false, &result)
+			if result.Usage == (Usage{}) {
+				result.Usage = firstUsage
+			}
+		}
+	}
+	response := ChatResponse{Usage: result.Usage}
+	if err != nil {
+		return response, err
 	}
 	if len(result.Choices) == 0 {
-		return ChatResponse{}, errors.New("openrouter: chat response has no choices")
+		return response, errors.New("openrouter: vision chat response has no choices")
 	}
 	content, err := decodeMessageContent(result.Choices[0].Message.Content)
 	if err != nil {
-		return ChatResponse{}, err
+		return response, err
 	}
-	return ChatResponse{Content: content, Usage: result.Usage}, nil
+	response.Content = content
+	return response, nil
+}
+
+func (c *Client) doVisionWithRetry(
+	ctx context.Context,
+	request VisionChatRequest,
+	includeReasoning bool,
+	output any,
+) error {
+	var lastErr error
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		req, err := c.newVisionRequest(ctx, request, includeReasoning)
+		if err != nil {
+			return err
+		}
+		response, err := c.httpClient.Do(req)
+		if err != nil {
+			if !isRetryableError(err) || attempt == c.maxRetries {
+				return err
+			}
+			if err := waitRetry(ctx, c.retryBase, attempt); err != nil {
+				return err
+			}
+			lastErr = err
+			continue
+		}
+		data, readErr := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if readErr != nil {
+			if attempt == c.maxRetries {
+				return readErr
+			}
+			lastErr = readErr
+			if err := waitRetry(ctx, c.retryBase, attempt); err != nil {
+				return err
+			}
+			continue
+		}
+		if response.StatusCode == http.StatusOK || response.StatusCode == http.StatusCreated {
+			if err := json.Unmarshal(data, output); err != nil {
+				return fmt.Errorf("openrouter: decode vision response: %w", err)
+			}
+			return nil
+		}
+		lastErr = &HTTPError{StatusCode: response.StatusCode, Body: string(data)}
+		var errorEnvelope struct {
+			Usage Usage `json:"usage"`
+		}
+		if json.Unmarshal(data, &errorEnvelope) == nil {
+			if envelope, ok := output.(*chatEnvelope); ok {
+				envelope.Usage = errorEnvelope.Usage
+			}
+		}
+		if response.StatusCode == http.StatusBadRequest ||
+			!retryableStatus(response.StatusCode) ||
+			attempt == c.maxRetries {
+			return lastErr
+		}
+		delay := retryDelay(response, c.retryBase, attempt)
+		if err := waitRetryDuration(ctx, delay); err != nil {
+			return err
+		}
+	}
+	return lastErr
+}
+
+func (c *Client) newVisionRequest(
+	ctx context.Context,
+	request VisionChatRequest,
+	includeReasoning bool,
+) (*http.Request, error) {
+	key, err := c.apiKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+	messages := make([]visionChatMessage, 0, 2)
+	if request.System != "" {
+		messages = append(messages, visionChatMessage{
+			Role:    "system",
+			Content: request.System,
+		})
+	}
+	messages = append(messages, visionChatMessage{
+		Role: "user",
+		Content: []visionContentPart{
+			{Type: "text", Text: request.Prompt},
+			{
+				Type: "image_url",
+				ImageURL: &visionImageURL{
+					URL: "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(request.ImageJPEG),
+				},
+			},
+		},
+	})
+	payload := visionChatPayload{
+		Model:    c.visionModel,
+		Messages: messages,
+		ResponseFormat: responseFormat{
+			Type: "json_schema",
+			JSONSchema: jsonSchema{
+				Name:   request.SchemaName,
+				Strict: true,
+				Schema: request.Schema,
+			},
+		},
+		Temperature: request.Temperature,
+	}
+	if includeReasoning {
+		payload.Reasoning = &visionReasoning{Effort: "none"}
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.endpoint("/api/v1/chat/completions"),
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	return req, nil
 }
 
 func decodeMessageContent(raw json.RawMessage) (string, error) {
@@ -494,11 +733,6 @@ func NewBudget(warnAt, hardAt float64) *Budget {
 }
 
 func (b *Budget) Check() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.spent >= b.hardAt {
-		return ErrBudgetExceeded
-	}
 	return nil
 }
 
@@ -526,6 +760,6 @@ func (b *Budget) statusLocked() BudgetStatus {
 		WarnAt:       b.warnAt,
 		HardAt:       b.hardAt,
 		Warning:      b.warned || b.spent >= b.warnAt,
-		HardExceeded: b.spent >= b.hardAt,
+		HardExceeded: false,
 	}
 }

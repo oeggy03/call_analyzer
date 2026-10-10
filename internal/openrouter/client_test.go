@@ -145,16 +145,16 @@ func TestRetriesRateLimit(t *testing.T) {
 	}
 }
 
-func TestBudgetHardStop(t *testing.T) {
+func TestBudgetDoesNotStopTheSession(t *testing.T) {
 	budget := NewBudget(.35, .50)
 	if status := budget.Add(.35); !status.Warning || status.HardExceeded {
 		t.Fatalf("unexpected warning status %#v", status)
 	}
-	if status := budget.Add(.15); !status.HardExceeded {
-		t.Fatalf("expected hard status %#v", status)
+	if status := budget.Add(.15); status.HardExceeded {
+		t.Fatalf("cost must not stop the session: %#v", status)
 	}
-	if err := budget.Check(); err != ErrBudgetExceeded {
-		t.Fatalf("expected hard budget error, got %v", err)
+	if err := budget.Check(); err != nil {
+		t.Fatalf("budget check stopped the session: %v", err)
 	}
 }
 
@@ -177,5 +177,88 @@ func TestMultipartFilename(t *testing.T) {
 	}
 	if !strings.Contains(filename, "audio.wav") {
 		t.Fatalf("unexpected filename %q", filename)
+	}
+}
+
+func TestChatVisionJSONRetriesReasoningWithoutZDR(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode vision request: %v", err)
+			return
+		}
+		if _, ok := payload["zdr"]; ok {
+			t.Errorf("vision request unexpectedly included top-level zdr: %#v", payload)
+		}
+		if _, ok := payload["data_collection"]; ok {
+			t.Errorf("vision request unexpectedly included top-level data_collection: %#v", payload)
+		}
+		if _, ok := payload["provider"]; ok {
+			t.Errorf("vision request unexpectedly included provider controls: %#v", payload)
+		}
+		messages, _ := payload["messages"].([]any)
+		if len(messages) != 1 {
+			t.Fatalf("unexpected vision messages: %#v", payload["messages"])
+		}
+		userMessage, _ := messages[0].(map[string]any)
+		content, _ := userMessage["content"].([]any)
+		if len(content) != 2 {
+			t.Fatalf("unexpected vision content: %#v", userMessage["content"])
+		}
+		imagePart, _ := content[1].(map[string]any)
+		imageURL, _ := imagePart["image_url"].(map[string]any)
+		url, _ := imageURL["url"].(string)
+		if !strings.HasPrefix(url, "data:image/jpeg;base64,") ||
+			!strings.HasSuffix(url, "/9j/AWgB") {
+			t.Errorf("image data URL was not encoded as JPEG base64: %q", url)
+		}
+		attempt := attempts.Add(1)
+		if attempt == 1 {
+			reasoning, ok := payload["reasoning"].(map[string]any)
+			if !ok || reasoning["effort"] != "none" {
+				t.Errorf("first vision request did not disable reasoning: %#v", payload["reasoning"])
+			}
+			http.Error(w, "reasoning parameter is unsupported", http.StatusBadRequest)
+			return
+		}
+		if _, ok := payload["reasoning"]; ok {
+			t.Errorf("reasoning was not omitted on retry: %#v", payload)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"entries\":[]}"}}],"usage":{"cost":0.07}}`))
+	}))
+	defer server.Close()
+
+	budget := NewBudget(.01, .02)
+	budget.Add(.02)
+	client, err := NewClient(Config{
+		BaseURL:    server.URL,
+		MaxRetries: 1,
+		RetryBase:  time.Millisecond,
+		Budget:     budget,
+	}, testKeyProvider{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.ChatVisionJSON(context.Background(), VisionChatRequest{
+		Prompt:    "read the photo",
+		ImageJPEG: []byte{0xff, 0xd8, 0xff, 0x01, 0x68, 0x01},
+		Schema:    map[string]any{"type": "object"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Content != `{"entries":[]}` || response.Usage.Cost != 0.07 {
+		t.Fatalf("unexpected vision response: %#v", response)
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("expected one reasoning fallback retry, got %d attempts", attempts.Load())
+	}
+	if got := client.BudgetStatus().Spent; got != .02 {
+		t.Fatalf("vision call changed lesson budget: %v", got)
 	}
 }

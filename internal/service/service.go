@@ -370,7 +370,7 @@ func (s *Service) StartCapture(ctx context.Context, lessonID string) error {
 			s.settings.STTModel,
 			s.settings.AnalyzerModel,
 			openrouter.NewBudget(0.35, s.settings.HardBudgetUSD),
-		)
+		).WithVisionModel(s.settings.VisionModel)
 	}
 	s.mu.Unlock()
 	if lessonID == "" {

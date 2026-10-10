@@ -37,6 +37,12 @@ type ManualVocabularyDraft struct {
 	Cost               float64  `json:"cost"`
 }
 
+type PhotoVocabularyDraft struct {
+	Entries []ManualVocabularyInput `json:"entries"`
+	Model   string                  `json:"model"`
+	Cost    float64                 `json:"cost"`
+}
+
 type CandidateEditPatch struct {
 	Simplified         *string   `json:"simplified,omitempty"`
 	Traditional        *string   `json:"traditional,omitempty"`
@@ -54,6 +60,7 @@ type SettingsPatch struct {
 	OpenRouterKey     *string  `json:"openRouterKey,omitempty"`
 	STTModel          *string  `json:"sttModel,omitempty"`
 	AnalyzerModel     *string  `json:"analyzerModel,omitempty"`
+	VisionModel       *string  `json:"visionModel,omitempty"`
 	HardBudgetUSD     *float64 `json:"hardBudgetUsd,omitempty"`
 	AudioRetention    *string  `json:"audioRetention,omitempty"`
 	OCREnabled        *bool    `json:"ocrEnabled,omitempty"`
@@ -98,10 +105,25 @@ type AudioLevelsSnapshot struct {
 type TranscriptLine struct {
 	ID        string `json:"id"`
 	Text      string `json:"text"`
+	Pinyin    string `json:"pinyin,omitempty"`
 	Source    string `json:"source"`
 	Timestamp string `json:"timestamp"`
 	Speaker   string `json:"speaker,omitempty"`
 	IsMoment  bool   `json:"isMoment,omitempty"`
+}
+
+type LessonTranscriptSummary struct {
+	ID           string  `json:"id"`
+	Title        string  `json:"title"`
+	StartedAt    string  `json:"startedAt,omitempty"`
+	EndedAt      string  `json:"endedAt,omitempty"`
+	SegmentCount int     `json:"segmentCount"`
+	FinalCost    float64 `json:"finalCost"`
+}
+
+type LessonTranscript struct {
+	Lesson LessonTranscriptSummary `json:"lesson"`
+	Lines  []TranscriptLine        `json:"lines"`
 }
 
 type CandidateSnapshot struct {
@@ -160,6 +182,7 @@ type SettingsSnapshot struct {
 	OpenRouterKeyConfigured bool    `json:"openRouterKeyConfigured"`
 	STTModel                string  `json:"sttModel"`
 	AnalyzerModel           string  `json:"analyzerModel"`
+	VisionModel             string  `json:"visionModel"`
 	HardBudgetUSD           float64 `json:"hardBudgetUsd"`
 	AudioRetention          string  `json:"audioRetention"`
 	OCREnabled              bool    `json:"ocrEnabled"`

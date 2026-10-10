@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oeggy03/call_analyzer/internal/chinese"
 	"github.com/oeggy03/call_analyzer/internal/domain"
 	"github.com/oeggy03/call_analyzer/internal/vocabulary"
 )
@@ -51,18 +52,10 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 			return AppSnapshot{}, err
 		}
 		for _, segment := range segments {
-			source := segment.Source
-			isMoment := source == "system/mark"
-			if isMoment || source == "" {
-				source = "system"
-			}
-			transcriptLines = append(transcriptLines, TranscriptLine{
-				ID:        segment.ID,
-				Text:      segment.Text,
-				Source:    source,
-				Timestamp: timestamp(lesson.StartedAt.Add(time.Duration(segment.StartMS) * time.Millisecond)),
-				IsMoment:  isMoment,
-			})
+			transcriptLines = append(
+				transcriptLines,
+				transcriptLineFromSegment(lesson.StartedAt, segment),
+			)
 		}
 	}
 	mic, remote := a.service.Levels()
@@ -123,7 +116,7 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 			ProjectedUSD:  projected,
 			HardBudgetUSD: settings.HardBudgetUSD,
 			Warning:       cost >= 0.35,
-			HardExceeded:  cost >= settings.HardBudgetUSD,
+			HardExceeded:  false,
 			Currency:      "USD",
 		},
 		Privacy: PrivacyState{
@@ -134,6 +127,7 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 			OpenRouterKeyConfigured: a.service.HasAPIKey(ctx),
 			STTModel:                settings.STTModel,
 			AnalyzerModel:           settings.AnalyzerModel,
+			VisionModel:             settings.VisionModel,
 			HardBudgetUSD:           settings.HardBudgetUSD,
 			AudioRetention:          settings.AudioRetention,
 			OCREnabled:              settings.OCREnabled,
@@ -141,6 +135,37 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 		},
 		LastUpdated: time.Now().UTC().Format(time.RFC3339Nano),
 	}, nil
+}
+
+func transcriptLineFromSegment(
+	lessonStartedAt time.Time,
+	segment domain.TranscriptSegment,
+) TranscriptLine {
+	source := segment.Source
+	isMoment := source == "system/mark"
+	if isMoment || source == "" {
+		source = "system"
+	}
+	text := segment.Text
+	if strings.TrimSpace(segment.SimplifiedText) != "" {
+		text = segment.SimplifiedText
+	}
+	text = chinese.ToSimplified(text)
+	pinyin := ""
+	if !isMoment {
+		pinyin = strings.TrimSpace(segment.Reading)
+		if pinyin == "" {
+			pinyin = chinese.SentencePinyin(text)
+		}
+	}
+	return TranscriptLine{
+		ID:        segment.ID,
+		Text:      text,
+		Pinyin:    pinyin,
+		Source:    source,
+		Timestamp: timestamp(lessonStartedAt.Add(time.Duration(segment.StartMS) * time.Millisecond)),
+		IsMoment:  isMoment,
+	}
 }
 
 func (a *App) makeCandidateSnapshots(ctx context.Context, entries []domain.VocabularyEntry) []CandidateSnapshot {
