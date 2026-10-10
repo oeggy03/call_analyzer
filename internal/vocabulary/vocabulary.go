@@ -13,6 +13,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/oeggy03/call_analyzer/internal/chinese"
 	"github.com/oeggy03/call_analyzer/internal/domain"
 	"github.com/oeggy03/call_analyzer/internal/transcript"
 )
@@ -106,8 +107,14 @@ func NormalizeCandidate(candidate Candidate, transcriptText string) (domain.Voca
 	if strings.TrimSpace(candidate.Simplified) == "" {
 		return domain.VocabularyEntry{}, errors.New("vocabulary: simplified form is required")
 	}
+	originalSimplified := strings.TrimSpace(candidate.Simplified)
+	candidate.Simplified = chinese.ToSimplified(originalSimplified)
 	if strings.TrimSpace(candidate.Traditional) == "" {
-		candidate.Traditional = candidate.Simplified
+		if candidate.Simplified != originalSimplified {
+			candidate.Traditional = originalSimplified
+		} else {
+			candidate.Traditional = candidate.Simplified
+		}
 	}
 	if strings.TrimSpace(transcriptText) == "" || len(candidate.Evidence) == 0 {
 		return domain.VocabularyEntry{}, ErrMissingEvidence
@@ -116,7 +123,10 @@ func NormalizeCandidate(candidate Candidate, transcriptText string) (domain.Voca
 		if strings.TrimSpace(evidence.Text) == "" {
 			return domain.VocabularyEntry{}, ErrMissingEvidence
 		}
-		if !strings.Contains(transcript.NormalizeChinese(transcriptText), transcript.NormalizeChinese(evidence.Text)) {
+		if !strings.Contains(
+			transcript.NormalizeChinese(chinese.ToSimplified(transcriptText)),
+			transcript.NormalizeChinese(chinese.ToSimplified(evidence.Text)),
+		) {
 			return domain.VocabularyEntry{}, fmt.Errorf("vocabulary: evidence %q is not present in transcript", evidence.Text)
 		}
 	}
@@ -138,6 +148,12 @@ func NormalizeCandidate(candidate Candidate, transcriptText string) (domain.Voca
 			return domain.VocabularyEntry{}, fmt.Errorf("vocabulary: example pinyin: %w", err)
 		}
 		candidate.Examples[i].Reading = exampleReading
+		originalExample := strings.TrimSpace(candidate.Examples[i].Simplified)
+		candidate.Examples[i].Simplified = chinese.ToSimplified(originalExample)
+		if strings.TrimSpace(candidate.Examples[i].Traditional) == "" &&
+			candidate.Examples[i].Simplified != originalExample {
+			candidate.Examples[i].Traditional = originalExample
+		}
 		if candidate.Examples[i].Generated {
 			candidate.Examples[i].Provenance = domain.ProvenanceModel
 		}

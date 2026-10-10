@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -162,9 +163,16 @@ func (s *Store) migrate(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("storage: begin migration %s: %w", entry.Name(), err)
 		}
-		if _, err := tx.ExecContext(ctx, string(script)); err != nil {
+		satisfied, err := migrationAddsOnlyExistingColumns(ctx, tx, string(script))
+		if err != nil {
 			_ = tx.Rollback()
-			return fmt.Errorf("storage: apply migration %s: %w", entry.Name(), err)
+			return fmt.Errorf("storage: inspect migration %s: %w", entry.Name(), err)
+		}
+		if !satisfied {
+			if _, err := tx.ExecContext(ctx, string(script)); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("storage: apply migration %s: %w", entry.Name(), err)
+			}
 		}
 		if _, err := tx.ExecContext(ctx,
 			"INSERT INTO schema_migrations(name, applied_at) VALUES (?, ?)",
@@ -178,6 +186,47 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+var addColumnStatement = regexp.MustCompile(`(?i)^ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
+
+// migrationAddsOnlyExistingColumns reports whether a migration consists only
+// of ADD COLUMN statements for columns that are already present. Fresh
+// databases create those columns in 001_init.sql; databases created before a
+// column was added to that file need the later ALTER.
+func migrationAddsOnlyExistingColumns(ctx context.Context, tx *sql.Tx, script string) (bool, error) {
+	statements := splitSQLStatements(script)
+	if len(statements) == 0 {
+		return false, nil
+	}
+	for _, statement := range statements {
+		matches := addColumnStatement.FindStringSubmatch(statement)
+		if matches == nil {
+			return false, nil
+		}
+		var present int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COUNT(1) FROM pragma_table_info(?)
+			WHERE name = ?`, matches[1], matches[2]).Scan(&present); err != nil {
+			return false, err
+		}
+		if present == 0 {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func splitSQLStatements(script string) []string {
+	parts := strings.Split(script, ";")
+	statements := make([]string, 0, len(parts))
+	for _, part := range parts {
+		statement := strings.TrimSpace(part)
+		if statement != "" {
+			statements = append(statements, statement)
+		}
+	}
+	return statements
 }
 
 func (s *Store) withTx(ctx context.Context, fn func(*sql.Tx) error) error {

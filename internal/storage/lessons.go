@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/oeggy03/call_analyzer/internal/chinese"
 	"github.com/oeggy03/call_analyzer/internal/domain"
 )
 
@@ -25,6 +27,15 @@ type LessonMetadata struct {
 	STTModel        string
 	AnalyzerModel   string
 	RetentionPolicy string
+}
+
+type LessonTranscriptSummary struct {
+	ID           string
+	Title        string
+	StartedAt    time.Time
+	EndedAt      *time.Time
+	SegmentCount int
+	FinalCost    float64
 }
 
 func (r *LessonRepository) Start(ctx context.Context, title string, startedAt time.Time) (domain.Lesson, error) {
@@ -160,6 +171,65 @@ func (r *LessonRepository) List(ctx context.Context, limit int) ([]domain.Lesson
 		return nil, fmt.Errorf("lessons: list rows: %w", err)
 	}
 	return lessons, nil
+}
+
+func (r *LessonRepository) ListSummaries(
+	ctx context.Context,
+	limit int,
+) ([]LessonTranscriptSummary, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	rows, err := r.store.db.QueryContext(ctx, `
+		SELECT lessons.id, lessons.title, lessons.started_at, lessons.ended_at,
+			lessons.final_cost, COUNT(transcript_segments.id)
+		FROM lessons
+		LEFT JOIN transcript_segments
+			ON transcript_segments.lesson_id = lessons.id
+		GROUP BY lessons.id, lessons.title, lessons.started_at,
+			lessons.ended_at, lessons.final_cost
+		ORDER BY lessons.started_at DESC
+		LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("lessons: list summaries: %w", err)
+	}
+	defer rows.Close()
+
+	summaries := make([]LessonTranscriptSummary, 0)
+	for rows.Next() {
+		var summary LessonTranscriptSummary
+		var started, segmentCount int64
+		var ended sql.NullInt64
+		if err := rows.Scan(
+			&summary.ID,
+			&summary.Title,
+			&started,
+			&ended,
+			&summary.FinalCost,
+			&segmentCount,
+		); err != nil {
+			return nil, fmt.Errorf("lessons: scan summary: %w", err)
+		}
+		summary.StartedAt = timeFromValue(started)
+		summary.EndedAt = scanNullableTime(ended)
+		summary.SegmentCount = int(segmentCount)
+		summaries = append(summaries, summary)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("lessons: list summaries rows: %w", err)
+	}
+	return summaries, nil
+}
+
+func (r *LessonRepository) ListTranscriptSummaries(
+	ctx context.Context,
+	limit int,
+) ([]LessonTranscriptSummary, error) {
+	return r.ListSummaries(ctx, limit)
 }
 
 func (r *LessonRepository) Latest(ctx context.Context) (domain.Lesson, error) {
@@ -370,7 +440,26 @@ func (s *Store) Transcripts() *TranscriptRepository {
 	return &TranscriptRepository{store: s}
 }
 
+func normalizeTranscriptSegment(segment *domain.TranscriptSegment) {
+	if segment.Source == "system/mark" || !chinese.ContainsHan(segment.Text) {
+		return
+	}
+	original := segment.Text
+	simplified := chinese.ToSimplified(original)
+	if simplified != original && strings.TrimSpace(segment.TraditionalText) == "" {
+		segment.TraditionalText = original
+	}
+	segment.Text = simplified
+	if strings.TrimSpace(segment.SimplifiedText) == "" {
+		segment.SimplifiedText = simplified
+	}
+	if strings.TrimSpace(segment.Reading) == "" {
+		segment.Reading = chinese.SentencePinyin(simplified)
+	}
+}
+
 func (r *TranscriptRepository) Insert(ctx context.Context, segment domain.TranscriptSegment) (domain.TranscriptSegment, error) {
+	normalizeTranscriptSegment(&segment)
 	if segment.ID == "" {
 		segment.ID = newID()
 	}
@@ -405,6 +494,7 @@ func (r *TranscriptRepository) InsertBatch(ctx context.Context, segments []domai
 	now := time.Now().UTC()
 	err := r.store.withTx(ctx, func(tx *sql.Tx) error {
 		for i := range segments {
+			normalizeTranscriptSegment(&segments[i])
 			if segments[i].ID == "" {
 				segments[i].ID = newID()
 			}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/oeggy03/call_analyzer/internal/audio"
 	"github.com/oeggy03/call_analyzer/internal/capture"
+	"github.com/oeggy03/call_analyzer/internal/chinese"
 	"github.com/oeggy03/call_analyzer/internal/domain"
 	"github.com/oeggy03/call_analyzer/internal/openrouter"
 	"github.com/oeggy03/call_analyzer/internal/transcript"
@@ -507,6 +508,7 @@ func (s *Service) processAnalysisJob(ctx context.Context, session *captureSessio
 	if text == "" {
 		return
 	}
+	text = chinese.ToSimplified(text)
 	source := job.source
 	if source == "" {
 		source = "microphone"
@@ -681,11 +683,13 @@ func (s *Service) analyzeTranscript(
 	}
 	prompt := fmt.Sprintf(
 		"Analyze this Mandarin lesson transcript for useful teachable vocabulary. "+
-			"Return only the requested JSON schema. Include only words or short phrases "+
-			"whose exact evidence appears in the transcript. Prefer practical business "+
-			"Mandarin, include simplified/traditional forms, numbered pinyin, one "+
-			"concise English sense (use an empty classifier when not applicable), and "+
-			"one natural Chinese example with pinyin and English translation.%s "+
+			"Return only the requested JSON schema. The transcript uses simplified "+
+			"Chinese. Include only words or short phrases whose exact evidence appears "+
+			"in the transcript. Prefer practical business Mandarin. Include the "+
+			"simplified form, the traditional form, and numbered pinyin. Include one "+
+			"concise English sense (use an empty classifier when not applicable) and "+
+			"one natural example sentence written in simplified Chinese, with pinyin "+
+			"and an English translation.%s "+
 			"Transcript evidence: %s",
 		reconciliationNote,
 		validationText,

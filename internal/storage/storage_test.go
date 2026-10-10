@@ -43,6 +43,84 @@ func TestEndOrphanedLessonsRecoversPersistedSessionCost(t *testing.T) {
 	}
 }
 
+func TestSenseClassifierMigrationUpgradesExistingDatabase(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "call_analyzer.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE senses (
+			id TEXT PRIMARY KEY NOT NULL,
+			entry_id TEXT NOT NULL,
+			gloss TEXT NOT NULL,
+			part_of_speech TEXT NOT NULL DEFAULT '',
+			sort_order INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE TABLE schema_migrations (
+			name TEXT PRIMARY KEY NOT NULL,
+			applied_at INTEGER NOT NULL
+		);
+		INSERT INTO schema_migrations(name, applied_at) VALUES
+			('001_init.sql', 1),
+			('002_lesson_metadata.sql', 1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertClassifierColumn(t, ctx, store)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	assertClassifierColumn(t, ctx, reopened)
+}
+
+func TestFreshDatabaseKeepsSenseClassifier(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	assertClassifierColumn(t, ctx, store)
+}
+
+func assertClassifierColumn(t *testing.T, ctx context.Context, store *Store) {
+	t.Helper()
+	var present int
+	if err := store.DB().QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM pragma_table_info('senses') WHERE name = 'classifier'
+	`).Scan(&present); err != nil {
+		t.Fatal(err)
+	}
+	if present != 1 {
+		t.Fatal("senses.classifier is missing")
+	}
+	var applied int
+	if err := store.DB().QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM schema_migrations WHERE name = '003_sense_classifier.sql'
+	`).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if applied != 1 {
+		t.Fatal("classifier migration was not recorded")
+	}
+}
+
 func TestSQLiteRepositoriesAndLifecycle(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, filepath.Join(t.TempDir(), "call_analyzer.db"))
@@ -85,6 +163,21 @@ func TestSQLiteRepositoriesAndLifecycle(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if segment.Text != "你好" || segment.Reading == "" {
+		t.Fatalf("transcript was not stored with pinyin: %#v", segment)
+	}
+	traditional, err := store.Transcripts().Insert(ctx, domain.TranscriptSegment{
+		LessonID: lesson.ID,
+		StartMS:  1000,
+		EndMS:    2000,
+		Text:     "我們學習",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if traditional.Text != "我们学习" || traditional.TraditionalText != "我們學習" || traditional.Reading == "" {
+		t.Fatalf("traditional transcript was not simplified: %#v", traditional)
 	}
 	candidate, err := store.Vocabulary().UpsertCandidate(ctx, domain.VocabularyEntry{
 		Simplified:  "你好",
@@ -327,6 +420,78 @@ func TestLessonRecoveryMetadataAndLatestComplete(t *testing.T) {
 	}
 	if gotLatest.ID != latest.ID {
 		t.Fatalf("latest complete lesson = %s, want %s", gotLatest.ID, latest.ID)
+	}
+}
+
+func TestLessonTranscriptSummariesOrderCountAndClampLimit(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	older, err := store.Lessons().Start(ctx, "older", timeAt(1_000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	middle, err := store.Lessons().Start(ctx, "middle", timeAt(2_000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := store.Lessons().Start(ctx, "newer", timeAt(3_000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Transcripts().InsertBatch(ctx, []domain.TranscriptSegment{
+		{LessonID: older.ID, StartMS: 0, EndMS: 10, Text: "old"},
+		{LessonID: newer.ID, StartMS: 0, EndMS: 10, Text: "new one"},
+		{LessonID: newer.ID, StartMS: 20, EndMS: 30, Text: "new two"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Lessons().EndWithCost(ctx, older.ID, timeAt(4_000), .11); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Lessons().EndWithCost(ctx, newer.ID, timeAt(5_000), .33); err != nil {
+		t.Fatal(err)
+	}
+
+	summaries, err := store.Lessons().ListSummaries(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 3 ||
+		summaries[0].ID != newer.ID ||
+		summaries[1].ID != middle.ID ||
+		summaries[2].ID != older.ID {
+		t.Fatalf("summaries were not ordered by start time: %#v", summaries)
+	}
+	if summaries[0].SegmentCount != 2 || summaries[1].SegmentCount != 0 ||
+		summaries[2].SegmentCount != 1 ||
+		summaries[0].FinalCost != .33 ||
+		summaries[2].FinalCost != .11 {
+		t.Fatalf("summary counts or costs were wrong: %#v", summaries)
+	}
+
+	for index := 0; index < 105; index++ {
+		if _, err := store.Lessons().Start(
+			ctx,
+			"clamp",
+			timeAt(int64(10_000+index)*1_000),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if summaries, err := store.Lessons().ListSummaries(ctx, 0); err != nil {
+		t.Fatal(err)
+	} else if len(summaries) != 30 {
+		t.Fatalf("non-positive summary limit was not 30: %d", len(summaries))
+	}
+	if summaries, err := store.Lessons().ListSummaries(ctx, 101); err != nil {
+		t.Fatal(err)
+	} else if len(summaries) != 100 {
+		t.Fatalf("summary limit was not capped at 100: %d", len(summaries))
 	}
 }
 

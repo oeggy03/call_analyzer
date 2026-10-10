@@ -4,6 +4,8 @@ go 1.25.0
 
 require (
 	github.com/google/uuid v1.6.0
+	github.com/longbridgeapp/opencc v0.3.13
+	github.com/mozillazg/go-pinyin v0.21.0
 	github.com/wailsapp/wails/v2 v2.10.2
 	modernc.org/sqlite v1.39.1
 )
@@ -21,6 +23,8 @@ require (
 	github.com/leaanthony/gosod v1.0.4 // indirect
 	github.com/leaanthony/slicer v1.6.0 // indirect
 	github.com/leaanthony/u v1.1.1 // indirect
+	github.com/liuzl/cedar-go v0.0.0-20170805034717-80a9c64b256d // indirect
+	github.com/liuzl/da v0.0.0-20180704015230-14771aad5b1d // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
