@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -138,6 +141,62 @@ func (a *App) GenerateManualVocabulary(input ManualVocabularyInput) (ManualVocab
 		Model:              draft.Model,
 		Cost:               draft.Cost,
 	}, nil
+}
+
+func (a *App) RecognizeVocabularyPhoto(imageBase64 string) (PhotoVocabularyDraft, error) {
+	image, err := decodePhotoImageBase64(imageBase64)
+	if err != nil {
+		return PhotoVocabularyDraft{}, err
+	}
+	draft, err := a.service.RecognizeVocabularyPhoto(a.context(), image)
+	if err != nil {
+		return PhotoVocabularyDraft{}, err
+	}
+	entries := make([]ManualVocabularyInput, 0, len(draft.Entries))
+	for _, entry := range draft.Entries {
+		entries = append(entries, ManualVocabularyInput{
+			Simplified:         entry.Simplified,
+			Traditional:        entry.Traditional,
+			Pinyin:             entry.Pinyin,
+			Meaning:            entry.Meaning,
+			PartOfSpeech:       entry.PartOfSpeech,
+			Classifier:         entry.Classifier,
+			Example:            entry.Example,
+			ExamplePinyin:      entry.ExamplePinyin,
+			ExampleTranslation: entry.ExampleTranslation,
+			Tags:               entry.Tags,
+			AiGenerated:        entry.AiGenerated,
+		})
+	}
+	return PhotoVocabularyDraft{
+		Entries: entries,
+		Model:   draft.Model,
+		Cost:    draft.Cost,
+	}, nil
+}
+
+func decodePhotoImageBase64(value string) ([]byte, error) {
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(value))
+	if strings.HasPrefix(strings.ToLower(value), "data:") {
+		comma := strings.IndexByte(value, ',')
+		if comma < 0 {
+			return nil, errors.New("invalid image data URL")
+		}
+		value = value[comma+1:]
+	}
+	if value == "" {
+		return nil, errors.New("image base64 is empty")
+	}
+	image, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid image base64: %w", err)
+	}
+	return image, nil
 }
 
 func (a *App) SaveManualVocabulary(input ManualVocabularyInput) (AppSnapshot, error) {
@@ -302,6 +361,7 @@ func (a *App) SaveSettings(patch SettingsPatch) (AppSnapshot, error) {
 	if err := a.service.ApplySettings(a.context(), service.SettingsPatch{
 		STTModel:          patch.STTModel,
 		AnalyzerModel:     patch.AnalyzerModel,
+		VisionModel:       patch.VisionModel,
 		HardBudgetUSD:     patch.HardBudgetUSD,
 		AudioRetention:    patch.AudioRetention,
 		OCREnabled:        patch.OCREnabled,
@@ -314,6 +374,54 @@ func (a *App) SaveSettings(patch SettingsPatch) (AppSnapshot, error) {
 
 func (a *App) Refresh() (AppSnapshot, error) {
 	return a.GetAppSnapshot()
+}
+
+func (a *App) ListLessonTranscripts(limit int) ([]LessonTranscriptSummary, error) {
+	summaries, err := a.service.ListLessonTranscripts(a.context(), limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]LessonTranscriptSummary, 0, len(summaries))
+	for _, summary := range summaries {
+		result = append(result, LessonTranscriptSummary{
+			ID:           summary.ID,
+			Title:        summary.Title,
+			StartedAt:    timestamp(summary.StartedAt),
+			EndedAt:      timestampFromPointer(summary.EndedAt),
+			SegmentCount: summary.SegmentCount,
+			FinalCost:    summary.FinalCost,
+		})
+	}
+	return result, nil
+}
+
+func (a *App) GetLessonTranscript(lessonID string) (LessonTranscript, error) {
+	transcript, err := a.service.GetLessonTranscript(a.context(), lessonID)
+	if err != nil {
+		return LessonTranscript{}, err
+	}
+	lines := make([]TranscriptLine, 0, len(transcript.Segments))
+	for _, segment := range transcript.Segments {
+		lines = append(lines, transcriptLineFromSegment(transcript.Lesson.StartedAt, segment))
+	}
+	return LessonTranscript{
+		Lesson: LessonTranscriptSummary{
+			ID:           transcript.Lesson.ID,
+			Title:        transcript.Lesson.Title,
+			StartedAt:    timestamp(transcript.Lesson.StartedAt),
+			EndedAt:      timestampFromPointer(transcript.Lesson.EndedAt),
+			SegmentCount: len(transcript.Segments),
+			FinalCost:    transcript.Lesson.FinalCost,
+		},
+		Lines: lines,
+	}, nil
+}
+
+func timestampFromPointer(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return timestamp(*value)
 }
 
 func (a *App) checkReadiness(ctx context.Context, target string) error {
