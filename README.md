@@ -24,6 +24,7 @@ to trusted vocabulary without confirmation.
 - An OpenRouter API key with access to:
   - `qwen/qwen3-asr-1.7b`
   - `qwen/qwen3-32b`
+  - `qwen/qwen3.7-flash` for photo recognition
 
 Full Xcode is only required to execute the Swift XCTest suite. The helper and
 desktop app build with the Command Line Tools available on the development Mac.
@@ -70,6 +71,7 @@ The helper can be overridden with
 1. Open Settings and save an OpenRouter API key. On macOS it is written to
    Keychain, never SQLite.
 2. Keep the default Qwen models and the US$0.50 hard lesson budget.
+   Photo reading uses Qwen 3.7 Flash unless you choose the handwriting fallback.
 3. Join the consented Zoom lesson on the same Mac, preferably with headphones.
 4. Select Zoom, acknowledge consent, and start the lesson.
 5. Press `M` or click **Mark Moment** for important words.
@@ -83,14 +85,25 @@ examples, and tags. Review or edit every field before saving. Fully completed
 forms can be saved without an API call. The UI displays the model and actual
 request cost for each generated draft.
 
+**Read photo** accepts a JPEG, PNG, WebP, HEIC, or HEIF image, resizes it in
+the browser, and asks Qwen 3.7 Flash to recognize the visible Chinese words.
+Several words become a checklist; one word fills the form. Nothing is saved
+until you confirm it. Photo requests do not use the lesson budget and do not
+require zero-data retention. The live transcript stays in a scrolling pane:
+scroll up to pause, then choose **Resume live** or return to the bottom.
+**Past transcripts** opens earlier lessons without leaving that pane.
+
 Automatic audio is transcribed in utterance-aware 8–15 second windows, with
 two seconds of overlap. Vocabulary extraction batches roughly 20 seconds of
 new transcript to control cost. A manual mark analyzes the complete 25-second
 pre-roll and 10-second post-roll immediately. At the configured hard budget,
 cloud work pauses while local capture and mark timestamps continue.
 
-Provider requests enforce Zero Data Retention routing and deny endpoints marked
-for data collection. Local audio retention is controlled separately; the
+Lesson transcription and vocabulary analysis enforce Zero Data Retention
+routing and deny endpoints marked for data collection. Photo recognition does
+not, because the chosen vision model has no zero-retention endpoint and the
+recognized words are not treated as sensitive. Local audio retention is
+controlled separately; the
 default is session-only temporary chunks. Session spools are deleted after
 processing, and orphaned spools from a crashed process are purged at next
 startup.

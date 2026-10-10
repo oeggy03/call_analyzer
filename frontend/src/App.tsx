@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { FormEvent, ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { DragEvent, FormEvent, ReactNode } from 'react'
 import { api as defaultApi } from './lib/api'
 import type { AppApi } from './lib/api'
 import type {
@@ -7,6 +7,8 @@ import type {
   Candidate,
   CandidateBucket,
   CandidateEditPatch,
+  LessonTranscript,
+  LessonTranscriptSummary,
   ManualVocabularyDraft,
   ManualVocabularyInput,
   SettingsPatch,
@@ -16,7 +18,7 @@ import type {
 } from './lib/types'
 import './styles.css'
 
-type View = 'live' | 'inbox' | 'add-word' | 'vocabulary' | 'settings'
+type View = 'live' | 'transcripts' | 'inbox' | 'add-word' | 'vocabulary' | 'settings'
 
 interface AppProps {
   apiClient?: AppApi
@@ -48,6 +50,7 @@ const EMPTY_SNAPSHOT: AppSnapshot = {
     openRouterKeyConfigured: false,
     sttModel: 'qwen/qwen3-asr-1.7b',
     analyzerModel: 'qwen/qwen3-32b',
+    visionModel: 'qwen/qwen3.7-flash',
     hardBudgetUsd: 0.5,
     audioRetention: 'sessionOnly',
     ocrEnabled: false,
@@ -58,6 +61,7 @@ const EMPTY_SNAPSHOT: AppSnapshot = {
 
 const NAV_ITEMS: Array<{ id: View; label: string; description: string; icon: IconName }> = [
   { id: 'live', label: 'Live Lesson', description: 'Capture and review a live call', icon: 'waveform' },
+  { id: 'transcripts', label: 'Past transcripts', description: 'Read a saved lesson', icon: 'history' },
   { id: 'inbox', label: 'Candidate Inbox', description: 'Review new vocabulary', icon: 'inbox' },
   { id: 'add-word', label: 'Add Word', description: 'Create a vocabulary entry', icon: 'spark' },
   { id: 'vocabulary', label: 'Vocabulary', description: 'Browse your saved words', icon: 'book' },
@@ -95,8 +99,14 @@ const ANALYZER_MODEL_OPTIONS = [
   { value: 'qwen/qwen3.5-9b', label: 'Qwen 3.5 9B · ZDR' },
 ] as const
 
+const VISION_MODEL_OPTIONS = [
+  { value: 'qwen/qwen3.7-flash', label: 'Qwen 3.7 Flash' },
+  { value: 'qwen/qwen3-vl-30b-a3b-instruct', label: 'Qwen3-VL 30B' },
+] as const
+
 const DEFAULT_STT_MODEL = STT_MODEL_OPTIONS[0].value
 const DEFAULT_ANALYZER_MODEL = ANALYZER_MODEL_OPTIONS[0].value
+const DEFAULT_VISION_MODEL = VISION_MODEL_OPTIONS[0].value
 
 type CandidateEditDraft = {
   simplified: string
@@ -123,6 +133,30 @@ type ManualVocabularyForm = {
   exampleTranslation: string
   tags: string
   aiGenerated: boolean
+}
+
+type PreparedPhoto = {
+  imageBase64: string
+  previewDataUrl: string
+}
+
+type PhotoQueueStatus = 'preparing' | 'ready' | 'reading' | 'done' | 'no-words' | 'failed'
+
+type PhotoQueueItem = {
+  id: string
+  fileName: string
+  status: PhotoQueueStatus
+  previewDataUrl?: string
+  imageBase64?: string
+  error?: string
+}
+
+type PhotoSuggestion = {
+  id: string
+  input: ManualVocabularyInput
+  photoIds: string[]
+  selected: boolean
+  expanded: boolean
 }
 
 const EMPTY_MANUAL_VOCABULARY_FORM: ManualVocabularyForm = {
@@ -166,6 +200,13 @@ export function App({ apiClient = defaultApi }: AppProps) {
   const [editError, setEditError] = useState<string>()
   const [manualForm, setManualForm] = useState<ManualVocabularyForm>(EMPTY_MANUAL_VOCABULARY_FORM)
   const [manualGeneration, setManualGeneration] = useState<ManualVocabularyDraft>()
+  const [photoQueue, setPhotoQueue] = useState<PhotoQueueItem[]>([])
+  const [photoSuggestions, setPhotoSuggestions] = useState<PhotoSuggestion[]>([])
+  const [photoInputError, setPhotoInputError] = useState<string>()
+  const [photoCost, setPhotoCost] = useState(0)
+  const [photoModel, setPhotoModel] = useState<string>()
+  const [photoReadProgress, setPhotoReadProgress] = useState<{ current: number; total: number }>()
+  const photoId = useRef(0)
 
   const current = snapshot ?? EMPTY_SNAPSHOT
   const backendUnavailable = apiClient.mode === 'unavailable' || Boolean(loadError)
@@ -408,6 +449,168 @@ export function App({ apiClient = defaultApi }: AppProps) {
       })
   }
 
+  const handlePhotoFiles = useCallback((files: File[]) => {
+    if (files.length === 0) return
+
+    const acceptedFiles = files.filter(isAcceptedPhotoFile)
+    const rejectedCount = files.length - acceptedFiles.length
+    const availableSlots = Math.max(0, 8 - photoQueue.length)
+    const filesToAdd = acceptedFiles.slice(0, availableSlots)
+    const messages: string[] = []
+
+    if (rejectedCount > 0) {
+      messages.push('Some files were not added. Choose JPEG, PNG, WebP, HEIC, or HEIF photos.')
+    }
+    if (acceptedFiles.length > availableSlots) {
+      messages.push('Only 8 photos can be read at once. Extra photos were not added.')
+    }
+    setPhotoInputError(messages.length > 0 ? messages.join(' ') : undefined)
+
+    if (filesToAdd.length === 0) return
+
+    const nextItems = filesToAdd.map((file) => {
+      photoId.current += 1
+      return {
+        id: `photo-${photoId.current}`,
+        fileName: file.name || 'Photo',
+        status: 'preparing' as const,
+      }
+    })
+    setPhotoQueue((items) => [...items, ...nextItems])
+
+    filesToAdd.forEach((file, index) => {
+      const item = nextItems[index]
+      void preparePhoto(file)
+        .then((prepared) => {
+          setPhotoQueue((items) => items.map((photo) => (
+            photo.id === item.id
+              ? { ...photo, status: 'ready', previewDataUrl: prepared.previewDataUrl, imageBase64: prepared.imageBase64, error: undefined }
+              : photo
+          )))
+        })
+        .catch((error: unknown) => {
+          setPhotoQueue((items) => items.map((photo) => (
+            photo.id === item.id
+              ? { ...photo, status: 'failed', error: getErrorMessage(error) }
+              : photo
+          )))
+        })
+    })
+  }, [photoQueue.length])
+
+  const handleRemovePhoto = useCallback((photoIdToRemove: string) => {
+    setPhotoQueue((items) => items.filter((photo) => photo.id !== photoIdToRemove))
+    setPhotoSuggestions((suggestions) => suggestions.flatMap((suggestion) => {
+      const photoIds = suggestion.photoIds.filter((id) => id !== photoIdToRemove)
+      return photoIds.length > 0 ? [{ ...suggestion, photoIds }] : []
+    }))
+    setPhotoInputError(undefined)
+  }, [])
+
+  const handleReadPhotos = useCallback(async () => {
+    if (busyAction || !current.settings.openRouterKeyConfigured) return
+    const photosToRead = photoQueue.filter((photo) => photo.status === 'ready' && photo.imageBase64)
+    if (photosToRead.length === 0) return
+
+    setBusyAction('recognize-vocabulary-photo')
+    setActionError(undefined)
+    setActionMessage(undefined)
+    setPhotoReadProgress({ current: 1, total: photosToRead.length })
+
+    try {
+      for (const [index, photo] of photosToRead.entries()) {
+        setPhotoReadProgress({ current: index + 1, total: photosToRead.length })
+        setPhotoQueue((items) => items.map((item) => (
+          item.id === photo.id ? { ...item, status: 'reading', error: undefined } : item
+        )))
+
+        try {
+          const draft = await apiClient.recognizeVocabularyPhoto(photo.imageBase64 ?? '')
+          const entries = draft.entries.map(normalizePhotoReviewInput)
+          setPhotoQueue((items) => items.map((item) => (
+            item.id === photo.id
+              ? { ...item, status: entries.length > 0 ? 'done' : 'no-words', error: undefined }
+              : item
+          )))
+          setPhotoCost((cost) => cost + draft.cost)
+          setPhotoModel(draft.model)
+          setPhotoSuggestions((suggestions) => mergePhotoSuggestions(
+            suggestions,
+            entries,
+            photo.id,
+            current.vocabulary,
+          ))
+        } catch (error: unknown) {
+          setPhotoQueue((items) => items.map((item) => (
+            item.id === photo.id
+              ? { ...item, status: 'failed', error: getErrorMessage(error) }
+              : item
+          )))
+        }
+      }
+    } finally {
+      setPhotoReadProgress(undefined)
+      setBusyAction(undefined)
+    }
+  }, [apiClient, busyAction, current.settings.openRouterKeyConfigured, current.vocabulary, photoQueue])
+
+  const updatePhotoSuggestion = useCallback((suggestionId: string, patch: Partial<ManualVocabularyInput>) => {
+    setPhotoSuggestions((suggestions) => suggestions.map((suggestion) => {
+      if (suggestion.id !== suggestionId) return suggestion
+      const input = { ...suggestion.input, ...patch }
+      return {
+        ...suggestion,
+        input,
+        selected: isCompleteManualVocabularyInput(input) ? suggestion.selected : false,
+      }
+    }))
+  }, [])
+
+  const togglePhotoSuggestion = useCallback((suggestionId: string, selected: boolean) => {
+    setPhotoSuggestions((suggestions) => suggestions.map((suggestion) => (
+      suggestion.id === suggestionId ? { ...suggestion, selected } : suggestion
+    )))
+  }, [])
+
+  const togglePhotoSuggestionDetails = useCallback((suggestionId: string) => {
+    setPhotoSuggestions((suggestions) => suggestions.map((suggestion) => (
+      suggestion.id === suggestionId ? { ...suggestion, expanded: !suggestion.expanded } : suggestion
+    )))
+  }, [])
+
+  const handleSavePhotoEntries = async (entries: ManualVocabularyInput[]) => {
+    if (entries.length === 0 || busyAction) return
+    setBusyAction('save-photo-vocabulary')
+    setActionError(undefined)
+    setActionMessage(undefined)
+    let savedCount = 0
+    try {
+      for (const entry of entries) {
+        const nextSnapshot = await apiClient.saveManualVocabulary(entry)
+        setSnapshot(nextSnapshot)
+        setSelectedTarget(nextSnapshot.target)
+        savedCount += 1
+      }
+      setPhotoQueue([])
+      setPhotoSuggestions([])
+      setPhotoInputError(undefined)
+      setPhotoCost(0)
+      setPhotoModel(undefined)
+      setPhotoReadProgress(undefined)
+      setManualForm({ ...EMPTY_MANUAL_VOCABULARY_FORM })
+      setManualGeneration(undefined)
+      setActionMessage(`${savedCount} words saved to Vocabulary.`)
+      setActiveView('vocabulary')
+    } catch (error: unknown) {
+      const savedNote = savedCount > 0
+        ? `${savedCount} ${savedCount === 1 ? 'word was' : 'words were'} saved before this error. `
+        : ''
+      setActionError(`${savedNote}${getErrorMessage(error)}`)
+    } finally {
+      setBusyAction(undefined)
+    }
+  }
+
   const handleSaveManualVocabulary = (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault()
     const missingFields = manualVocabularyMissingFields(manualForm)
@@ -425,6 +628,12 @@ export function App({ apiClient = defaultApi }: AppProps) {
       if (!didSave) return
       setManualForm({ ...EMPTY_MANUAL_VOCABULARY_FORM })
       setManualGeneration(undefined)
+      setPhotoQueue([])
+      setPhotoSuggestions([])
+      setPhotoInputError(undefined)
+      setPhotoCost(0)
+      setPhotoModel(undefined)
+      setPhotoReadProgress(undefined)
       setActiveView('vocabulary')
     })
   }
@@ -461,7 +670,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
           isRefreshing={busyAction === 'refresh'}
           onRefresh={handleRefresh}
         />
-        <div className="page-content">
+        <div className={`page-content ${activeView === 'live' ? 'live-page-content' : ''}`}>
           {isLoading && !snapshot ? (
             <LoadingState />
           ) : (
@@ -500,6 +709,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
                   onPermission={handlePermission}
                 />
               )}
+              {activeView === 'transcripts' && <PastTranscriptsView apiClient={apiClient} />}
               {activeView === 'inbox' && (
                 <CandidateInboxView
                   candidates={current.candidates}
@@ -514,11 +724,25 @@ export function App({ apiClient = defaultApi }: AppProps) {
                 <ManualVocabularyView
                   form={manualForm}
                   generatedDraft={manualGeneration}
+                  photoQueue={photoQueue}
+                  photoSuggestions={photoSuggestions}
+                  photoInputError={photoInputError}
+                  photoCost={photoCost}
+                  photoModel={photoModel}
+                  photoReadProgress={photoReadProgress}
+                  vocabulary={current.vocabulary}
                   hasApiKey={current.settings.openRouterKeyConfigured}
                   lessonActive={['live', 'starting', 'stopping'].includes(current.lesson.status)}
                   busyAction={busyAction}
                   onFormChange={updateManualForm}
                   onGenerate={handleGenerateManualVocabulary}
+                  onPhotoFiles={handlePhotoFiles}
+                  onRemovePhoto={handleRemovePhoto}
+                  onReadPhotos={handleReadPhotos}
+                  onTogglePhotoSuggestion={togglePhotoSuggestion}
+                  onUpdatePhotoSuggestion={updatePhotoSuggestion}
+                  onTogglePhotoSuggestionDetails={togglePhotoSuggestionDetails}
+                  onSavePhotoEntries={handleSavePhotoEntries}
                   onSave={handleSaveManualVocabulary}
                   onOpenSettings={() => setActiveView('settings')}
                 />
@@ -700,14 +924,12 @@ function LiveLessonView({
   const pendingCandidates = snapshot.candidates.filter((candidate) => candidate.status === 'pending').length
 
   return (
-    <div className="view-stack">
-      <section className="page-heading">
+    <div className="view-stack live-view-stack">
+      <section className="page-heading live-page-heading">
         <div>
           <p className="eyebrow">Capture room</p>
           <h1>Live Lesson</h1>
-          <p className="page-intro">
-            Turn a real conversation into useful Chinese vocabulary without losing the thread.
-          </p>
+          <p className="page-intro">Follow the conversation here. Setup stays beside the transcript.</p>
         </div>
         <div className="heading-actions">
           <PrivacyBadge />
@@ -715,12 +937,14 @@ function LiveLessonView({
             <span className="status-dot status-dot-blue" aria-hidden="true" />
             {pendingCandidates} candidates
           </span>
+          <span className="soft-badge">{formatUsd(snapshot.cost.currentUsd)}</span>
         </div>
       </section>
 
       {(snapshot.cost.warning || snapshot.cost.hardExceeded) && <CostStatusAlert cost={snapshot.cost} />}
 
-      <div className="live-grid">
+      <div className="live-workspace">
+        <div className="live-controls">
         <section className="panel capture-panel">
           <PanelHeading
             eyebrow="Capture setup"
@@ -861,63 +1085,221 @@ function LiveLessonView({
             <span className="shortcut-hint"><kbd>M</kbd> Mark a moment</span>
           </div>
         </section>
+        </div>
+        <TranscriptPanel
+          snapshot={snapshot}
+          isLive={isLive}
+          busyAction={busyAction}
+          onMarkMoment={onMarkMoment}
+        />
       </div>
+    </div>
+  )
+}
 
-      <section className="panel transcript-panel">
-        <div className="panel-heading-row">
+function PastTranscriptsView({ apiClient }: { apiClient: AppApi }) {
+  const [lessons, setLessons] = useState<LessonTranscriptSummary[]>()
+  const [listError, setListError] = useState<string>()
+  const [listLoading, setListLoading] = useState(true)
+  const [selected, setSelected] = useState<LessonTranscript>()
+  const [selectedId, setSelectedId] = useState<string>()
+  const [transcriptLoading, setTranscriptLoading] = useState(false)
+  const [transcriptError, setTranscriptError] = useState<string>()
+
+  const loadLessons = useCallback(() => {
+    setListLoading(true)
+    setListError(undefined)
+    void apiClient
+      .listLessonTranscripts(30)
+      .then((nextLessons) => setLessons(nextLessons))
+      .catch((error: unknown) => setListError(getErrorMessage(error)))
+      .finally(() => setListLoading(false))
+  }, [apiClient])
+
+  useEffect(() => {
+    loadLessons()
+  }, [loadLessons])
+
+  const chooseLesson = (lesson: LessonTranscriptSummary) => {
+    setSelectedId(lesson.id)
+    setTranscriptLoading(true)
+    setTranscriptError(undefined)
+    void apiClient
+      .getLessonTranscript(lesson.id)
+      .then((nextLesson) => setSelected(nextLesson))
+      .catch((error: unknown) => {
+        setSelected(undefined)
+        setTranscriptError(getErrorMessage(error))
+      })
+      .finally(() => setTranscriptLoading(false))
+  }
+
+  return (
+    <div className="view-stack">
+      <section className="page-heading">
+        <div>
+          <p className="eyebrow">Lesson history</p>
+          <h1>Past transcripts</h1>
+          <p className="page-intro">Choose a saved lesson and read its transcript. Nothing here is changed or deleted.</p>
+        </div>
+      </section>
+      <div className="past-page-grid">
+        <section className="panel">
+          <PanelHeading eyebrow="Saved lessons" title="Choose a transcript" description="Recent lessons are listed by the time they started." />
+          {listError && <div className="past-transcripts-error" role="alert">{listError}</div>}
+          {listLoading && <p className="transcript-loading" role="status">Loading lessons…</p>}
+          {!listLoading && !listError && lessons?.length === 0 && (
+            <p className="past-transcripts-empty">No past lessons yet.</p>
+          )}
+          {!listLoading && !listError && lessons && lessons.length > 0 && (
+            <div className="past-lesson-list" role="listbox" aria-label="Past transcripts">
+              {lessons.map((lesson) => (
+                <button
+                  className="past-lesson-option"
+                  type="button"
+                  role="option"
+                  aria-selected={selectedId === lesson.id}
+                  key={lesson.id}
+                  onClick={() => chooseLesson(lesson)}
+                >
+                  <span className="past-lesson-date">{formatLessonDate(lesson.startedAt)}</span>
+                  <span className="past-lesson-title">{lesson.title || 'Lesson'}</span>
+                  <span className="past-lesson-meta">
+                    {lesson.segmentCount} {lesson.segmentCount === 1 ? 'segment' : 'segments'}
+                    {lesson.finalCost > 0 && ` · ${formatUsd(lesson.finalCost)}`}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+        <section className="panel transcript-panel past-transcript-panel">
           <PanelHeading
-            eyebrow="Live transcript"
-            title="Conversation thread"
-            description="Source labels help you notice what to revisit."
+            eyebrow="Transcript"
+            title={selected ? formatLessonDate(selected.lesson.startedAt) : 'No lesson selected'}
+            description={selected ? `${selected.lesson.title || 'Lesson'} · read only` : 'Select a lesson on the left.'}
           />
+          {transcriptLoading && <p className="transcript-loading" role="status">Loading transcript…</p>}
+          {transcriptError && <div className="transcript-history-error" role="alert">{transcriptError}</div>}
+          {selected && selected.lines.length > 0 ? (
+            <TranscriptList lines={selected.lines} isHistory />
+          ) : !transcriptLoading && !transcriptError && (
+            <EmptyState
+              icon="history"
+              title={selected ? 'This lesson has no transcript' : 'Choose a past lesson'}
+              description={selected ? 'No captured lines were saved for this lesson.' : 'The transcript opens here and stays in simplified Chinese, with pinyin.'}
+            />
+          )}
+        </section>
+      </div>
+    </div>
+  )
+}
+
+function TranscriptPanel({
+  snapshot,
+  isLive,
+  busyAction,
+  onMarkMoment,
+}: {
+  snapshot: AppSnapshot
+  isLive: boolean
+  busyAction?: string
+  onMarkMoment: () => void
+}) {
+  return (
+    <section className="panel transcript-panel">
+      <div className="panel-heading-row">
+        <PanelHeading
+          eyebrow="Live transcript"
+          title="Conversation thread"
+          description="Source labels help you notice what to revisit."
+        />
+        <div className="transcript-panel-actions">
           <button className="button button-mark" type="button" onClick={onMarkMoment} disabled={!isLive || Boolean(busyAction)}>
             <Icon name="bookmark" />
             Mark Moment
             <kbd>M</kbd>
           </button>
         </div>
-        {snapshot.transcript.length > 0 ? (
-          <div className="transcript-list" aria-live="polite">
-            {snapshot.transcript.map((line) => (
-              <TranscriptRow key={line.id} line={line} />
-            ))}
-          </div>
-        ) : (
-          <EmptyState icon="waveform" title="Your transcript will appear here" description="Start a lesson to see microphone and remote audio in one rolling thread." />
-        )}
-      </section>
-
-      <div className="metric-grid">
-        <MetricCard
-          label="Candidate queue"
-          value={String(pendingCandidates)}
-          detail="Waiting for review"
-          icon="inbox"
-          tone="blue"
-        />
-        <MetricCard
-          label="Current cost"
-          value={formatUsd(snapshot.cost.currentUsd)}
-          detail={`Projected ${formatUsd(snapshot.cost.projectedUsd)}`}
-          icon="coin"
-          tone="purple"
-        />
-        <MetricCard
-          label="Hard budget"
-          value={formatUsd(snapshot.cost.hardBudgetUsd)}
-          detail="Session cap"
-          icon="shield"
-          tone="green"
-        />
-        <MetricCard
-          label="Privacy mode"
-          value={snapshot.privacy.zdrEnabled ? 'ZDR on' : 'Retention on'}
-          detail={retentionLabel(snapshot.privacy.audioRetention)}
-          icon="lock"
-          tone="orange"
-        />
       </div>
-    </div>
+      {snapshot.transcript.length > 0 ? (
+        <TranscriptList lines={snapshot.transcript} isHistory={false} />
+      ) : (
+        <EmptyState
+          icon="waveform"
+          title="Your transcript will appear here"
+          description="Start a lesson to see microphone and remote audio in one rolling thread."
+        />
+      )}
+    </section>
+  )
+}
+
+function TranscriptList({ lines, isHistory }: { lines: AppSnapshot['transcript']; isHistory: boolean }) {
+  const listRef = useRef<HTMLDivElement>(null)
+  const [isFollowing, setIsFollowing] = useState(!isHistory)
+  const [announcement, setAnnouncement] = useState('')
+  const latestLineId = useRef<string | undefined>(undefined)
+  const hasRendered = useRef(false)
+  const scrollIntent = useRef<'start' | 'end' | null>(null)
+
+  const setScrollPosition = (position: 'start' | 'end') => {
+    const node = listRef.current
+    if (!node) return
+    scrollIntent.current = position
+    node.scrollTop = position === 'start' ? 0 : node.scrollHeight
+    queueMicrotask(() => {
+      if (scrollIntent.current === position) scrollIntent.current = null
+    })
+  }
+
+  useEffect(() => {
+    latestLineId.current = lines.at(-1)?.id
+    hasRendered.current = true
+    setIsFollowing(!isHistory)
+    setScrollPosition(isHistory ? 'start' : 'end')
+  }, [isHistory])
+
+  useEffect(() => {
+    const latest = lines.at(-1)
+    if (!latest) return
+    if (hasRendered.current && !isHistory && latest.id !== latestLineId.current) {
+      setAnnouncement(`${latest.speaker ?? sourceLabel(latest.source)}: ${latest.text}${latest.pinyin ? `，${latest.pinyin}` : ''}`)
+    }
+    latestLineId.current = latest.id
+    hasRendered.current = true
+    if (isHistory) {
+      setScrollPosition('start')
+    } else if (isFollowing) {
+      setScrollPosition('end')
+    }
+  }, [isFollowing, isHistory, lines])
+
+  const handleScroll = () => {
+    const node = listRef.current
+    if (!node || isHistory || scrollIntent.current) return
+    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight
+    setIsFollowing(distanceFromBottom <= 24)
+  }
+
+  const resumeFollowing = () => {
+    setScrollPosition('end')
+    setIsFollowing(true)
+  }
+
+  return (
+    <>
+      <div className="transcript-list" ref={listRef} onScroll={handleScroll} tabIndex={0} aria-label="Transcript lines">
+        {lines.map((line) => <TranscriptRow key={line.id} line={line} />)}
+      </div>
+      {!isHistory && !isFollowing && (
+        <button className="button button-secondary resume-live-button" type="button" onClick={resumeFollowing}>
+          Resume live
+        </button>
+      )}
+      <div className="visually-hidden" aria-live="polite" aria-atomic="true">{announcement}</div>
+    </>
   )
 }
 
@@ -1067,21 +1449,49 @@ function CandidateCard({
 function ManualVocabularyView({
   form,
   generatedDraft,
+  photoQueue,
+  photoSuggestions,
+  photoInputError,
+  photoCost,
+  photoModel,
+  photoReadProgress,
+  vocabulary,
   hasApiKey,
   lessonActive,
   busyAction,
   onFormChange,
   onGenerate,
+  onPhotoFiles,
+  onRemovePhoto,
+  onReadPhotos,
+  onTogglePhotoSuggestion,
+  onUpdatePhotoSuggestion,
+  onTogglePhotoSuggestionDetails,
+  onSavePhotoEntries,
   onSave,
   onOpenSettings,
 }: {
   form: ManualVocabularyForm
   generatedDraft?: ManualVocabularyDraft
+  photoQueue: PhotoQueueItem[]
+  photoSuggestions: PhotoSuggestion[]
+  photoInputError?: string
+  photoCost: number
+  photoModel?: string
+  photoReadProgress?: { current: number; total: number }
+  vocabulary: AppSnapshot['vocabulary']
   hasApiKey: boolean
   lessonActive: boolean
   busyAction?: string
   onFormChange: (form: ManualVocabularyForm) => void
   onGenerate: () => void
+  onPhotoFiles: (files: File[]) => void
+  onRemovePhoto: (photoId: string) => void
+  onReadPhotos: () => void
+  onTogglePhotoSuggestion: (suggestionId: string, selected: boolean) => void
+  onUpdatePhotoSuggestion: (suggestionId: string, patch: Partial<ManualVocabularyInput>) => void
+  onTogglePhotoSuggestionDetails: (suggestionId: string) => void
+  onSavePhotoEntries: (entries: ManualVocabularyInput[]) => void
   onSave: (event: FormEvent<HTMLFormElement>) => void
   onOpenSettings: () => void
 }) {
@@ -1099,7 +1509,7 @@ function ManualVocabularyView({
           <p className="eyebrow">Vocabulary builder</p>
           <h1>Add Word</h1>
           <p className="page-intro">
-            Start with one Chinese word. Add anything you already know, then let AI fill only the missing details.
+            Drop photos of notes, slides, or a textbook page. Suggested words stay here until you choose what to save.
           </p>
         </div>
         <div className="heading-actions">
@@ -1108,10 +1518,37 @@ function ManualVocabularyView({
       </section>
 
       <div className="manual-vocabulary-layout">
-        <form className="panel manual-vocabulary-form" onSubmit={onSave}>
+        <div className="manual-vocabulary-main">
+          <PhotoDropZone
+            photoQueue={photoQueue}
+            photoInputError={photoInputError}
+            hasApiKey={hasApiKey}
+            isPreparing={photoQueue.some((photo) => photo.status === 'preparing')}
+            isReading={busyAction === 'recognize-vocabulary-photo'}
+            photoCost={photoCost}
+            photoModel={photoModel}
+            photoReadProgress={photoReadProgress}
+            onPhotoFiles={onPhotoFiles}
+            onRemovePhoto={onRemovePhoto}
+            onReadPhotos={onReadPhotos}
+            onOpenSettings={onOpenSettings}
+          />
+          {photoSuggestions.length > 0 && (
+            <PhotoVocabularyReview
+              suggestions={photoSuggestions}
+              photoQueue={photoQueue}
+              vocabulary={vocabulary}
+              isSaving={busyAction === 'save-photo-vocabulary'}
+              onToggle={onTogglePhotoSuggestion}
+              onUpdate={onUpdatePhotoSuggestion}
+              onToggleDetails={onTogglePhotoSuggestionDetails}
+              onSave={onSavePhotoEntries}
+            />
+          )}
+          <form className="panel manual-vocabulary-form" onSubmit={onSave}>
           <div className="panel-heading">
-            <p className="eyebrow">Word details</p>
-            <h2>Build your vocabulary card</h2>
+            <p className="eyebrow">Type a word</p>
+            <h2>Or add one word yourself</h2>
             <p>Only the simplified Chinese word is required to begin. Every other field is optional until you save.</p>
           </div>
 
@@ -1253,25 +1690,12 @@ function ManualVocabularyView({
             />
           </div>
 
-          {!hasApiKey && (
-            <div className="manual-key-alert" role="status">
-              <div className="manual-key-alert-icon"><Icon name="spark" /></div>
-              <div>
-                <strong>AI generation needs an API key</strong>
-                <p>Add an OpenRouter key in Settings to fill missing details. A complete manual form can still be saved.</p>
-              </div>
-              <button className="button button-secondary button-small" type="button" onClick={onOpenSettings} disabled={isBusy}>
-                Open Settings
-              </button>
-            </div>
-          )}
-
           {lessonActive && (
             <div className="manual-key-alert" role="status">
               <div className="manual-key-alert-icon"><Icon name="waveform" /></div>
               <div>
                 <strong>Generation pauses during live lessons</strong>
-                <p>Finish the lesson before using AI here so capture keeps the full processing budget.</p>
+                <p>Finish the lesson before generating missing details; photo reading remains available during capture.</p>
               </div>
             </div>
           )}
@@ -1304,25 +1728,26 @@ function ManualVocabularyView({
             </button>
           </div>
           {lessonActive
-            ? <p className="helper-text">AI generation is available again after the active lesson finishes.</p>
+            ? <p className="helper-text">Missing-detail generation is available again after the active lesson finishes. Photo reading remains available.</p>
             : !hasApiKey
             ? <p className="helper-text">Generation is unavailable without a key, but saving does not use AI.</p>
             : hasCompleteDetails
             ? <p className="helper-text">Your form is ready to save without another AI request.</p>
             : <p className="helper-text">Missing pinyin, meaning, or sample details must be completed before saving.</p>}
-        </form>
+          </form>
+        </div>
 
         <aside className="manual-vocabulary-side">
           <section className="panel manual-guide-card">
             <PanelHeading
               eyebrow="Simple workflow"
               title="Review before you save"
-              description="Generation creates an editable draft. Your final review is always in control."
+              description="Photos create editable suggestions. Your final review is always in control."
             />
             <ol className="manual-workflow-list">
-              <li><span>1</span><p>Enter the Chinese word and anything you already know.</p></li>
-              <li><span>2</span><p>Generate missing details when needed, then edit every value.</p></li>
-              <li><span>3</span><p>Save the confirmed card to your Vocabulary collection.</p></li>
+              <li><span>1</span><p>Drop notes, slides, or textbook photos to find vocabulary.</p></li>
+              <li><span>2</span><p>Review the combined suggestions and edit details when needed.</p></li>
+              <li><span>3</span><p>Save only the words you choose to your Vocabulary collection.</p></li>
             </ol>
           </section>
           <section className="panel manual-guide-card">
@@ -1339,6 +1764,303 @@ function ManualVocabularyView({
           </section>
         </aside>
       </div>
+    </div>
+  )
+}
+
+function PhotoDropZone({
+  photoQueue,
+  photoInputError,
+  hasApiKey,
+  isPreparing,
+  isReading,
+  photoCost,
+  photoModel,
+  photoReadProgress,
+  onPhotoFiles,
+  onRemovePhoto,
+  onReadPhotos,
+  onOpenSettings,
+}: {
+  photoQueue: PhotoQueueItem[]
+  photoInputError?: string
+  hasApiKey: boolean
+  isPreparing: boolean
+  isReading: boolean
+  photoCost: number
+  photoModel?: string
+  photoReadProgress?: { current: number; total: number }
+  onPhotoFiles: (files: File[]) => void
+  onRemovePhoto: (photoId: string) => void
+  onReadPhotos: () => void
+  onOpenSettings: () => void
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleFiles = useCallback((files: File[]) => {
+    if (files.length === 0 || isReading) return
+    onPhotoFiles(files)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }, [isReading, onPhotoFiles])
+
+  useEffect(() => {
+    const handlePaste = (event: globalThis.ClipboardEvent) => {
+      const clipboardFiles = Array.from(event.clipboardData?.files ?? [])
+      const itemFiles = clipboardFiles.length > 0
+        ? clipboardFiles
+        : Array.from(event.clipboardData?.items ?? [])
+          .filter((item) => item.kind === 'file')
+          .map((item) => item.getAsFile())
+          .filter((file): file is File => Boolean(file))
+      if (itemFiles.length === 0) return
+      event.preventDefault()
+      handleFiles(itemFiles)
+    }
+    window.addEventListener('paste', handlePaste)
+    return () => window.removeEventListener('paste', handlePaste)
+  }, [handleFiles])
+
+  const choosePhoto = () => fileInputRef.current?.click()
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    handleFiles(Array.from(event.dataTransfer.files))
+  }
+
+  return (
+    <section className="panel photo-reader-panel">
+      <div className="panel-heading">
+        <p className="eyebrow">Photo reader</p>
+        <h2>Find words in photos</h2>
+        <p>Suggested words stay separate from the manual form until you choose what to save.</p>
+      </div>
+      <div
+        className={`photo-drop-zone ${photoQueue.length > 0 ? 'has-photos' : ''}`}
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={handleDrop}
+      >
+        {photoQueue.length === 0 ? (
+          <div className="photo-empty-state">
+            <div className="photo-empty-icon"><Icon name="spark" /></div>
+            <div>
+              <strong>Drop photos here</strong>
+              <span>JPEG, PNG, WebP, HEIC, or HEIF. You can add up to 8.</span>
+            </div>
+            <button className="button button-secondary button-small" type="button" onClick={choosePhoto} disabled={isPreparing || isReading}>Choose photos</button>
+          </div>
+        ) : (
+          <>
+            <div className="photo-queue" aria-label="Queued photos">
+              {photoQueue.map((photo, index) => (
+                <article className="photo-queue-item" key={photo.id}>
+                  {photo.previewDataUrl ? (
+                    <img className="photo-preview" src={photo.previewDataUrl} alt={`Photo ${index + 1} preview`} />
+                  ) : (
+                    <div className="photo-preview photo-preview-placeholder" aria-hidden="true"><Icon name="spark" /></div>
+                  )}
+                  <div className="photo-queue-copy">
+                    <strong>Photo {index + 1}</strong>
+                    <span className={`photo-queue-status photo-queue-status-${photo.status}`}>
+                      {photoStatusLabel(photo.status)}
+                    </span>
+                    {photo.error && <span className="photo-reader-error" role="alert">{photo.error}</span>}
+                  </div>
+                  <button
+                    className="button button-ghost button-small photo-remove-button"
+                    type="button"
+                    onClick={() => onRemovePhoto(photo.id)}
+                    disabled={isReading}
+                    aria-label={`Remove photo ${index + 1}`}
+                  >
+                    Remove
+                  </button>
+                </article>
+              ))}
+            </div>
+            <button className="button button-secondary button-small photo-add-button" type="button" onClick={choosePhoto} disabled={isPreparing || isReading}>
+              Add more photos
+            </button>
+          </>
+        )}
+        <input
+          ref={fileInputRef}
+          className="visually-hidden"
+          type="file"
+          aria-label="Choose a vocabulary photo"
+          multiple
+          accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif"
+          onChange={(event) => handleFiles(Array.from(event.target.files ?? []))}
+        />
+      </div>
+      {isPreparing && <p className="photo-reader-status" role="status">Preparing photo previews…</p>}
+      {photoInputError && <div className="photo-reader-error" role="alert">{photoInputError}</div>}
+      {!hasApiKey && (
+        <div className="manual-key-alert photo-key-alert" role="status">
+          <div className="manual-key-alert-icon"><Icon name="spark" /></div>
+          <div>
+            <strong>AI generation needs an API key</strong>
+            <p>Add an OpenRouter key in Settings to find words in photos. A complete manual form can still be saved.</p>
+          </div>
+          <button className="button button-secondary button-small" type="button" onClick={onOpenSettings} disabled={isReading}>
+            Open Settings
+          </button>
+        </div>
+      )}
+      <div className="photo-reader-action-row">
+        <div>
+          {photoReadProgress && <p className="photo-reader-status" role="status">Reading {photoReadProgress.current} of {photoReadProgress.total}</p>}
+          {!photoReadProgress && <p className="helper-text">Learning details stay editable before saving.</p>}
+        </div>
+        <button
+          className="button button-primary"
+          type="button"
+          onClick={onReadPhotos}
+          aria-label="Find words"
+          disabled={!photoQueue.some((photo) => photo.status === 'ready') || !hasApiKey || isPreparing || isReading}
+        >
+          <Icon name="spark" />
+          {isReading ? 'Reading…' : 'Find words'}
+        </button>
+      </div>
+      {photoModel && (
+        <div className="manual-generation-meta photo-generation-meta" role="status" aria-live="polite">
+          <div className="manual-generation-meta-icon"><Icon name="spark" /></div>
+          <div>
+            <strong>Read with {photoModel}</strong>
+            <p>Actual request cost: {formatPhotoCost(photoCost)}.</p>
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function PhotoVocabularyReview({
+  suggestions,
+  photoQueue,
+  vocabulary,
+  isSaving,
+  onToggle,
+  onUpdate,
+  onToggleDetails,
+  onSave,
+}: {
+  suggestions: PhotoSuggestion[]
+  photoQueue: PhotoQueueItem[]
+  vocabulary: AppSnapshot['vocabulary']
+  isSaving: boolean
+  onToggle: (suggestionId: string, selected: boolean) => void
+  onUpdate: (suggestionId: string, patch: Partial<ManualVocabularyInput>) => void
+  onToggleDetails: (suggestionId: string) => void
+  onSave: (entries: ManualVocabularyInput[]) => void
+}) {
+  const selectedEntries = suggestions
+    .filter((suggestion) => suggestion.selected && isCompleteManualVocabularyInput(suggestion.input))
+    .map((suggestion) => normalizePhotoReviewInput(suggestion.input))
+
+  return (
+    <section className="panel photo-review-panel">
+      <div className="panel-heading-row">
+        <div className="panel-heading">
+          <p className="eyebrow">Photo review</p>
+          <h2>Suggested words</h2>
+          <p>Review the combined suggestions, then choose which complete words to save.</p>
+        </div>
+        <span className="soft-badge">{selectedEntries.length} selected</span>
+      </div>
+      <div className="photo-review-list">
+        {suggestions.map((suggestion, index) => {
+          const missingFields = manualVocabularyInputMissingFields(suggestion.input)
+          const isComplete = missingFields.length === 0
+          const alreadySaved = vocabulary.some((entry) => entry.simplified.trim() === suggestion.input.simplified.trim())
+          const sourceLabels = suggestion.photoIds
+            .map((photoId) => photoQueue.findIndex((photo) => photo.id === photoId) + 1)
+            .filter((photoNumber) => photoNumber > 0)
+            .map((photoNumber) => `Photo ${photoNumber}`)
+          const fieldId = (field: string) => `photo-${index}-${field}`
+          return (
+            <article className={`photo-review-card ${isComplete ? '' : 'is-incomplete'}`} key={suggestion.id}>
+              <div className="photo-suggestion-row">
+                <label className="photo-review-select">
+                  <input
+                    type="checkbox"
+                    aria-label={suggestion.input.simplified}
+                    checked={suggestion.selected}
+                    disabled={!isComplete || isSaving}
+                    onChange={(event) => onToggle(suggestion.id, event.target.checked)}
+                  />
+                  <span className="photo-review-word">{suggestion.input.simplified}</span>
+                </label>
+                <span className="photo-suggestion-pinyin">{suggestion.input.pinyin || '—'}</span>
+                <span className="photo-suggestion-meaning">{suggestion.input.meaning || '—'}</span>
+                <span className="photo-suggestion-sources">
+                  {sourceLabels.length > 0
+                    ? sourceLabels.map((label) => <span key={label}>{label}</span>)
+                    : 'Photo'}
+                </span>
+                {alreadySaved && <span className="soft-badge photo-already-saved">Already saved</span>}
+                <button
+                  className="button button-ghost button-small photo-edit-button"
+                  type="button"
+                  aria-label={`Edit ${suggestion.input.simplified}`}
+                  aria-expanded={suggestion.expanded}
+                  onClick={() => onToggleDetails(suggestion.id)}
+                  disabled={isSaving}
+                >
+                  Edit
+                </button>
+              </div>
+              {!isComplete && (
+                <p className="photo-review-incomplete" role="status">
+                  Missing: {missingFields.join(', ')}
+                </p>
+              )}
+              {suggestion.expanded && (
+                <div className="photo-review-fields">
+                  <PhotoReviewField id={fieldId('pinyin')} label="Pinyin" value={suggestion.input.pinyin ?? ''} onChange={(value) => onUpdate(suggestion.id, { pinyin: value })} />
+                  <PhotoReviewField id={fieldId('meaning')} label="Meaning" value={suggestion.input.meaning ?? ''} onChange={(value) => onUpdate(suggestion.id, { meaning: value })} />
+                  <PhotoReviewField id={fieldId('traditional')} label="Traditional" value={suggestion.input.traditional ?? ''} onChange={(value) => onUpdate(suggestion.id, { traditional: value })} />
+                  <PhotoReviewField id={fieldId('part-of-speech')} label="Part of speech" value={suggestion.input.partOfSpeech ?? ''} onChange={(value) => onUpdate(suggestion.id, { partOfSpeech: value })} />
+                  <PhotoReviewField id={fieldId('classifier')} label="Classifier" value={suggestion.input.classifier ?? ''} onChange={(value) => onUpdate(suggestion.id, { classifier: value })} />
+                  <PhotoReviewField id={fieldId('example')} label="Example" value={suggestion.input.example ?? ''} onChange={(value) => onUpdate(suggestion.id, { example: value })} wide />
+                  <PhotoReviewField id={fieldId('example-pinyin')} label="Example pinyin" value={suggestion.input.examplePinyin ?? ''} onChange={(value) => onUpdate(suggestion.id, { examplePinyin: value })} />
+                  <PhotoReviewField id={fieldId('example-translation')} label="Example translation" value={suggestion.input.exampleTranslation ?? ''} onChange={(value) => onUpdate(suggestion.id, { exampleTranslation: value })} />
+                  <PhotoReviewField id={fieldId('tags')} label="Tags" value={(suggestion.input.tags ?? []).join(', ')} onChange={(value) => onUpdate(suggestion.id, { tags: parseTags(value) })} wide />
+                </div>
+              )}
+            </article>
+          )
+        })}
+      </div>
+      <div className="photo-review-actions">
+        <p className="helper-text">Unchecked words are not saved.</p>
+        <button className="button button-primary" type="button" onClick={() => onSave(selectedEntries)} disabled={isSaving || selectedEntries.length === 0}>
+          <Icon name="check" />
+          {isSaving ? 'Saving selected…' : 'Save selected'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function PhotoReviewField({
+  id,
+  label,
+  value,
+  onChange,
+  wide = false,
+}: {
+  id: string
+  label: string
+  value: string
+  onChange: (value: string) => void
+  wide?: boolean
+}) {
+  return (
+    <div className={`field-group photo-review-field ${wide ? 'photo-review-field-wide' : ''}`}>
+      <label className="field-label" htmlFor={id}>{label}</label>
+      {wide || label === 'Example'
+        ? <textarea id={id} className="text-input textarea" value={value} onChange={(event) => onChange(event.target.value)} rows={2} />
+        : <input id={id} className="text-input" value={value} onChange={(event) => onChange(event.target.value)} />}
     </div>
   )
 }
@@ -1474,6 +2196,7 @@ function SettingsView({
   const [keyDraft, setKeyDraft] = useState('')
   const [sttModel, setSttModel] = useState(normalizeModel(snapshot.settings.sttModel, STT_MODEL_OPTIONS, DEFAULT_STT_MODEL))
   const [analyzerModel, setAnalyzerModel] = useState(normalizeModel(snapshot.settings.analyzerModel, ANALYZER_MODEL_OPTIONS, DEFAULT_ANALYZER_MODEL))
+  const [visionModel, setVisionModel] = useState(normalizeModel(snapshot.settings.visionModel, VISION_MODEL_OPTIONS, DEFAULT_VISION_MODEL))
   const [retention, setRetention] = useState(snapshot.settings.audioRetention)
   const [ocrEnabled, setOcrEnabled] = useState(snapshot.settings.ocrEnabled)
   const [microphoneEnabled, setMicrophoneEnabled] = useState(snapshot.settings.microphoneEnabled)
@@ -1481,6 +2204,7 @@ function SettingsView({
   useEffect(() => {
     setSttModel(normalizeModel(snapshot.settings.sttModel, STT_MODEL_OPTIONS, DEFAULT_STT_MODEL))
     setAnalyzerModel(normalizeModel(snapshot.settings.analyzerModel, ANALYZER_MODEL_OPTIONS, DEFAULT_ANALYZER_MODEL))
+    setVisionModel(normalizeModel(snapshot.settings.visionModel, VISION_MODEL_OPTIONS, DEFAULT_VISION_MODEL))
     setRetention(snapshot.settings.audioRetention)
     setOcrEnabled(snapshot.settings.ocrEnabled)
     setMicrophoneEnabled(snapshot.settings.microphoneEnabled)
@@ -1491,6 +2215,7 @@ function SettingsView({
     const patch: SettingsPatch = {
       sttModel,
       analyzerModel,
+      visionModel,
       audioRetention: retention,
       ocrEnabled,
       microphoneEnabled,
@@ -1560,13 +2285,20 @@ function SettingsView({
                   {ANALYZER_MODEL_OPTIONS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
                 </select>
               </div>
+              <div className="field-group">
+                <label className="field-label" htmlFor="vision-model">Vision model</label>
+                <select id="vision-model" className="text-input" value={visionModel} onChange={(event) => setVisionModel(event.target.value)}>
+                  {VISION_MODEL_OPTIONS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+                </select>
+                <p className="helper-text">Flash is the inexpensive default; 30B is the handwriting fallback.</p>
+              </div>
             </div>
             <div className="budget-row">
               <div>
-                <strong>Hard budget</strong>
-                <p>Pauses cloud processing when the session reaches its cap.</p>
+                <strong>Session cost</strong>
+                <p>Cost is recorded for each lesson. Reaching $0.50 does not stop capture or analysis.</p>
               </div>
-              <span className="budget-value">{formatUsd(snapshot.settings.hardBudgetUsd)} <small>USD</small></span>
+              <span className="budget-value">No cap</span>
             </div>
           </section>
           <section className="panel settings-panel">
@@ -1836,6 +2568,7 @@ function TranscriptRow({ line }: { line: AppSnapshot['transcript'][number] }) {
       </div>
       <div className="transcript-text">
         <p>{line.text}</p>
+        {line.pinyin && <p className="transcript-pinyin">{line.pinyin}</p>}
         {line.speaker && <span>{line.speaker}</span>}
       </div>
       {line.isMoment && <span className="moment-label"><Icon name="bookmark" /> Marked</span>}
@@ -1860,31 +2593,6 @@ function LessonStatus({ status }: { status: AppSnapshot['lesson']['status'] }) {
   return <span className={`lesson-status lesson-status-${status}`}><span className="status-dot" aria-hidden="true" />{labels[status]}</span>
 }
 
-function MetricCard({
-  label,
-  value,
-  detail,
-  icon,
-  tone,
-}: {
-  label: string
-  value: string
-  detail: string
-  icon: IconName
-  tone: string
-}) {
-  return (
-    <article className="metric-card">
-      <div className={`metric-icon metric-${tone}`}><Icon name={icon} /></div>
-      <div>
-        <span>{label}</span>
-        <strong>{value}</strong>
-        <small>{detail}</small>
-      </div>
-    </article>
-  )
-}
-
 function PanelHeading({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
   return (
     <div className="panel-heading">
@@ -1905,13 +2613,9 @@ function CostStatusAlert({ cost }: { cost: AppSnapshot['cost'] }) {
     <div className={`cost-alert ${hardExceeded ? 'cost-alert-hard' : 'cost-alert-warning'}`} role="alert">
       <Icon name="warning" />
       <div>
-        <strong>{hardExceeded ? 'Hard cost limit reached' : 'Cost warning: approaching the hard cost limit'}</strong>
-        <p>
-          {hardExceeded
-            ? 'Cloud transcription and extraction are paused. Local capture and mark timestamps continue; a new lesson starts with a fresh budget.'
-            : `Projected cost is ${formatUsd(cost.projectedUsd)} against the ${formatUsd(cost.hardBudgetUsd)} session cap.`}
-        </p>
-        <span>Current {formatUsd(cost.currentUsd)} · Cap {formatUsd(cost.hardBudgetUsd)}</span>
+        <strong>This lesson has spent {formatUsd(cost.currentUsd)}</strong>
+        <p>Capture and analysis continue. There is no automatic cost stop.</p>
+        <span>Current {formatUsd(cost.currentUsd)} · Projected {formatUsd(cost.projectedUsd)}</span>
       </div>
     </div>
   )
@@ -2026,12 +2730,24 @@ function formatTimestamp(value: string): string {
   return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(date)
 }
 
-function formatStartedAt(value?: string): string {
-  return value ? `since ${formatTimestamp(value)}` : 'just now'
+function formatLessonDate(value?: string): string {
+  if (!value) return 'Undated lesson'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
-function retentionLabel(value: AppSnapshot['privacy']['audioRetention']): string {
-  return value === 'sessionOnly' ? 'Session only' : value === 'oneDay' ? '1 day' : '7 days'
+function formatPhotoCost(value: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: value > 0 && value < 0.01 ? 4 : 2,
+    maximumFractionDigits: 4,
+  }).format(value)
+}
+
+function formatStartedAt(value?: string): string {
+  return value ? `since ${formatTimestamp(value)}` : 'just now'
 }
 
 function labelForTarget(target: TargetApp): string {
@@ -2064,6 +2780,78 @@ function parseTags(value: string): string[] {
   return Array.from(new Set(value.split(',').map((tag) => tag.trim()).filter(Boolean)))
 }
 
+function photoStatusLabel(status: PhotoQueueStatus): string {
+  if (status === 'preparing') return 'Preparing'
+  if (status === 'ready') return 'Ready'
+  if (status === 'reading') return 'Reading'
+  if (status === 'done') return 'Done'
+  if (status === 'no-words') return 'No words'
+  return 'Failed'
+}
+
+const ACCEPTED_PHOTO_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'])
+
+function isAcceptedPhotoFile(file: File): boolean {
+  const type = file.type.toLowerCase()
+  const name = file.name.toLowerCase()
+  return ACCEPTED_PHOTO_MIME_TYPES.has(type) || /\.(?:jpe?g|png|webp|heic|heif)$/.test(name)
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('This browser could not read the selected photo.'))
+    reader.onerror = () => reject(new Error('This browser could not read the selected photo.'))
+    reader.readAsDataURL(file)
+  })
+}
+
+async function preparePhoto(file: File): Promise<PreparedPhoto> {
+  if (!isAcceptedPhotoFile(file)) {
+    throw new Error('Choose a JPEG, PNG, WebP, HEIC, or HEIF photo.')
+  }
+  let objectUrl: string | undefined
+  try {
+    const source = typeof URL.createObjectURL === 'function'
+      ? (objectUrl = URL.createObjectURL(file))
+      : await readFileAsDataUrl(file)
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image()
+      element.onload = () => resolve(element)
+      element.onerror = () => reject(new Error('This browser could not decode this photo. Try a JPEG, PNG, or WebP image.'))
+      element.src = source
+    })
+    const sourceWidth = image.naturalWidth || image.width
+    const sourceHeight = image.naturalHeight || image.height
+    if (!sourceWidth || !sourceHeight) {
+      throw new Error('This browser could not decode this photo. Try a JPEG, PNG, or WebP image.')
+    }
+    const scale = Math.min(1, 1280 / Math.max(sourceWidth, sourceHeight))
+    const width = Math.max(1, Math.round(sourceWidth * scale))
+    const height = Math.max(1, Math.round(sourceHeight * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('This browser could not prepare this photo for reading.')
+    context.drawImage(image, 0, 0, width, height)
+    const previewDataUrl = canvas.toDataURL('image/jpeg', 0.82)
+    const comma = previewDataUrl.indexOf(',')
+    if (comma < 0 || !previewDataUrl.slice(comma + 1)) {
+      throw new Error('This browser could not prepare this photo for reading.')
+    }
+    return {
+      previewDataUrl,
+      imageBase64: previewDataUrl.slice(comma + 1),
+    }
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message.trim()) throw error
+    throw new Error('This browser could not decode this photo. Try a JPEG, PNG, or WebP image.')
+  } finally {
+    if (objectUrl) URL.revokeObjectURL(objectUrl)
+  }
+}
+
 function manualVocabularyFormToInput(form: ManualVocabularyForm): ManualVocabularyInput {
   return {
     simplified: form.simplified.trim(),
@@ -2077,6 +2865,66 @@ function manualVocabularyFormToInput(form: ManualVocabularyForm): ManualVocabula
     exampleTranslation: form.exampleTranslation.trim(),
     tags: parseTags(form.tags),
     aiGenerated: form.aiGenerated,
+  }
+}
+
+function manualVocabularyInputMissingFields(input: ManualVocabularyInput): string[] {
+  return [
+    ['Chinese word (simplified)', input.simplified],
+    ['pinyin', input.pinyin ?? ''],
+    ['English meaning', input.meaning ?? ''],
+    ['Chinese sample sentence', input.example ?? ''],
+    ['sample pinyin', input.examplePinyin ?? ''],
+    ['sample English translation', input.exampleTranslation ?? ''],
+  ]
+    .filter(([, value]) => !value.trim())
+    .map(([label]) => label)
+}
+
+function isCompleteManualVocabularyInput(input: ManualVocabularyInput): boolean {
+  return manualVocabularyInputMissingFields(input).length === 0
+}
+
+function mergePhotoSuggestions(
+  suggestions: PhotoSuggestion[],
+  entries: ManualVocabularyInput[],
+  photoIdToAdd: string,
+  vocabulary: AppSnapshot['vocabulary'],
+): PhotoSuggestion[] {
+  const next = suggestions.map((suggestion) => ({ ...suggestion, photoIds: [...suggestion.photoIds] }))
+  entries.forEach((entry, index) => {
+    const normalized = normalizePhotoReviewInput(entry)
+    const simplified = normalized.simplified.trim()
+    const existing = next.find((suggestion) => suggestion.input.simplified.trim() === simplified)
+    if (existing) {
+      if (!existing.photoIds.includes(photoIdToAdd)) existing.photoIds.push(photoIdToAdd)
+      return
+    }
+    const alreadySaved = vocabulary.some((item) => item.simplified.trim() === simplified)
+    next.push({
+      id: `${photoIdToAdd}-${index}`,
+      input: normalized,
+      photoIds: [photoIdToAdd],
+      selected: isCompleteManualVocabularyInput(normalized) && !alreadySaved,
+      expanded: false,
+    })
+  })
+  return next
+}
+
+function normalizePhotoReviewInput(input: ManualVocabularyInput): ManualVocabularyInput {
+  return {
+    simplified: input.simplified.trim(),
+    traditional: input.traditional?.trim() ?? '',
+    pinyin: input.pinyin?.trim() ?? '',
+    meaning: input.meaning?.trim() ?? '',
+    partOfSpeech: input.partOfSpeech?.trim() ?? '',
+    classifier: input.classifier?.trim() ?? '',
+    example: input.example?.trim() ?? '',
+    examplePinyin: input.examplePinyin?.trim() ?? '',
+    exampleTranslation: input.exampleTranslation?.trim() ?? '',
+    tags: [...(input.tags ?? [])],
+    aiGenerated: true,
   }
 }
 
@@ -2097,16 +2945,7 @@ function manualVocabularyDraftToForm(draft: ManualVocabularyDraft): ManualVocabu
 }
 
 function manualVocabularyMissingFields(form: ManualVocabularyForm): string[] {
-  return [
-    ['Chinese word (simplified)', form.simplified],
-    ['pinyin', form.pinyin],
-    ['English meaning', form.meaning],
-    ['Chinese sample sentence', form.example],
-    ['sample pinyin', form.examplePinyin],
-    ['sample English translation', form.exampleTranslation],
-  ]
-    .filter(([, value]) => !value.trim())
-    .map(([label]) => label)
+  return manualVocabularyInputMissingFields(manualVocabularyFormToInput(form))
 }
 
 function hasCompleteManualVocabularyForm(form: ManualVocabularyForm): boolean {
@@ -2126,6 +2965,7 @@ type IconName =
   | 'play'
   | 'stop'
   | 'bookmark'
+  | 'history'
   | 'coin'
   | 'lock'
   | 'spark'
@@ -2150,6 +2990,7 @@ function Icon({ name }: { name: IconName }) {
     play: <><path d="m8 5 11 7-11 7z" /></>,
     stop: <><rect x="6" y="6" width="12" height="12" rx="2" /></>,
     bookmark: <><path d="M6 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18l-6-4-6 4z" /></>,
+    history: <><path d="M4 6h16M4 12h16M4 18h10" /><circle cx="18" cy="18" r="3" /></>,
     coin: <><circle cx="12" cy="12" r="8" /><path d="M12 7v10M15 9.5c-.7-.7-1.6-1-3-1-1.5 0-2.5.7-2.5 1.8 0 3 5.5 1.2 5.5 4.2 0 1-.9 1.8-2.7 1.8-1.4 0-2.4-.4-3.2-1.2" /></>,
     lock: <><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>,
     spark: <><path d="m12 2 1.3 6.7L20 10l-6.7 1.3L12 18l-1.3-6.7L4 10l6.7-1.3z" /><path d="m19 16 .5 2.5L22 19l-2.5.5L19 22l-.5-2.5L16 19l2.5-.5z" /></>,

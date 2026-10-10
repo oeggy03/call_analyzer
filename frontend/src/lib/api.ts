@@ -9,6 +9,11 @@ import type {
   CapturePermission,
   CandidateStatus,
   ConnectionState,
+  LessonTranscript,
+  LessonTranscriptSummary,
+  ManualVocabularyDraft,
+  ManualVocabularyInput,
+  PhotoVocabularyDraft,
   TargetApp,
 } from './types'
 import type { VocabularyEntry } from './types'
@@ -20,7 +25,6 @@ import type { PrivacyState } from './types'
 import type { Settings } from './types'
 import type { CandidateBucket } from './types'
 import type { VocabularyStatus } from './types'
-import type { ManualVocabularyDraft, ManualVocabularyInput } from './types'
 
 /**
  * Keep Wails method names in one place. If the generated binding changes,
@@ -29,7 +33,10 @@ import type { ManualVocabularyDraft, ManualVocabularyInput } from './types'
 export const BACKEND_METHODS = {
   getSnapshot: 'GetAppSnapshot',
   generateManualVocabulary: 'GenerateManualVocabulary',
+  recognizeVocabularyPhoto: 'RecognizeVocabularyPhoto',
   saveManualVocabulary: 'SaveManualVocabulary',
+  listLessonTranscripts: 'ListLessonTranscripts',
+  getLessonTranscript: 'GetLessonTranscript',
   requestCapturePermission: 'RequestCapturePermission',
   startLesson: 'StartLesson',
   stopLesson: 'StopLesson',
@@ -55,7 +62,10 @@ export interface AppApi {
   readonly mode: ApiMode
   getSnapshot(): Promise<AppSnapshot>
   generateManualVocabulary(input: ManualVocabularyInput): Promise<ManualVocabularyDraft>
+  recognizeVocabularyPhoto(imageBase64: string): Promise<PhotoVocabularyDraft>
   saveManualVocabulary(input: ManualVocabularyInput): Promise<AppSnapshot>
+  listLessonTranscripts(limit: number): Promise<LessonTranscriptSummary[]>
+  getLessonTranscript(lessonId: string): Promise<LessonTranscript>
   requestCapturePermission(): Promise<AppSnapshot>
   startLesson(input: StartLessonInput): Promise<AppSnapshot>
   stopLesson(): Promise<AppSnapshot>
@@ -108,11 +118,13 @@ const DEMO_TIMESTAMP = '2026-09-29T14:30:00.000Z'
 const DEMO_MOMENT_TIMESTAMP = '2026-09-29T14:30:05.000Z'
 const DEMO_MANUAL_VOCABULARY_MODEL = 'qwen/qwen3-32b'
 const DEMO_MANUAL_VOCABULARY_COST = 0.0002
+const DEMO_PHOTO_VOCABULARY_COST = 0.0001
 
 const demoTranscript: TranscriptLine[] = [
   {
     id: 'line-1',
     text: '我们下周可以把这个方案再讨论一下。',
+    pinyin: 'wǒ men xià zhōu kě yǐ bǎ zhè gè fāng àn zài tǎo lùn yī xià。',
     source: 'remote',
     timestamp: '2026-09-29T14:29:42.000Z',
     speaker: 'Remote',
@@ -120,6 +132,7 @@ const demoTranscript: TranscriptLine[] = [
   {
     id: 'line-2',
     text: '好的，我先整理一下重点。',
+    pinyin: 'hǎo de， wǒ xiān zhěng lǐ yī xià zhòng diǎn。',
     source: 'microphone',
     timestamp: '2026-09-29T14:29:49.000Z',
     speaker: 'You',
@@ -127,9 +140,52 @@ const demoTranscript: TranscriptLine[] = [
   {
     id: 'line-3',
     text: '这个表达在工作场景里很常见。',
+    pinyin: 'zhè gè biǎo dá zài gōng zuò chǎng jǐng lǐ hěn cháng jiàn。',
     source: 'remote',
     timestamp: '2026-09-29T14:29:58.000Z',
     speaker: 'Remote',
+  },
+]
+
+const demoPastLessons: LessonTranscript[] = [
+  {
+    lesson: {
+      id: 'demo-lesson-2',
+      title: 'zoom',
+      startedAt: '2026-09-28T09:15:00.000Z',
+      endedAt: '2026-09-28T09:42:00.000Z',
+      segmentCount: 2,
+      finalCost: 0.0031,
+    },
+    lines: [
+      {
+        id: 'past-line-1',
+        text: '上次我们确认了发布日期。',
+        pinyin: 'shàng cì wǒ men què rèn le fā bù rì qī。',
+        source: 'remote',
+        timestamp: '2026-09-28T09:27:00.000Z',
+        speaker: 'Remote',
+      },
+      {
+        id: 'past-line-2',
+        text: '我会把更新后的计划发给大家。',
+        pinyin: 'wǒ huì bǎ gēng xīn hòu de jì huà fā gěi dà jiā。',
+        source: 'microphone',
+        timestamp: '2026-09-28T09:28:12.000Z',
+        speaker: 'You',
+      },
+    ],
+  },
+  {
+    lesson: {
+      id: 'demo-lesson-1',
+      title: 'Weekly planning',
+      startedAt: '2026-09-27T14:30:00.000Z',
+      endedAt: '2026-09-27T14:51:00.000Z',
+      segmentCount: 3,
+      finalCost: 0,
+    },
+    lines: demoTranscript,
   },
 ]
 
@@ -301,6 +357,7 @@ function createDemoSnapshot(): AppSnapshot {
       openRouterKeyConfigured: true,
       sttModel: 'qwen/qwen3-asr-1.7b',
       analyzerModel: 'qwen/qwen3-32b',
+      visionModel: 'qwen/qwen3.7-flash',
       hardBudgetUsd: 0.5,
       audioRetention: 'sessionOnly',
       ocrEnabled: false,
@@ -356,6 +413,74 @@ export function isManualVocabularyDraft(value: unknown): value is ManualVocabula
   return value.tags === undefined || (Array.isArray(value.tags) && value.tags.every((tag) => typeof tag === 'string'))
 }
 
+function isManualVocabularyInputValue(value: unknown, requireAiGenerated = false): value is ManualVocabularyInput {
+  if (!isRecord(value) || typeof value.simplified !== 'string' || !value.simplified.trim()) return false
+  const stringFields = [
+    'traditional',
+    'pinyin',
+    'meaning',
+    'partOfSpeech',
+    'classifier',
+    'example',
+    'examplePinyin',
+    'exampleTranslation',
+  ]
+  if (!stringFields.every((field) => isOptionalString(value[field]))) return false
+  if (value.tags !== undefined && (!Array.isArray(value.tags) || !value.tags.every((tag) => typeof tag === 'string'))) return false
+  if (value.aiGenerated !== undefined && typeof value.aiGenerated !== 'boolean') return false
+  return !requireAiGenerated || value.aiGenerated === true
+}
+
+export function isPhotoVocabularyDraft(value: unknown): value is PhotoVocabularyDraft {
+  if (!isRecord(value)) return false
+  return (
+    Array.isArray(value.entries) &&
+    value.entries.every((entry) => isManualVocabularyInputValue(entry, true)) &&
+    typeof value.model === 'string' &&
+    Boolean(value.model.trim()) &&
+    typeof value.cost === 'number' &&
+    Number.isFinite(value.cost) &&
+    value.cost >= 0
+  )
+}
+
+function isTranscriptLineValue(value: unknown): value is TranscriptLine {
+  if (!isRecord(value)) return false
+  const validSources = ['microphone', 'remote', 'system', 'system/ocr', 'system/manual']
+  return (
+    typeof value.id === 'string' &&
+    typeof value.text === 'string' &&
+    typeof value.timestamp === 'string' &&
+    typeof value.source === 'string' &&
+    validSources.includes(value.source) &&
+    isOptionalString(value.speaker) &&
+    (value.isMoment === undefined || typeof value.isMoment === 'boolean')
+  )
+}
+
+export function isLessonTranscriptSummary(value: unknown): value is LessonTranscriptSummary {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.id === 'string' &&
+    Boolean(value.id.trim()) &&
+    typeof value.title === 'string' &&
+    Boolean(value.title.trim()) &&
+    isOptionalString(value.startedAt) &&
+    isOptionalString(value.endedAt) &&
+    typeof value.segmentCount === 'number' &&
+    Number.isInteger(value.segmentCount) &&
+    value.segmentCount >= 0 &&
+    typeof value.finalCost === 'number' &&
+    Number.isFinite(value.finalCost) &&
+    value.finalCost >= 0
+  )
+}
+
+export function isLessonTranscript(value: unknown): value is LessonTranscript {
+  if (!isRecord(value)) return false
+  return isLessonTranscriptSummary(value.lesson) && Array.isArray(value.lines) && value.lines.every(isTranscriptLineValue)
+}
+
 const DEMO_MANUAL_VOCABULARY_EXAMPLES: Record<string, ManualVocabularyInput> = {
   学习: {
     simplified: '学习',
@@ -380,6 +505,34 @@ const DEMO_MANUAL_VOCABULARY_EXAMPLES: Record<string, ManualVocabularyInput> = {
     tags: ['conversation'],
   },
 }
+
+const DEMO_PHOTO_VOCABULARY_ENTRIES: ManualVocabularyInput[] = [
+  {
+    simplified: '学习',
+    traditional: '學習',
+    pinyin: 'xué xí',
+    meaning: 'to study; to learn',
+    partOfSpeech: 'verb',
+    example: '我每天学习中文。',
+    examplePinyin: 'Wǒ měi tiān xué xí Zhōng wén.',
+    exampleTranslation: 'I study Chinese every day.',
+    tags: ['study'],
+    aiGenerated: true,
+  },
+  {
+    simplified: '重点',
+    traditional: '重點',
+    pinyin: 'zhòngdiǎn',
+    meaning: 'key point; main focus',
+    partOfSpeech: 'noun',
+    classifier: '个',
+    example: '请先说一下这个方案的重点。',
+    examplePinyin: 'Qǐng xiān shuō yíxià zhège fāng’àn de zhòngdiǎn.',
+    exampleTranslation: 'Please first explain the key points of this plan.',
+    tags: ['work'],
+    aiGenerated: true,
+  },
+]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -449,7 +602,7 @@ class DemoApi implements AppApi {
       example: normalized.example || generated.example,
       examplePinyin: normalized.examplePinyin || generated.examplePinyin,
       exampleTranslation: normalized.exampleTranslation || generated.exampleTranslation,
-      tags: normalized.tags && normalized.tags.length > 0 ? normalized.tags : generated.tags ?? [],
+      tags: normalized.tags ?? [],
       aiGenerated: Boolean(normalized.aiGenerated) || !hasCompleteManualVocabulary(normalized),
       model: DEMO_MANUAL_VOCABULARY_MODEL,
       cost,
@@ -461,6 +614,61 @@ class DemoApi implements AppApi {
     }
     this.publish()
     return { ...draft, tags: [...(draft.tags ?? [])] }
+  }
+
+  async recognizeVocabularyPhoto(imageBase64: string): Promise<PhotoVocabularyDraft> {
+    if (imageBase64.includes('fail-photo')) {
+      throw new ApiValidationError('This photo could not be read.')
+    }
+    if (!this.snapshot.settings.openRouterKeyConfigured) {
+      throw new ApiValidationError('Add an OpenRouter API key in Settings before reading a photo.')
+    }
+    const entries = imageBase64.includes('single')
+      ? DEMO_PHOTO_VOCABULARY_ENTRIES.slice(0, 1)
+      : imageBase64.includes('photo-b')
+        ? [
+            DEMO_PHOTO_VOCABULARY_ENTRIES[1],
+            {
+              simplified: '方案',
+              traditional: '方案',
+              pinyin: 'fāng àn',
+              meaning: 'plan; proposal',
+              partOfSpeech: 'noun',
+              classifier: '个',
+              example: '我们需要讨论这个方案。',
+              examplePinyin: 'Wǒmen xūyào tǎolùn zhège fāng àn.',
+              exampleTranslation: 'We need to discuss this plan.',
+              tags: [],
+              aiGenerated: true,
+            },
+          ]
+        : DEMO_PHOTO_VOCABULARY_ENTRIES
+    const cost = DEMO_PHOTO_VOCABULARY_COST
+    this.snapshot.cost = {
+      ...this.snapshot.cost,
+      currentUsd: this.snapshot.cost.currentUsd + cost,
+      projectedUsd: Math.max(this.snapshot.cost.projectedUsd, this.snapshot.cost.currentUsd + cost),
+    }
+    this.publish()
+    return {
+      entries: entries.map((entry) => ({ ...entry, tags: [], aiGenerated: true })),
+      model: this.snapshot.settings.visionModel,
+      cost,
+    }
+  }
+
+  async listLessonTranscripts(limit: number): Promise<LessonTranscriptSummary[]> {
+    const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0
+    return demoPastLessons.slice(0, safeLimit).map(({ lesson }) => ({ ...lesson }))
+  }
+
+  async getLessonTranscript(lessonId: string): Promise<LessonTranscript> {
+    const lesson = demoPastLessons.find((item) => item.lesson.id === lessonId)
+    if (!lesson) throw new ApiValidationError('Past lesson transcript no longer exists.')
+    return {
+      lesson: { ...lesson.lesson },
+      lines: lesson.lines.map((line) => ({ ...line })),
+    }
   }
 
   async saveManualVocabulary(input: ManualVocabularyInput): Promise<AppSnapshot> {
@@ -630,6 +838,7 @@ class DemoApi implements AppApi {
     }
     if (patch.sttModel !== undefined) next.sttModel = patch.sttModel
     if (patch.analyzerModel !== undefined) next.analyzerModel = patch.analyzerModel
+    if (patch.visionModel !== undefined) next.visionModel = patch.visionModel
     if (patch.hardBudgetUsd !== undefined) next.hardBudgetUsd = patch.hardBudgetUsd
     if (patch.audioRetention !== undefined) next.audioRetention = patch.audioRetention
     if (patch.ocrEnabled !== undefined) next.ocrEnabled = patch.ocrEnabled
@@ -702,8 +911,38 @@ class RuntimeApi implements AppApi {
     return result
   }
 
+  async recognizeVocabularyPhoto(imageBase64: string): Promise<PhotoVocabularyDraft> {
+    const result = await this.call(BACKEND_METHODS.recognizeVocabularyPhoto, [imageBase64])
+    if (!isPhotoVocabularyDraft(result)) {
+      throw new ApiUnavailableError(
+        `Backend method ${BACKEND_METHODS.recognizeVocabularyPhoto} returned an invalid photo vocabulary draft.`,
+      )
+    }
+    return result
+  }
+
   async saveManualVocabulary(input: ManualVocabularyInput): Promise<AppSnapshot> {
     return this.callMutation(BACKEND_METHODS.saveManualVocabulary, input)
+  }
+
+  async listLessonTranscripts(limit: number): Promise<LessonTranscriptSummary[]> {
+    const result = await this.call(BACKEND_METHODS.listLessonTranscripts, [limit])
+    if (!Array.isArray(result) || !result.every(isLessonTranscriptSummary)) {
+      throw new ApiUnavailableError(
+        `Backend method ${BACKEND_METHODS.listLessonTranscripts} returned invalid lesson transcripts.`,
+      )
+    }
+    return result
+  }
+
+  async getLessonTranscript(lessonId: string): Promise<LessonTranscript> {
+    const result = await this.call(BACKEND_METHODS.getLessonTranscript, [lessonId])
+    if (!isLessonTranscript(result)) {
+      throw new ApiUnavailableError(
+        `Backend method ${BACKEND_METHODS.getLessonTranscript} returned an invalid lesson transcript.`,
+      )
+    }
+    return result
   }
 
   async requestCapturePermission(): Promise<AppSnapshot> {
@@ -834,7 +1073,19 @@ class UnavailableApi implements AppApi {
     return Promise.reject(new ApiUnavailableError())
   }
 
+  recognizeVocabularyPhoto(): Promise<PhotoVocabularyDraft> {
+    return this.fail()
+  }
+
   saveManualVocabulary(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  listLessonTranscripts(): Promise<LessonTranscriptSummary[]> {
+    return this.fail()
+  }
+
+  getLessonTranscript(): Promise<LessonTranscript> {
     return this.fail()
   }
 
@@ -886,7 +1137,7 @@ class UnavailableApi implements AppApi {
     return () => undefined
   }
 
-  private fail(): Promise<AppSnapshot> {
+  private fail<T>(): Promise<T> {
     return Promise.reject(new ApiUnavailableError())
   }
 }

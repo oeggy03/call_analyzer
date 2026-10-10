@@ -22,12 +22,24 @@ export function GetAppSnapshot() {
   return window['go']['main']['App']['GetAppSnapshot']();
 }
 
+export function GetLessonTranscript(arg1) {
+  return window['go']['main']['App']['GetLessonTranscript'](arg1);
+}
+
+export function ListLessonTranscripts(arg1) {
+  return window['go']['main']['App']['ListLessonTranscripts'](arg1);
+}
+
 export function MarkMoment() {
   return window['go']['main']['App']['MarkMoment']();
 }
 
 export function MergeCandidates(arg1, arg2) {
   return window['go']['main']['App']['MergeCandidates'](arg1, arg2);
+}
+
+export function RecognizeVocabularyPhoto(arg1) {
+  return window['go']['main']['App']['RecognizeVocabularyPhoto'](arg1);
 }
 
 export function Refresh() {

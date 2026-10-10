@@ -1,9 +1,40 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { App } from './App'
 import { BACKEND_EVENTS, createApi, createDemoApi, createUnavailableApi } from './lib/api'
 
 function renderDemo() {
   return render(<App apiClient={createDemoApi()} />)
+}
+
+function mockDecodedPhoto(base64: string | string[]) {
+  const values = Array.isArray(base64) ? [...base64] : [base64]
+  class MockImage {
+    naturalWidth = 1600
+    naturalHeight = 900
+    width = 1600
+    height = 900
+    onload: (() => void) | null = null
+    onerror: (() => void) | null = null
+
+    set src(_value: string) {
+      queueMicrotask(() => this.onload?.())
+    }
+  }
+  vi.stubGlobal('Image', MockImage)
+  Object.defineProperty(URL, 'createObjectURL', {
+    configurable: true,
+    value: vi.fn(() => 'blob:photo'),
+  })
+  Object.defineProperty(URL, 'revokeObjectURL', {
+    configurable: true,
+    value: vi.fn(),
+  })
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    drawImage: vi.fn(),
+  } as unknown as CanvasRenderingContext2D)
+  vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockImplementation(
+    () => `data:image/jpeg;base64,${values.shift() ?? base64}`,
+  )
 }
 
 async function openView(label: string) {
@@ -15,6 +46,7 @@ describe('Call Analyzer frontend', () => {
     window.go = undefined
     window.runtime = undefined
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
   })
 
   it('gates lesson start on consent and allows marking a live moment', async () => {
@@ -33,6 +65,43 @@ describe('Call Analyzer frontend', () => {
     fireEvent.click(markButton)
 
     expect(await screen.findByText('Moment marked. It is waiting in Candidate Inbox.')).toBeInTheDocument()
+  })
+
+  it('pauses live transcript following when the user scrolls away', async () => {
+    const api = createDemoApi()
+    const snapshot = await api.getSnapshot()
+    snapshot.transcript = Array.from({ length: 24 }, (_, index) => ({
+      ...snapshot.transcript[index % snapshot.transcript.length],
+      id: `scroll-line-${index}`,
+      text: `滚动测试 ${index}`,
+    }))
+    vi.spyOn(api, 'getSnapshot').mockResolvedValue(snapshot)
+    render(<App apiClient={api} />)
+
+    const list = await screen.findByLabelText('Transcript lines')
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, value: 1200 })
+    Object.defineProperty(list, 'clientHeight', { configurable: true, value: 300 })
+    Object.defineProperty(list, 'scrollTop', { configurable: true, writable: true, value: 0 })
+    fireEvent.scroll(list)
+
+    expect(await screen.findByRole('button', { name: 'Resume live' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Resume live' }))
+    expect(screen.queryByRole('button', { name: 'Resume live' })).not.toBeInTheDocument()
+  })
+
+  it('opens a past transcript from the workspace tab', async () => {
+    renderDemo()
+    fireEvent.click(await screen.findByRole('button', { name: 'Past transcripts' }))
+
+    const lessons = within(await screen.findByRole('listbox', { name: 'Past transcripts' })).getAllByRole('option')
+    fireEvent.click(lessons[0])
+    expect(await screen.findByText('上次我们确认了发布日期。')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Past transcripts' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Live Lesson' }))
+    expect(await screen.findByText('我们下周可以把这个方案再讨论一下。')).toBeInTheDocument()
+    expect(screen.getByText('wǒ men xià zhōu kě yǐ bǎ zhè gè fāng àn zài tǎo lùn yī xià。')).toBeInTheDocument()
+    expect(screen.queryByText('上次我们确认了发布日期。')).not.toBeInTheDocument()
   })
 
   it('gates lesson start on API-key readiness and links to Settings', async () => {
@@ -167,7 +236,7 @@ describe('Call Analyzer frontend', () => {
     vi.spyOn(api, 'getSnapshot').mockResolvedValue(snapshot)
     render(<App apiClient={api} />)
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/Approaching the hard cost limit/i)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/no automatic cost stop/i)
   })
 
   it('filters vocabulary by search text', async () => {
@@ -193,6 +262,7 @@ describe('Call Analyzer frontend', () => {
 
     expect(await screen.findByDisplayValue('xué xí')).toBeInTheDocument()
     expect(screen.getByDisplayValue('to study; to learn')).toBeInTheDocument()
+    expect(screen.getByLabelText('Tags')).toHaveValue('')
     expect(screen.getByText(/qwen\/qwen3-32b/i)).toBeInTheDocument()
     expect(screen.getByText(/actual request cost: <\$0\.001/i)).toBeInTheDocument()
     expect(generateManualVocabulary).toHaveBeenCalledWith(expect.objectContaining({
@@ -207,6 +277,93 @@ describe('Call Analyzer frontend', () => {
     expect(await screen.findByText('学习')).toBeInTheDocument()
     expect(await screen.findByText('to learn carefully')).toBeInTheDocument()
     expect(await screen.findByText(/学习 saved to Vocabulary/i)).toBeInTheDocument()
+  })
+
+  it('keeps a single demo photo result in the suggestion list', async () => {
+    mockDecodedPhoto('single')
+    renderDemo()
+    await openView('Add Word')
+
+    const file = new File(['photo'], 'single.png', { type: 'image/png' })
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(fileInput, { target: { files: [file] } })
+    await waitFor(() => expect(screen.getByAltText('Photo 1 preview')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Find words' }))
+
+    expect(await screen.findByRole('checkbox', { name: '学习' })).toBeInTheDocument()
+    expect(screen.getByLabelText(/Chinese word \(simplified\)/i)).toHaveValue('')
+    expect(screen.getByText('Read with qwen/qwen3.7-flash')).toBeInTheDocument()
+    expect(screen.getByText(/Actual request cost: \$0\.0001/i)).toBeInTheDocument()
+  })
+
+  it('reviews multiple demo photo entries and saves unchecked words only', async () => {
+    mockDecodedPhoto('multiple')
+    const api = createDemoApi()
+    const initialSnapshot = await api.getSnapshot()
+    initialSnapshot.vocabulary = initialSnapshot.vocabulary.filter((entry) => entry.simplified !== '重点')
+    vi.spyOn(api, 'getSnapshot').mockResolvedValue(initialSnapshot)
+    const saveManualVocabulary = vi.spyOn(api, 'saveManualVocabulary')
+    render(<App apiClient={api} />)
+    await openView('Add Word')
+
+    const file = new File(['photo'], 'words.png', { type: 'image/png' })
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(fileInput, { target: { files: [file] } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Find words' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Find words' }))
+    await waitFor(() => expect(screen.getByText('重点')).toBeInTheDocument())
+    expect(screen.getByText('学习')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '重点' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save selected' }))
+
+    await waitFor(() => expect(saveManualVocabulary).toHaveBeenCalledTimes(1))
+    expect(saveManualVocabulary).toHaveBeenCalledWith(expect.objectContaining({ simplified: '学习', aiGenerated: true }))
+    expect(saveManualVocabulary).not.toHaveBeenCalledWith(expect.objectContaining({ simplified: '重点' }))
+  })
+
+  it('queues two photos, reads them sequentially, and merges duplicate words', async () => {
+    mockDecodedPhoto(['photo-a', 'photo-b'])
+    const api = createDemoApi()
+    const recognizeVocabularyPhoto = vi.spyOn(api, 'recognizeVocabularyPhoto')
+    render(<App apiClient={api} />)
+    await openView('Add Word')
+
+    const files = [
+      new File(['photo-a'], 'photo-a.png', { type: 'image/png' }),
+      new File(['photo-b'], 'photo-b.png', { type: 'image/png' }),
+    ]
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(fileInput, { target: { files } })
+    await waitFor(() => expect(screen.getByAltText('Photo 2 preview')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Find words' }))
+
+    expect(await screen.findByText('学习')).toBeInTheDocument()
+    expect(screen.getByText('方案')).toBeInTheDocument()
+    expect(screen.getAllByText('重点')).toHaveLength(1)
+    expect(recognizeVocabularyPhoto).toHaveBeenCalledTimes(2)
+    expect(recognizeVocabularyPhoto).toHaveBeenNthCalledWith(1, 'photo-a')
+    expect(recognizeVocabularyPhoto).toHaveBeenNthCalledWith(2, 'photo-b')
+  })
+
+  it('keeps successful suggestions when one photo fails', async () => {
+    mockDecodedPhoto(['fail-photo', 'normal-photo'])
+    renderDemo()
+    await openView('Add Word')
+
+    const files = [
+      new File(['fail'], 'fail.png', { type: 'image/png' }),
+      new File(['normal'], 'normal.png', { type: 'image/png' }),
+    ]
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(fileInput, { target: { files } })
+    await waitFor(() => expect(screen.getByAltText('Photo 2 preview')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Find words' }))
+
+    expect(await screen.findByText('学习')).toBeInTheDocument()
+    expect(await screen.findByText('This photo could not be read.')).toBeInTheDocument()
   })
 
   it('saves a complete manual form without an API key or generation', async () => {
@@ -279,7 +436,38 @@ describe('Call Analyzer frontend', () => {
     const fakeApp = {
       GetAppSnapshot: vi.fn().mockResolvedValue(snapshot),
       GenerateManualVocabulary: vi.fn().mockResolvedValue(manualDraft),
+      RecognizeVocabularyPhoto: vi.fn().mockResolvedValue({
+        entries: [{
+          simplified: '新词',
+          traditional: '新詞',
+          pinyin: 'xīn cí',
+          meaning: 'new word',
+          example: '这是新词。',
+          examplePinyin: 'Zhè shì xīn cí.',
+          exampleTranslation: 'This is a new word.',
+          aiGenerated: true,
+        }],
+        model: 'qwen/qwen3.7-flash',
+        cost: 0.0001,
+      }),
       SaveManualVocabulary: vi.fn().mockResolvedValue(snapshot),
+      ListLessonTranscripts: vi.fn().mockResolvedValue([{
+        id: 'lesson-1',
+        title: 'zoom',
+        startedAt: '2026-09-29T14:00:00.000Z',
+        segmentCount: 1,
+        finalCost: 0.001,
+      }]),
+      GetLessonTranscript: vi.fn().mockResolvedValue({
+        lesson: {
+          id: 'lesson-1',
+          title: 'zoom',
+          startedAt: '2026-09-29T14:00:00.000Z',
+          segmentCount: 1,
+          finalCost: 0.001,
+        },
+        lines: snapshot.transcript.slice(0, 1),
+      }),
       RequestCapturePermission: vi.fn().mockResolvedValue(snapshot),
       StartLesson: vi.fn().mockResolvedValue(snapshot),
       StopLesson: vi.fn().mockResolvedValue(snapshot),
@@ -325,7 +513,10 @@ describe('Call Analyzer frontend', () => {
     expect(runtimeApi.mode).toBe('runtime')
     await runtimeApi.getSnapshot()
     await runtimeApi.generateManualVocabulary(manualInput)
+    await runtimeApi.recognizeVocabularyPhoto('photo-base64')
     await runtimeApi.saveManualVocabulary(manualInput)
+    await runtimeApi.listLessonTranscripts(30)
+    await runtimeApi.getLessonTranscript('lesson-1')
     await runtimeApi.requestCapturePermission()
     await runtimeApi.startLesson({ target: 'zoom', consent: true })
     await runtimeApi.stopLesson()
@@ -339,7 +530,10 @@ describe('Call Analyzer frontend', () => {
     await runtimeApi.refresh()
 
     expect(fakeApp.GenerateManualVocabulary).toHaveBeenCalledWith(manualInput)
+    expect(fakeApp.RecognizeVocabularyPhoto).toHaveBeenCalledWith('photo-base64')
     expect(fakeApp.SaveManualVocabulary).toHaveBeenCalledWith(manualInput)
+    expect(fakeApp.ListLessonTranscripts).toHaveBeenCalledWith(30)
+    expect(fakeApp.GetLessonTranscript).toHaveBeenCalledWith('lesson-1')
     expect(fakeApp.StartLesson).toHaveBeenCalledWith({ target: 'zoom', consent: true })
     expect(fakeApp.ConfirmCandidate).toHaveBeenCalledWith('candidate-1')
     expect(fakeApp.EditCandidate).toHaveBeenCalledWith('candidate-1', editPatch)

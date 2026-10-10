@@ -27,6 +27,7 @@ export interface LessonState {
 export interface TranscriptLine {
   id: string
   text: string
+  pinyin?: string
   source: TranscriptSource
   timestamp: string
   speaker?: string
@@ -89,6 +90,7 @@ export interface Settings {
   openRouterKeyConfigured: boolean
   sttModel: string
   analyzerModel: string
+  visionModel: string
   hardBudgetUsd: number
   audioRetention: PrivacyState['audioRetention']
   ocrEnabled: boolean
@@ -142,6 +144,26 @@ export interface ManualVocabularyDraft extends ManualVocabularyInput {
   cost: number
 }
 
+export interface PhotoVocabularyDraft {
+  entries: ManualVocabularyInput[]
+  model: string
+  cost: number
+}
+
+export interface LessonTranscriptSummary {
+  id: string
+  title: string
+  startedAt?: string
+  endedAt?: string
+  segmentCount: number
+  finalCost: number
+}
+
+export interface LessonTranscript {
+  lesson: LessonTranscriptSummary
+  lines: TranscriptLine[]
+}
+
 export interface CandidateEditPatch {
   simplified?: string
   traditional?: string
@@ -159,6 +181,7 @@ export interface SettingsPatch {
   openRouterKey?: string
   sttModel?: string
   analyzerModel?: string
+  visionModel?: string
   hardBudgetUsd?: number
   audioRetention?: Settings['audioRetention']
   ocrEnabled?: boolean

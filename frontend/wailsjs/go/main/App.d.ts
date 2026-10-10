@@ -12,9 +12,15 @@ export function GenerateManualVocabulary(arg1:main.ManualVocabularyInput):Promis
 
 export function GetAppSnapshot():Promise<main.AppSnapshot>;
 
+export function GetLessonTranscript(arg1:string):Promise<main.LessonTranscript>;
+
+export function ListLessonTranscripts(arg1:number):Promise<Array<main.LessonTranscriptSummary>>;
+
 export function MarkMoment():Promise<main.AppSnapshot>;
 
 export function MergeCandidates(arg1:string,arg2:string):Promise<main.AppSnapshot>;
+
+export function RecognizeVocabularyPhoto(arg1:string):Promise<main.PhotoVocabularyDraft>;
 
 export function Refresh():Promise<main.AppSnapshot>;
 
