@@ -692,9 +692,6 @@ func (s *Service) ListTargets(ctx context.Context) ([]capture.Target, error) {
 }
 
 func (s *Service) ValidateTarget(ctx context.Context, target string) error {
-	if target != "zoom" && target != "us.zoom.xos" {
-		return nil
-	}
 	targets, err := s.ListTargets(ctx)
 	if err != nil {
 		s.mu.Lock()
@@ -705,15 +702,24 @@ func (s *Service) ValidateTarget(ctx context.Context, target string) error {
 	s.mu.Lock()
 	s.permission = capture.PermissionGranted
 	s.mu.Unlock()
+	if systemAudioTarget(target) {
+		return nil
+	}
 	for _, candidate := range targets {
-		if !candidate.Available {
-			continue
-		}
-		if candidate.ID == "zoom" || candidate.ID == "us.zoom.xos" {
+		if candidate.Available && candidate.ID == target {
 			return nil
 		}
 	}
-	return errors.New("open Zoom before starting a lesson, then try again")
+	return fmt.Errorf("open %s before starting a lesson, then try again", target)
+}
+
+func systemAudioTarget(target string) bool {
+	switch strings.TrimSpace(target) {
+	case "", "system", "zoom", "us.zoom.xos", "googleMeet", "teams":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) CapturePermission() capture.Permission {

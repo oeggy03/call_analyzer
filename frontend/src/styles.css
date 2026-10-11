@@ -805,6 +805,17 @@ select:hover,
   flex-direction: column;
 }
 
+.lesson-tag-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.lesson-tag-field .helper-text {
+  margin: 0;
+}
+
 .lesson-panel.is-live {
   border-color: #cbdced;
   box-shadow: 0 8px 24px rgba(57, 116, 200, 0.08);

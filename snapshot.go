@@ -12,7 +12,7 @@ import (
 
 func validTarget(target string) bool {
 	switch target {
-	case "zoom", "us.zoom.xos", "googleMeet", "teams":
+	case "system", "zoom", "us.zoom.xos", "googleMeet", "teams":
 		return true
 	default:
 		return false
@@ -78,8 +78,8 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 		}
 	}
 	target := a.service.Target()
-	if target == "" {
-		target = "zoom"
+	if target == "" || target == "zoom" || target == "us.zoom.xos" || target == "googleMeet" || target == "teams" {
+		target = "system"
 	}
 	connection := "connected"
 	if !health.OK {
@@ -95,6 +95,7 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 		} else if lesson.EndedAt == nil && lessonState.Error != "" {
 			lessonState.Status = "error"
 		}
+		lessonState.Tags = lesson.LessonTags
 	}
 	uiCandidates := a.makeCandidateSnapshots(ctx, candidates)
 	uiVocabulary := make([]VocabularySnapshot, 0, len(vocabulary))

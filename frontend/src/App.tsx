@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, FormEvent, ReactNode } from 'react'
-import { api as defaultApi } from './lib/api'
+import { api as defaultApi, defaultLessonTag } from './lib/api'
 import type { AppApi } from './lib/api'
 import type {
   AppSnapshot,
@@ -182,7 +182,8 @@ export function App({ apiClient = defaultApi }: AppProps) {
   const [actionMessage, setActionMessage] = useState<string>()
   const [busyAction, setBusyAction] = useState<string>()
   const [consent, setConsent] = useState(false)
-  const [selectedTarget, setSelectedTarget] = useState<TargetApp>('zoom')
+  const [lessonTag, setLessonTag] = useState(defaultLessonTag)
+  const lessonTagTouched = useRef(false)
   const [editingCandidate, setEditingCandidate] = useState<Candidate>()
   const [mergeCandidate, setMergeCandidate] = useState<Candidate>()
   const [editDraft, setEditDraft] = useState<CandidateEditDraft>({
@@ -219,7 +220,6 @@ export function App({ apiClient = defaultApi }: AppProps) {
     const unsubscribe = apiClient.subscribe((nextSnapshot) => {
       if (active) {
         setSnapshot(nextSnapshot)
-        setSelectedTarget(nextSnapshot.target)
       }
     })
 
@@ -228,7 +228,6 @@ export function App({ apiClient = defaultApi }: AppProps) {
       .then((nextSnapshot) => {
         if (!active) return
         setSnapshot(nextSnapshot)
-        setSelectedTarget(nextSnapshot.target)
       })
       .catch((error: unknown) => {
         if (active) setLoadError(getErrorMessage(error))
@@ -251,7 +250,6 @@ export function App({ apiClient = defaultApi }: AppProps) {
       try {
         const nextSnapshot = await action()
         setSnapshot(nextSnapshot)
-        setSelectedTarget(nextSnapshot.target)
         setActionMessage(successMessage)
         return true
       } catch (error: unknown) {
@@ -289,10 +287,23 @@ export function App({ apiClient = defaultApi }: AppProps) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [busyAction, editingCandidate, mergeCandidate])
 
+  useEffect(() => {
+    if (current.lesson.status === 'live' || current.lesson.status === 'error') return
+    const timer = window.setInterval(() => {
+      if (!lessonTagTouched.current) setLessonTag(defaultLessonTag())
+    }, 30_000)
+    return () => window.clearInterval(timer)
+  }, [current.lesson.status])
+
   const handleStart = () => {
+    const tags = lessonTag.trim() || defaultLessonTag()
+    if (tags !== lessonTag) {
+      lessonTagTouched.current = false
+      setLessonTag(tags)
+    }
     void runAction(
       'start-lesson',
-      () => apiClient.startLesson({ target: selectedTarget, consent }),
+      () => apiClient.startLesson({ target: 'system', consent, tags }),
       'Lesson started. Your transcript will appear below.',
     )
   }
@@ -302,7 +313,11 @@ export function App({ apiClient = defaultApi }: AppProps) {
       'stop-lesson',
       () => apiClient.stopLesson(),
       'Lesson stopped. Reconciliation and finalization completed.',
-    )
+    ).then((stopped) => {
+      if (!stopped) return
+      lessonTagTouched.current = false
+      setLessonTag(defaultLessonTag())
+    })
   }
 
   const handleRefresh = () => {
@@ -588,7 +603,6 @@ export function App({ apiClient = defaultApi }: AppProps) {
       for (const entry of entries) {
         const nextSnapshot = await apiClient.saveManualVocabulary(entry)
         setSnapshot(nextSnapshot)
-        setSelectedTarget(nextSnapshot.target)
         savedCount += 1
       }
       setPhotoQueue([])
@@ -692,10 +706,13 @@ export function App({ apiClient = defaultApi }: AppProps) {
                 <LiveLessonView
                   snapshot={current}
                   consent={consent}
-                  selectedTarget={selectedTarget}
+                  lessonTag={lessonTag}
                   busyAction={busyAction}
                   onConsentChange={setConsent}
-                  onTargetChange={setSelectedTarget}
+                  onLessonTagChange={(value) => {
+                    lessonTagTouched.current = true
+                    setLessonTag(value)
+                  }}
                   onStart={handleStart}
                   onStop={handleStop}
                   onOpenSettings={() => setActiveView('settings')}
@@ -888,10 +905,10 @@ function TopBar({
 function LiveLessonView({
   snapshot,
   consent,
-  selectedTarget,
+  lessonTag,
   busyAction,
   onConsentChange,
-  onTargetChange,
+  onLessonTagChange,
   onStart,
   onStop,
   onOpenSettings,
@@ -900,10 +917,10 @@ function LiveLessonView({
 }: {
   snapshot: AppSnapshot
   consent: boolean
-  selectedTarget: TargetApp
+  lessonTag: string
   busyAction?: string
   onConsentChange: (value: boolean) => void
-  onTargetChange: (value: TargetApp) => void
+  onLessonTagChange: (value: string) => void
   onStart: () => void
   onStop: () => void
   onOpenSettings: () => void
@@ -916,11 +933,9 @@ function LiveLessonView({
   const isStarting = busyAction === 'start-lesson'
   const isStopping = busyAction === 'stop-lesson'
   const canInteract = snapshot.connection !== 'unavailable'
-  const targetSupported = selectedTarget === 'zoom'
   const hasApiKey = snapshot.settings.openRouterKeyConfigured
   const captureReady = snapshot.capturePermission === 'granted'
-  const zoomReady = snapshot.readiness.checked && snapshot.readiness.targetAvailable
-  const setupReady = hasApiKey && captureReady && zoomReady
+  const setupReady = hasApiKey && captureReady
   const pendingCandidates = snapshot.candidates.filter((candidate) => candidate.status === 'pending').length
 
   return (
@@ -948,26 +963,9 @@ function LiveLessonView({
         <section className="panel capture-panel">
           <PanelHeading
             eyebrow="Capture setup"
-            title="Choose your conversation"
-            description="Provider retention follows ZDR. Local audio follows the retention policy below."
+            title="Listen to any app"
+            description="System audio is transcribed when the speech is Chinese. Your microphone is included when it is enabled in Settings."
           />
-          <div className="field-group">
-            <label className="field-label" htmlFor="target-app">
-              Target app
-            </label>
-            <div className="select-with-icon">
-              <select
-                id="target-app"
-                value={selectedTarget}
-                onChange={(event) => onTargetChange(event.target.value as TargetApp)}
-                disabled={hasActiveLesson || !canInteract}
-              >
-                <option value="zoom">Zoom</option>
-                <option value="googleMeet" disabled>Google Meet (coming later)</option>
-                <option value="teams" disabled>Microsoft Teams (coming later)</option>
-              </select>
-            </div>
-          </div>
           <div className="permission-row">
             <div className="permission-icon">
               <Icon name={snapshot.capturePermission === 'granted' ? 'check' : 'mic'} />
@@ -985,7 +983,7 @@ function LiveLessonView({
           </div>
           <div className="level-grid">
             <AudioMeter label="Your microphone" value={snapshot.levels.mic} color="blue" />
-            <AudioMeter label="Remote audio" value={snapshot.levels.remote} color="purple" />
+            <AudioMeter label="System audio" value={snapshot.levels.remote} color="purple" />
           </div>
           <div className="capture-note">
             <Icon name="shield" />
@@ -1020,7 +1018,7 @@ function LiveLessonView({
                 <div className="setup-checklist-heading">
                   <div>
                     <strong>Startup checks</strong>
-                    <p>Run these checks again after opening Zoom or changing macOS permissions.</p>
+                    <p>Run these checks again after changing macOS permissions.</p>
                   </div>
                   <button className="button button-secondary button-small" type="button" onClick={onPermission} disabled={!canInteract || Boolean(busyAction)}>
                     {busyAction === 'permission' ? 'Checking…' : 'Check setup'}
@@ -1031,17 +1029,6 @@ function LiveLessonView({
                   label="Screen and system audio"
                   detail={captureReady ? 'Permission granted' : snapshot.capturePermission === 'denied' ? 'Permission denied' : 'Not checked'}
                   status={captureReady ? 'ready' : snapshot.capturePermission === 'denied' ? 'blocked' : 'pending'}
-                />
-                <SetupCheck
-                  label="Zoom"
-                  detail={zoomReady
-                    ? 'Open and available to capture'
-                    : !snapshot.readiness.checked
-                    ? 'Not checked'
-                    : !captureReady
-                    ? 'Waiting for capture access'
-                    : 'Zoom is not open'}
-                  status={zoomReady ? 'ready' : snapshot.readiness.checked && captureReady ? 'blocked' : 'pending'}
                 />
                 <SetupCheck label="Participant consent" detail={consent ? 'Confirmed' : 'Confirmation required'} status={consent ? 'ready' : 'pending'} />
                 {snapshot.readiness.error && (
@@ -1056,14 +1043,25 @@ function LiveLessonView({
                   </button>
                 )}
               </div>
-              <button className="button button-primary start-button" type="button" onClick={onStart} disabled={!consent || !canInteract || !targetSupported || !setupReady || isStarting}>
+              <div className="lesson-tag-field">
+                <label className="field-label" htmlFor="lesson-tag">Lesson tag</label>
+                <input
+                  id="lesson-tag"
+                  className="text-input"
+                  value={lessonTag}
+                  onChange={(event) => onLessonTagChange(event.target.value)}
+                  disabled={!canInteract || isStarting}
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                <p className="helper-text">New words extracted from this lesson get this tag. Separate extra tags with commas.</p>
+              </div>
+              <button className="button button-primary start-button" type="button" onClick={onStart} disabled={!consent || !canInteract || !setupReady || isStarting}>
                 <Icon name="play" />
                 {isStarting ? 'Starting lesson…' : 'Start lesson'}
               </button>
               {!hasApiKey
                 ? <p className="helper-text">Configure an API key in Settings to enable lesson capture.</p>
-                : !targetSupported
-                ? <p className="helper-text">Zoom is the only supported target in this macOS MVP.</p>
                 : !setupReady
                 ? <p className="helper-text">Complete the startup checks before beginning capture.</p>
                 : !consent && <p className="helper-text">Consent is required before capture can begin.</p>}
@@ -1074,6 +1072,9 @@ function LiveLessonView({
                 <span className="live-pulse" aria-hidden="true" />
                 <span>{isInterrupted ? 'Capture stopped unexpectedly' : `Capturing ${formatStartedAt(snapshot.lesson.startedAt)}`}</span>
               </div>
+              {formatLessonTags(snapshot.lesson.tags) && (
+                <p className="helper-text">New words from this lesson are tagged {formatLessonTags(snapshot.lesson.tags)}.</p>
+              )}
               <button className="button button-danger start-button" type="button" onClick={onStop} disabled={isStopping}>
                 <Icon name="stop" />
                 {isStopping ? 'Finishing lesson…' : isInterrupted ? 'Finish lesson' : 'Stop lesson'}
@@ -2750,8 +2751,16 @@ function formatStartedAt(value?: string): string {
   return value ? `since ${formatTimestamp(value)}` : 'just now'
 }
 
+function formatLessonTags(tags?: string): string {
+  return (tags ?? '')
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean)
+    .join(', ')
+}
+
 function labelForTarget(target: TargetApp): string {
-  return target === 'googleMeet' ? 'Google Meet' : target === 'teams' ? 'Microsoft Teams' : 'Zoom'
+  return target === 'system' || target === 'zoom' || target === 'googleMeet' || target === 'teams' ? 'Any app' : target
 }
 
 function sourceLabel(source: TranscriptSource): string {

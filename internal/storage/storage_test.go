@@ -58,6 +58,19 @@ func TestSenseClassifierMigrationUpgradesExistingDatabase(t *testing.T) {
 			part_of_speech TEXT NOT NULL DEFAULT '',
 			sort_order INTEGER NOT NULL DEFAULT 0
 		);
+		CREATE TABLE lessons (
+			id TEXT PRIMARY KEY NOT NULL,
+			title TEXT NOT NULL,
+			started_at INTEGER NOT NULL,
+			ended_at INTEGER,
+			created_at INTEGER NOT NULL,
+			consent_recorded INTEGER NOT NULL DEFAULT 0,
+			target TEXT NOT NULL DEFAULT '',
+			stt_model TEXT NOT NULL DEFAULT '',
+			analyzer_model TEXT NOT NULL DEFAULT '',
+			retention_policy TEXT NOT NULL DEFAULT '',
+			final_cost REAL NOT NULL DEFAULT 0
+		);
 		CREATE TABLE schema_migrations (
 			name TEXT PRIMARY KEY NOT NULL,
 			applied_at INTEGER NOT NULL
@@ -87,6 +100,58 @@ func TestSenseClassifierMigrationUpgradesExistingDatabase(t *testing.T) {
 	}
 	defer reopened.Close()
 	assertClassifierColumn(t, ctx, reopened)
+}
+
+func TestLessonTagsMigrationUpgradesExistingDatabase(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "call_analyzer.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE lessons (
+			id TEXT PRIMARY KEY NOT NULL,
+			title TEXT NOT NULL,
+			started_at INTEGER NOT NULL,
+			ended_at INTEGER,
+			created_at INTEGER NOT NULL,
+			consent_recorded INTEGER NOT NULL DEFAULT 0,
+			target TEXT NOT NULL DEFAULT '',
+			stt_model TEXT NOT NULL DEFAULT '',
+			analyzer_model TEXT NOT NULL DEFAULT '',
+			retention_policy TEXT NOT NULL DEFAULT '',
+			final_cost REAL NOT NULL DEFAULT 0
+		);
+		CREATE TABLE schema_migrations (
+			name TEXT PRIMARY KEY NOT NULL,
+			applied_at INTEGER NOT NULL
+		);
+		INSERT INTO schema_migrations(name, applied_at) VALUES
+			('001_init.sql', 1),
+			('002_lesson_metadata.sql', 1),
+			('003_sense_classifier.sql', 1);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var present int
+	if err := store.DB().QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM pragma_table_info('lessons') WHERE name = 'lesson_tags'
+	`).Scan(&present); err != nil {
+		t.Fatal(err)
+	}
+	if present != 1 {
+		t.Fatal("lessons.lesson_tags is missing")
+	}
 }
 
 func TestFreshDatabaseKeepsSenseClassifier(t *testing.T) {

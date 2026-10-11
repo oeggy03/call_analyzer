@@ -189,6 +189,7 @@ export namespace main {
 	    status: string;
 	    startedAt?: string;
 	    error?: string;
+	    tags?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new LessonSnapshot(source);
@@ -200,6 +201,7 @@ export namespace main {
 	        this.status = source["status"];
 	        this.startedAt = source["startedAt"];
 	        this.error = source["error"];
+	        this.tags = source["tags"];
 	    }
 	}
 	export class ReadinessSnapshot {
@@ -497,6 +499,7 @@ export namespace main {
 	export class StartLessonInput {
 	    target: string;
 	    consent: boolean;
+	    tags?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new StartLessonInput(source);
@@ -506,6 +509,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.target = source["target"];
 	        this.consent = source["consent"];
+	        this.tags = source["tags"];
 	    }
 	}
 	

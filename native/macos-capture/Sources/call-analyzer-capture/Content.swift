@@ -157,6 +157,21 @@ struct ShareableContentCatalog {
         return application
     }
 
+    static let systemAudioBundleID = "system"
+
+    static func systemAudioFilter(in content: SCShareableContent) throws -> SCContentFilter {
+        guard let display = content.displays.max(by: {
+            ($0.frame.width * $0.frame.height) < ($1.frame.width * $1.frame.height)
+        }) else {
+            throw CaptureFailure.noDisplay
+        }
+        return SCContentFilter(
+            display: display,
+            excludingApplications: [],
+            exceptingWindows: []
+        )
+    }
+
     static func filter(
         for application: SCRunningApplication,
         in content: SCShareableContent

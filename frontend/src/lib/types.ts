@@ -5,7 +5,7 @@
 
 export type ConnectionState = 'connected' | 'connecting' | 'offline' | 'unavailable' | 'demo'
 export type CapturePermission = 'unknown' | 'requesting' | 'granted' | 'denied'
-export type TargetApp = 'zoom' | 'googleMeet' | 'teams'
+export type TargetApp = 'system' | 'zoom' | 'googleMeet' | 'teams'
 export type LessonStatus = 'idle' | 'starting' | 'live' | 'stopping' | 'error'
 export type TranscriptSource = 'microphone' | 'remote' | 'system' | 'system/ocr' | 'system/manual'
 export type CandidateBucket = 'manual' | 'highConfidence' | 'possibleDuplicate' | 'lowConfidence'
@@ -22,6 +22,7 @@ export interface LessonState {
   status: LessonStatus
   startedAt?: string
   error?: string
+  tags?: string
 }
 
 export interface TranscriptLine {
@@ -123,6 +124,7 @@ export interface AppSnapshot {
 export interface StartLessonInput {
   target: TargetApp
   consent: boolean
+  tags?: string
 }
 
 export interface ManualVocabularyInput {

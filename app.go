@@ -256,16 +256,18 @@ func (a *App) StartLesson(input StartLessonInput) (AppSnapshot, error) {
 	if err != nil {
 		return AppSnapshot{}, err
 	}
+	startedAt := time.Now()
 	lesson, err := a.service.StartLessonWithMetadata(
 		a.context(),
 		target,
-		time.Time{},
+		startedAt,
 		storage.LessonMetadata{
 			ConsentRecorded: true,
 			Target:          target,
 			STTModel:        settings.STTModel,
 			AnalyzerModel:   settings.AnalyzerModel,
 			RetentionPolicy: settings.AudioRetention,
+			LessonTags:      service.NormalizeLessonTags(input.Tags, startedAt),
 		},
 	)
 	if err != nil {
@@ -427,7 +429,7 @@ func timestampFromPointer(value *time.Time) string {
 func (a *App) checkReadiness(ctx context.Context, target string) error {
 	target = normalizeTarget(target)
 	if target == "" {
-		target = "zoom"
+		target = "system"
 	}
 	err := a.service.ValidateTarget(ctx, target)
 	readiness := ReadinessSnapshot{

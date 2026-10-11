@@ -27,6 +27,7 @@ type LessonMetadata struct {
 	STTModel        string
 	AnalyzerModel   string
 	RetentionPolicy string
+	LessonTags      string
 }
 
 type LessonTranscriptSummary struct {
@@ -61,16 +62,17 @@ func (r *LessonRepository) StartWithMetadata(
 		STTModel:        metadata.STTModel,
 		AnalyzerModel:   metadata.AnalyzerModel,
 		RetentionPolicy: metadata.RetentionPolicy,
+		LessonTags:      metadata.LessonTags,
 	}
 	err := r.store.withTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO lessons(
 				id, title, started_at, created_at, consent_recorded, target,
-				stt_model, analyzer_model, retention_policy, final_cost
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				stt_model, analyzer_model, retention_policy, final_cost, lesson_tags
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			lesson.ID, lesson.Title, timeValue(lesson.StartedAt), timeValue(lesson.CreatedAt),
 			lesson.ConsentRecorded, lesson.Target, lesson.STTModel,
-			lesson.AnalyzerModel, lesson.RetentionPolicy, lesson.FinalCost,
+			lesson.AnalyzerModel, lesson.RetentionPolicy, lesson.FinalCost, lesson.LessonTags,
 		)
 		return err
 	})
@@ -136,7 +138,7 @@ func (r *LessonRepository) Get(ctx context.Context, id string) (domain.Lesson, e
 	err := scanLesson(r.store.db.QueryRowContext(ctx, `
 		SELECT id, title, started_at, ended_at, created_at,
 			consent_recorded, target, stt_model, analyzer_model,
-			retention_policy, final_cost
+			retention_policy, final_cost, lesson_tags
 		FROM lessons WHERE id = ?`, id), &lesson)
 	if err != nil {
 		return domain.Lesson{}, err
@@ -151,7 +153,7 @@ func (r *LessonRepository) List(ctx context.Context, limit int) ([]domain.Lesson
 	rows, err := r.store.db.QueryContext(ctx, `
 		SELECT id, title, started_at, ended_at, created_at,
 			consent_recorded, target, stt_model, analyzer_model,
-			retention_policy, final_cost
+			retention_policy, final_cost, lesson_tags
 		FROM lessons ORDER BY started_at DESC LIMIT ?`, limit,
 	)
 	if err != nil {
@@ -245,7 +247,7 @@ func (r *LessonRepository) latest(ctx context.Context, predicate string) (domain
 	err := scanLesson(r.store.db.QueryRowContext(ctx, `
 		SELECT id, title, started_at, ended_at, created_at,
 			consent_recorded, target, stt_model, analyzer_model,
-			retention_policy, final_cost
+			retention_policy, final_cost, lesson_tags
 		FROM lessons`+predicate+`
 		ORDER BY started_at DESC, created_at DESC LIMIT 1`), &lesson)
 	if err != nil {
@@ -422,6 +424,7 @@ func scanLesson(scanner lessonScanner, lesson *domain.Lesson) error {
 		&lesson.AnalyzerModel,
 		&lesson.RetentionPolicy,
 		&lesson.FinalCost,
+		&lesson.LessonTags,
 	); err != nil {
 		return err
 	}

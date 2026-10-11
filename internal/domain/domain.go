@@ -17,6 +17,7 @@ type Lesson struct {
 	AnalyzerModel   string     `json:"analyzerModel,omitempty"`
 	RetentionPolicy string     `json:"retentionPolicy,omitempty"`
 	FinalCost       float64    `json:"finalCost"`
+	LessonTags      string     `json:"lessonTags,omitempty"`
 }
 
 type TranscriptSegment struct {

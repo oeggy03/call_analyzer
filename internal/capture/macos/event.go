@@ -24,8 +24,8 @@ type Config struct {
 	WorkingDir string
 	// Environment is appended to the current environment for the helper.
 	Environment []string
-	// BundleID selects the running application. It defaults to Zoom's bundle
-	// identifier when empty.
+	// BundleID selects the running application. "system" captures audio from
+	// every app on the main display. An empty value uses that same mode.
 	BundleID string
 	// SpoolDir is the parent directory for one private capture session. When
 	// empty, a private temporary directory is used.

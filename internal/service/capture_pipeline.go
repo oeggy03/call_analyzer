@@ -509,6 +509,9 @@ func (s *Service) processAnalysisJob(ctx context.Context, session *captureSessio
 		return
 	}
 	text = chinese.ToSimplified(text)
+	if !chinese.ContainsHan(text) {
+		return
+	}
 	source := job.source
 	if source == "" {
 		source = "microphone"
@@ -719,10 +722,52 @@ func (s *Service) analyzeTranscript(
 	} else {
 		entries, err = vocabularyService.ProcessExtraction(ctx, session.lessonID, segment.ID, validationText, extraction)
 	}
-	if err == nil {
-		s.emit("vocabulary.changed", entries)
+	if err != nil {
+		return err
 	}
-	return err
+	if !manual {
+		tagged, tagErr := s.tagAutomaticEntries(ctx, session.lessonID, entries)
+		if tagErr != nil {
+			s.diagnostic("tagging lesson vocabulary failed", tagErr)
+		} else {
+			entries = tagged
+		}
+	}
+	s.emit("vocabulary.changed", entries)
+	return nil
+}
+
+func (s *Service) tagAutomaticEntries(
+	ctx context.Context,
+	lessonID string,
+	entries []domain.VocabularyEntry,
+) ([]domain.VocabularyEntry, error) {
+	if s.store == nil || lessonID == "" || len(entries) == 0 {
+		return entries, nil
+	}
+	lesson, err := s.store.Lessons().Get(ctx, lessonID)
+	if err != nil {
+		return entries, err
+	}
+	tags := splitLessonTags(lesson.LessonTags)
+	if len(tags) == 0 {
+		return entries, nil
+	}
+	updated := append([]domain.VocabularyEntry(nil), entries...)
+	for index, entry := range updated {
+		if entry.ID == "" || entry.Status != domain.VocabularyStatusCandidate {
+			continue
+		}
+		if err := s.store.Vocabulary().AddTags(ctx, entry.ID, tags); err != nil {
+			return entries, err
+		}
+		refreshed, err := s.store.Vocabulary().Get(ctx, entry.ID)
+		if err != nil {
+			return entries, err
+		}
+		updated[index] = refreshed
+	}
+	return updated, nil
 }
 
 func (s *Service) recentSpeechContext(

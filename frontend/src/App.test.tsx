@@ -67,6 +67,25 @@ describe('Call Analyzer frontend', () => {
     expect(await screen.findByText('Moment marked. It is waiting in Candidate Inbox.')).toBeInTheDocument()
   })
 
+  it('prefills a lesson tag and sends an edited tag when the lesson starts', async () => {
+    const api = createDemoApi()
+    const startLesson = vi.spyOn(api, 'startLesson')
+    render(<App apiClient={api} />)
+
+    const tag = await screen.findByLabelText(/lesson tag/i)
+    expect((tag as HTMLInputElement).value).toMatch(/^lesson_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}$/)
+    fireEvent.change(tag, { target: { value: 'office, lesson_custom' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /consent/i }))
+    fireEvent.click(screen.getByRole('button', { name: /start lesson/i }))
+
+    expect(await screen.findByText('New words from this lesson are tagged office, lesson_custom.')).toBeInTheDocument()
+    expect(startLesson).toHaveBeenCalledWith({
+      target: 'system',
+      consent: true,
+      tags: 'office, lesson_custom',
+    })
+  })
+
   it('pauses live transcript following when the user scrolls away', async () => {
     const api = createDemoApi()
     const snapshot = await api.getSnapshot()

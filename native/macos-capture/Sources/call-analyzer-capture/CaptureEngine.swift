@@ -64,17 +64,22 @@ final class CaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         }
 
         let content = try await ShareableContentCatalog.current()
-        let application = try ShareableContentCatalog.application(
-            bundleID: options.bundleID,
-            in: content
-        )
         if options.microphone {
             try await ShareableContentCatalog.ensureMicrophonePermission()
         }
-        let filter = try ShareableContentCatalog.filter(
-            for: application,
-            in: content
-        )
+        let filter: SCContentFilter
+        if options.bundleID == ShareableContentCatalog.systemAudioBundleID {
+            filter = try ShareableContentCatalog.systemAudioFilter(in: content)
+        } else {
+            let application = try ShareableContentCatalog.application(
+                bundleID: options.bundleID,
+                in: content
+            )
+            filter = try ShareableContentCatalog.filter(
+                for: application,
+                in: content
+            )
+        }
 
         remoteWriter = try AudioChunkWriter(
             source: .remote,

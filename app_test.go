@@ -180,15 +180,12 @@ func TestStartLessonPreflightsKeyAndZoomBeforePersistence(t *testing.T) {
 	if err := secrets.Set(ctx, "OPENROUTER_API_KEY", "test-key"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.StartLesson(StartLessonInput{Target: "zoom", Consent: true}); err == nil ||
-		!strings.Contains(err.Error(), "open Zoom") {
-		t.Fatalf("expected unavailable Zoom preflight error, got %v", err)
+	started, err := app.StartLesson(StartLessonInput{Target: "zoom", Consent: true})
+	if err != nil {
+		t.Fatalf("system audio should start without Zoom: %v", err)
 	}
-	if err := store.DB().QueryRowContext(ctx, "SELECT COUNT(*) FROM lessons").Scan(&lessons); err != nil {
-		t.Fatal(err)
-	}
-	if lessons != 0 {
-		t.Fatalf("unavailable-target preflight created %d lessons", lessons)
+	if started.Lesson.Status != "live" {
+		t.Fatalf("expected a live lesson, got %#v", started.Lesson)
 	}
 }
 
@@ -290,7 +287,7 @@ func (s *noZoomSource) ListTargets(ctx context.Context) ([]capture.Target, error
 	return []capture.Target{{ID: "com.apple.Safari", Name: "Safari", Available: true}}, nil
 }
 
-func TestReadinessExposesMissingZoom(t *testing.T) {
+func TestReadinessAllowsSystemAudioWithoutZoom(t *testing.T) {
 	ctx := context.Background()
 	store, err := storage.Open(ctx, ":memory:")
 	if err != nil {
@@ -308,17 +305,11 @@ func TestReadinessExposesMissingZoom(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := app.RequestCapturePermission(); err == nil || !strings.Contains(err.Error(), "open Zoom") {
-		t.Fatalf("expected actionable Zoom error, got %v", err)
-	}
-	snapshot, err := app.GetAppSnapshot()
+	snapshot, err := app.RequestCapturePermission()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("system audio readiness failed without Zoom: %v", err)
 	}
-	if !snapshot.Readiness.Checked || snapshot.Readiness.TargetAvailable {
+	if !snapshot.Readiness.Checked || !snapshot.Readiness.TargetAvailable || snapshot.Readiness.Error != "" {
 		t.Fatalf("unexpected readiness state: %#v", snapshot.Readiness)
-	}
-	if !strings.Contains(snapshot.Readiness.Error, "open Zoom") {
-		t.Fatalf("missing readiness error detail: %#v", snapshot.Readiness)
 	}
 }

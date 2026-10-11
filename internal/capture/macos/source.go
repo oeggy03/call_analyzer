@@ -17,7 +17,8 @@ import (
 	"github.com/oeggy03/call_analyzer/internal/capture"
 )
 
-const defaultBundleID = "us.zoom.xos"
+const defaultBundleID = "system"
+const systemAudioBundleID = "system"
 
 var helperReadyTimeout = 20 * time.Second
 
@@ -64,11 +65,12 @@ func (s *Source) Configure(options capture.Options) error {
 	if s.running {
 		return ErrAlreadyRunning
 	}
-	switch options.TargetID {
-	case "", "zoom":
-		s.config.BundleID = defaultBundleID
-	default:
-		return fmt.Errorf("macos capture: unsupported target %q", options.TargetID)
+	if systemAudioTarget(options.TargetID) {
+		s.config.BundleID = systemAudioBundleID
+	} else if strings.TrimSpace(options.TargetID) != "" {
+		s.config.BundleID = strings.TrimSpace(options.TargetID)
+	} else {
+		s.config.BundleID = systemAudioBundleID
 	}
 	s.config.Microphone = options.Microphone
 	s.config.OCR = options.OCR
@@ -394,6 +396,15 @@ func (s *Source) resetAfterStartFailure() {
 func (s *Source) cleanupSession(sessionDir string) {
 	if sessionDir != "" {
 		_ = os.RemoveAll(sessionDir)
+	}
+}
+
+func systemAudioTarget(target string) bool {
+	switch strings.TrimSpace(target) {
+	case "", "system", "zoom", "us.zoom.xos", "googleMeet", "teams":
+		return true
+	default:
+		return false
 	}
 }
 

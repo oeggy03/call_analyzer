@@ -948,6 +948,37 @@ func (r *VocabularyRepository) Merge(ctx context.Context, sourceID, targetID str
 	return r.Get(ctx, targetID)
 }
 
+func (r *VocabularyRepository) AddTags(ctx context.Context, entryID string, names []string) error {
+	if entryID == "" {
+		return errors.New("vocabulary: entry id is required")
+	}
+	return r.store.withTx(ctx, func(tx *sql.Tx) error {
+		for _, name := range names {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx,
+				"INSERT INTO tags(id, name) VALUES (?, ?) ON CONFLICT(name) DO NOTHING",
+				newID(), name,
+			); err != nil {
+				return fmt.Errorf("vocabulary: save tag: %w", err)
+			}
+			var tagID string
+			if err := tx.QueryRowContext(ctx, "SELECT id FROM tags WHERE name = ?", name).Scan(&tagID); err != nil {
+				return fmt.Errorf("vocabulary: resolve tag: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx,
+				"INSERT OR IGNORE INTO entry_tags(entry_id, tag_id) VALUES (?, ?)",
+				entryID, tagID,
+			); err != nil {
+				return fmt.Errorf("vocabulary: link tag: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
 func (r *VocabularyRepository) SetTags(ctx context.Context, entryID string, names []string) ([]domain.Tag, error) {
 	if entryID == "" {
 		return nil, errors.New("vocabulary: entry id is required")

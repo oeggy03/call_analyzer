@@ -5,6 +5,7 @@ import "time"
 type StartLessonInput struct {
 	Target  string `json:"target"`
 	Consent bool   `json:"consent"`
+	Tags    string `json:"tags,omitempty"`
 }
 
 type ManualVocabularyInput struct {
@@ -95,6 +96,7 @@ type LessonSnapshot struct {
 	Status    string `json:"status"`
 	StartedAt string `json:"startedAt,omitempty"`
 	Error     string `json:"error,omitempty"`
+	Tags      string `json:"tags,omitempty"`
 }
 
 type AudioLevelsSnapshot struct {

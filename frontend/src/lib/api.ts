@@ -26,6 +26,24 @@ import type { Settings } from './types'
 import type { CandidateBucket } from './types'
 import type { VocabularyStatus } from './types'
 
+export function defaultLessonTag(now = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `lesson_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`
+}
+
+function storedLessonTags(raw?: string): string {
+  const seen = new Set<string>()
+  const tags: string[] = []
+  for (const part of (raw ?? '').split(',')) {
+    const tag = part.trim().replace(/\s+/g, ' ')
+    if (!tag || seen.has(tag)) continue
+    seen.add(tag)
+    tags.push(Array.from(tag).slice(0, 64).join(''))
+    if (tags.length === 8) break
+  }
+  return tags.join(',') || defaultLessonTag()
+}
+
 /**
  * Keep Wails method names in one place. If the generated binding changes,
  * update this map rather than changing UI code.
@@ -723,10 +741,12 @@ class DemoApi implements AppApi {
     this.snapshot.target = input.target
     this.snapshot.capturePermission = 'granted'
     this.snapshot.connection = 'demo'
+    const tags = storedLessonTags(input.tags)
     this.snapshot.lesson = {
       id: this.snapshot.lesson.id ?? 'demo-lesson-1',
       status: 'live',
       startedAt: DEMO_TIMESTAMP,
+      tags,
     }
     this.snapshot.levels = { mic: 0.42, remote: 0.64 }
     this.publish()
