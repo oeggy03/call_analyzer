@@ -11,11 +11,14 @@ source := macos.NewSource(macos.Config{
     SpoolDir:   spoolDir,
     Microphone: true,
     OCR:        true,
-    ChunkSeconds: 10,
+    ChunkSeconds: 2,
 })
 
 err := source.Start(ctx, onAudioFrame)
 ```
+
+The desktop app sets `ChunkSeconds` to 2 in `platform_source_darwin.go`.
+Utterance windows are assembled later in `internal/service/capture_pipeline.go`.
 
 `Config.HelperPath` takes precedence over
 `CALL_ANALYZER_CAPTURE_HELPER`, then `CALL_ANALYZER_CAPTURE_BIN`, then

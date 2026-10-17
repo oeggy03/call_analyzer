@@ -8,7 +8,8 @@ learning workflows.
 ## Commands
 
 ```bash
-npm install
+# From the repository root, ./scripts/setup.sh runs npm ci in this directory.
+npm ci
 npm run dev
 npm run typecheck
 npm test
@@ -27,30 +28,19 @@ The demo defaults are `qwen/qwen3-asr-1.7b` for STT and
 
 `src/lib/api.ts` is the only integration boundary. It detects
 `window.go.main.App` and centralizes the expected Wails method names in
-`BACKEND_METHODS`. Every method returns a full `AppSnapshot`. Argument shapes
-match the Wails contract exactly: `StartLesson` and `SaveSettings` receive one
-object; candidate confirmation, editing, and rejection receive positional
-IDs; `EditCandidate` receives `(candidateID, patch)` where the patch maps
-`pinyin` and/or `meaning`; and `MergeCandidates` receives `(sourceID,
-targetID)`.
+`BACKEND_METHODS`. That object is the method list; do not keep a second copy
+here. `contract_test.go` fails when a listed name is missing on `App`.
 
-The current expected methods are:
-
-- `GetAppSnapshot`
-- `RequestCapturePermission`
-- `StartLesson`
-- `StopLesson`
-- `MarkMoment`
-- `ConfirmCandidate`
-- `EditCandidate`
-- `RejectCandidate`
-- `MergeCandidates`
-- `SaveSettings`
-- `Refresh`
+`GenerateManualVocabulary` returns `ManualVocabularyDraft`. The other methods
+return `AppSnapshot`. Argument shapes are the structs in `app_contract.go` and
+`src/lib/types.ts`. `StartLesson` and `SaveSettings` receive one object.
+Confirm, reject, and merge receive positional IDs. `EditCandidate` receives
+`(candidateID, patch)`; `app.go` maps patch `pinyin` onto `reading`.
 
 The runtime event `call_analyzer:snapshot_changed` is subscribed to when
 `window.runtime.EventsOn` exists. An event payload may be an `AppSnapshot`; if
-it is not, the frontend fetches a fresh snapshot.
+it is not, the frontend fetches a fresh snapshot. The event names are
+`BACKEND_EVENTS`.
 
 Domain types in `src/lib/types.ts` use **camelCase** consistently. The Go
 methods should expose JSON with camelCase keys (for example `capturePermission`,

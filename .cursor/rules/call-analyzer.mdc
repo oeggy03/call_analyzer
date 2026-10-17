@@ -1,0 +1,19 @@
+---
+description: Call Analyzer invariants and where project instructions live
+alwaysApply: true
+---
+
+# Call Analyzer
+
+Follow `AGENTS.md`. Open a linked doc only when that change needs it.
+
+- Model vocabulary stays `candidate` until confirm, reject, merge, or an explicit Add Word save.
+- Never store the OpenRouter key in SQLite, logs, or `AppSnapshot`. The UI only receives `openRouterKeyConfigured`.
+- Do not run `go run ./cmd/evaluate -execute` or send live audio to OpenRouter unless the user asks. Tests use local fakes.
+- A Wails method change updates `app.go`, `app_contract.go`, `frontend/src/lib/types.ts`, and both clients in `frontend/src/lib/api.ts`.
+- Schema changes are a new `internal/storage/migrations/00N_*.sql`. Do not edit an applied migration.
+- Before crossing the UI, service, capture helper, or database, check callers, the snapshot contract, and persisted rows.
+- Preserve unrelated user changes. Run the checks named in `AGENTS.md` and report what was not verified.
+- Update the docs named in `AGENTS.md` when setup, contracts, workflows, or architecture change.
+
+Full check: `./scripts/verify.sh`. The formatting check is `gofmt -l`, not `gofmt -w`.
