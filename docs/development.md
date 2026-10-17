@@ -46,6 +46,11 @@ The app does not load `.env` files. `.env.example` lists the process environment
 
 There is no database server, Redis, or other local service. Most tests open SQLite with `storage.Open(ctx, ":memory:")`; persistence and migration tests use temporary database files.
 
+Tests follow their language conventions: Go `_test.go` files stay beside their
+package code, Vitest specs and setup live in `frontend/src/test`, and Swift
+tests live in `native/macos-capture/Tests`. Synthetic evaluation cases live in
+`fixtures/evaluation`.
+
 ## Fixtures and offline checks
 
 `fixtures/evaluation/manifest.json` has three synthetic cases and no audio paths. From the repository root:

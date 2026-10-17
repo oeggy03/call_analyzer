@@ -24,6 +24,8 @@ runtime shows the backend-unavailable state instead of pretending to capture.
 The demo defaults are `qwen/qwen3-asr-1.7b` for STT and
 `qwen/qwen3-32b` for analysis.
 
+Vitest specs and shared setup live in `src/test`.
+
 ## Backend contract
 
 `src/lib/api.ts` is the only integration boundary. It detects

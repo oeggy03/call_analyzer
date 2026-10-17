@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { App } from './App'
-import { BACKEND_EVENTS, createApi, createDemoApi, createUnavailableApi } from './lib/api'
+import { App } from '../App'
+import { BACKEND_EVENTS, createApi, createDemoApi, createUnavailableApi } from '../lib/api'
 
 function renderDemo() {
   return render(<App apiClient={createDemoApi()} />)
