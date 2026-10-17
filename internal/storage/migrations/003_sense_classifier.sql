@@ -1,0 +1,1 @@
+ALTER TABLE senses ADD COLUMN classifier TEXT NOT NULL DEFAULT '';

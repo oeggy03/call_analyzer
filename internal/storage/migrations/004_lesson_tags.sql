@@ -1,0 +1,1 @@
+ALTER TABLE lessons ADD COLUMN lesson_tags TEXT NOT NULL DEFAULT '';

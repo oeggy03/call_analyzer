@@ -1,0 +1,21 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Local build products
+/build/bin/
+/build/native/
+/native/macos-capture/.build/
+/native/macos-capture/.swiftpm/
+
+# Local databases and captured media
+*.db
+*.db-shm
+*.db-wal
+*.wav
+capture-spool/
+
+# Editor files
+.idea/
+.vscode/
