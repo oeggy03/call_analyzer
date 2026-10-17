@@ -1,20 +1,22 @@
 # Mandarin Lesson Analyzer
 
-A local-first macOS desktop app that captures a consented Zoom lesson, sends
-short speech chunks to OpenRouter for Mandarin/English transcription, proposes
-evidence-backed vocabulary, and keeps confirmed words in SQLite.
+A local-first macOS desktop app for consented lessons. It captures system
+audio from apps on the Mac, optionally includes the microphone, sends short
+speech chunks to OpenRouter for transcription, proposes evidence-backed
+vocabulary, and keeps transcripts and confirmed words in SQLite.
 
 The MVP uses:
 
 - React + TypeScript for the Wails desktop UI.
 - Go for session orchestration, audio buffering, OpenRouter calls, extraction,
-  SQLite, candidate review, budget controls, and future sync.
+  SQLite, candidate review, and cost accounting.
 - A narrow Swift ScreenCaptureKit/Vision helper for APIs macOS does not expose
   to Go. It writes temporary 16 kHz mono WAV chunks which Go consumes and
   deletes.
 
-Automatic suggestions always enter a candidate inbox. They are never promoted
-to trusted vocabulary without confirmation.
+New automatic suggestions enter the candidate inbox. They become trusted
+vocabulary only after confirmation; matching existing entries keep their
+current status.
 
 ## Documentation
 
@@ -34,7 +36,6 @@ Coding agents start at `AGENTS.md`. Read a supporting doc when the change needs 
 
 - Apple Silicon Mac running macOS 15 or later.
 - Go 1.25+, Node.js 22+, npm, Swift 6/Xcode Command Line Tools.
-- Zoom desktop app.
 - An OpenRouter API key with access to:
   - `qwen/qwen3-asr-1.7b`
   - `qwen/qwen3-32b`
@@ -61,8 +62,8 @@ open build/bin/call_analyzer.app
 ```
 
 The first capture request opens macOS privacy controls. Allow Screen & System
-Audio Recording and, only if enabled in Settings, Microphone access. Restart
-the app after changing macOS privacy permissions.
+Audio Recording and, only if microphone capture is enabled in Settings,
+Microphone access. Restart the app after changing macOS privacy permissions.
 
 For frontend-only work with deterministic sample data:
 
@@ -87,43 +88,50 @@ The helper can be overridden with
 
 1. Open Settings and save an OpenRouter API key. On macOS it is written to
    Keychain, never SQLite.
-2. Keep the default Qwen models and the US$0.50 hard lesson budget.
-   Photo reading uses Qwen 3.7 Flash unless you choose the handwriting fallback.
-3. Join the consented Zoom lesson on the same Mac, preferably with headphones.
-4. Select Zoom, acknowledge consent, and start the lesson.
-5. Press `M` or click **Mark Moment** for important words.
-6. Confirm, edit, merge, or reject suggestions in Candidate Inbox.
-7. Confirmed entries appear in Vocabulary immediately.
+2. Join a lesson where all participants have consented to capture.
+3. Acknowledge consent and start the lesson. The Live view captures system
+   audio across apps and does not require Zoom to be running. Microphone
+   capture is enabled by default and can be turned off in Settings.
+4. Press `M` or click **Mark Moment** for important words.
+5. Confirm, edit, merge, or reject suggestions in Candidate Inbox.
+6. Confirmed entries appear in Vocabulary immediately.
 
-You can also open **Add Word** outside a live lesson and enter only the
-simplified Chinese word. **Generate missing details** uses the configured
-analyzer (Qwen 3 32B by default) to propose pinyin, meanings, usage,
-examples, and tags. Review or edit every field before saving. Fully completed
-forms can be saved without an API call. The UI displays the model and actual
-request cost for each generated draft.
+You can also open **Add Word** and enter only the simplified Chinese word.
+**Generate missing details** uses the configured analyzer (Qwen 3 32B by
+default) to propose pinyin, meanings, usage, examples, and tags. Generation is
+unavailable during a live lesson. Review or edit every field before saving.
+Fully completed forms can be saved without an API call, including during a
+live lesson. The UI displays the model and actual request cost for each
+generated draft.
 
 **Read photo** accepts a JPEG, PNG, WebP, HEIC, or HEIF image, resizes it in
-the browser, and asks Qwen 3.7 Flash to recognize the visible Chinese words.
-Several words become a checklist; one word fills the form. Nothing is saved
-until you confirm it. Photo requests do not use the lesson budget and do not
-require zero-data retention. The live transcript stays in a scrolling pane:
-scroll up to pause, then choose **Resume live** or return to the bottom.
+the browser to at most 1280 pixels on its longest side, and encodes it as
+JPEG. Up to eight photos can be queued at once; the backend accepts images up
+to 1.5 MiB and keeps at most 12 suggestions per image. Review and choose
+suggestions before saving. Photo reading and saving are available during a
+live lesson. Photo requests use the configured vision model and record usage
+separately from lesson cost. They do not send Zero Data Retention or
+data-collection-denial routing flags. The live transcript stays in a scrolling
+pane: scroll up to pause, then choose **Resume live** or return to the bottom.
 **Past transcripts** opens earlier lessons without leaving that pane.
 
-Automatic audio is transcribed in utterance-aware 8–15 second windows, with
-two seconds of overlap. Vocabulary extraction batches roughly 20 seconds of
-new transcript to control cost. A manual mark analyzes the complete 25-second
-pre-roll and 10-second post-roll immediately. At the configured hard budget,
-cloud work pauses while local capture and mark timestamps continue.
+Automatic audio is transcribed in utterance-aware windows of up to 15 seconds,
+usually requiring eight seconds of buffered audio before a silence-triggered
+flush. Stopping can flush a shorter final window. Adjacent windows overlap by
+two seconds and use two seconds of trailing silence. Vocabulary extraction
+batches about 20 seconds of new transcript. A manual mark uses up to 25 seconds
+of pre-roll and 10 seconds of post-roll from system audio.
 
-Lesson transcription and vocabulary analysis enforce Zero Data Retention
-routing and deny endpoints marked for data collection. Photo recognition does
-not, because the chosen vision model has no zero-retention endpoint and the
-recognized words are not treated as sensitive. Local audio retention is
-controlled separately; the
-default is session-only temporary chunks. Session spools are deleted after
-processing. The next capture start removes leftover spools whose owner
-process is no longer running (`cleanupStaleSessionSpools`).
+Lesson transcription, vocabulary analysis, and Add Word generation request
+Zero Data Retention routing and deny data collection. Photo recognition does
+not send those controls. Local audio retention is controlled separately. The
+default is session-only temporary chunks. Chunks are removed after processing
+and the session spool is removed when capture stops. A new session removes
+leftover spools whose owner process is no longer running.
+
+The cost display warns at US$0.35. The US$0.50 hard-budget setting remains
+range-validated for compatibility, but it does not stop OpenRouter requests.
+The Settings screen reports that the session has no cap.
 
 ## MVP boundaries
 
@@ -132,8 +140,8 @@ process is no longer running (`cleanupStaleSessionSpools`).
 - The evaluation manifest contains deterministic synthetic fixtures. Accuracy
   should be recalibrated with consent-cleared real lessons before relying on
   unattended automatic capture.
-- OCR follows the display containing the active Zoom window, but there is no
-  user-selectable crop or image-model escalation yet.
+- OCR is off by default. In system mode it receives screen frames from the
+  largest display; there is no user-selected display or crop.
 - Windows capture and hosted sync are extension boundaries only; this release
   implements macOS ScreenCaptureKit, local SQLite, and a disabled outbox API.
 - Audio is session-only in this MVP. Evidence is retained as transcript text
@@ -152,8 +160,8 @@ non-zero when a check fails. Command details, the XCTest skip, and narrower
 commands are in `docs/development.md`.
 
 End-to-end HTTP tests use local fake OpenRouter servers and deterministic PCM;
-they do not spend API credits. A real Zoom capture still requires the macOS
-permissions and a running Zoom process.
+they do not spend API credits. A real system-audio capture requires macOS
+permissions.
 
 `./scripts/verify.sh` includes `go run ./cmd/evaluate`, which validates
 `fixtures/evaluation/manifest.json` and does not call OpenRouter. To run the
@@ -170,7 +178,7 @@ Flows and boundaries are in `docs/architecture.md`. Package roles:
 
 - `app.go`, `snapshot.go`: Wails application contract.
 - `internal/service`: live capture workers and end-to-end analysis pipeline.
-- `internal/openrouter`: privacy-constrained STT and strict structured output.
+- `internal/openrouter`: transcription, text and vision requests, and cost accounting.
 - `internal/storage`: embedded SQLite migrations and repositories.
 - `internal/vocabulary`: pinyin normalization, evidence validation, and
   conservative form+reading deduplication.

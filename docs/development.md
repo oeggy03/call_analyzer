@@ -1,6 +1,6 @@
 # Development
 
-Requirements and the commands below were checked on this Apple Silicon Mac: Go 1.25.14, Node.js 22.23.1, npm 10.9.8, Swift 6.3.2, Wails 2.10.2, macOS 26.5.2. Minimums are lower. The language version in `go.mod` is Go 1.25.0. The root `README.md` requires Node.js 22+, Swift 6, and macOS 15 or later.
+The macOS desktop app requires Go 1.25 or newer, Node.js 22 or newer, npm, macOS 15 or later, and Swift 6. The Go language version in `go.mod` is 1.25.0. Windows builds use the capture stub and do not provide native capture.
 
 Lockfiles to keep: `go.sum` and `frontend/package-lock.json`. The Swift package has no dependencies, so there is no `Package.resolved`.
 
@@ -14,6 +14,22 @@ That checks Go, Node, npm, and Swift, runs `npm ci` and `npm run build` in `fron
 
 Full Xcode is only required for `swift test`. Command Line Tools can build the helper and the desktop app.
 
+On Windows, install Go with the official installer from [go.dev/dl](https://go.dev/dl/), open a new PowerShell window, and check `go version` reports 1.25 or newer. The Windows development machine used for this setup has Go 1.27.2 installed system-wide; `go version` reported `go1.27.2 windows/amd64` on 2026-10-17. This records that machine's toolchain, not a project requirement: `go.mod` still requires Go 1.25.0 or newer. Repository scripts are Bash scripts; the Wails app bundle and Swift helper are macOS-only. For frontend checks on Windows, install dependencies and build directly:
+
+```powershell
+cd frontend
+npm ci
+npm run typecheck
+npm test -- --run
+npm run lint
+npm run build
+```
+
+The Windows Go test run is currently blocked by embedded migration paths: `go test ./internal/storage` reports that `migrations\001_init.sql` cannot be opened (and similarly fails for migrations 003 and 004). Run the complete Go verification on macOS.
+
+The repository enforces LF line endings for Go and shell sources. Keep those
+line endings when editing on Windows; the verification script runs `gofmt`.
+
 ## Environment
 
 The app does not load `.env` files. `.env.example` lists the process environment variables. Export the ones you need.
@@ -21,13 +37,14 @@ The app does not load `.env` files. `.env.example` lists the process environment
 | Variable | Effect |
 | --- | --- |
 | `OPENROUTER_API_KEY` | Read before Keychain. When set, Settings cannot clear the key. Required only for `cmd/evaluate -execute` and for live model calls if Keychain is empty. |
-| `CALL_ANALYZER_CAPTURE_HELPER` | Absolute path to `call-analyzer-capture`. Wins over `CALL_ANALYZER_CAPTURE_BIN` and `build/bin/call-analyzer-capture`. See `resolveHelperPath`. |
+| `CALL_ANALYZER_CAPTURE_HELPER` | Absolute helper path; tried before `CALL_ANALYZER_CAPTURE_BIN`, the executable-adjacent helper, and `build/bin/call-analyzer-capture`. See `resolveHelperPath`. |
 | `CALL_ANALYZER_CAPTURE_BIN` | Alternate helper path. |
 | `WAILS_BIN` | Wails CLI used by `scripts/setup.sh`, `scripts/dev.sh`, and `scripts/build-macos-app.sh`. |
 | `APPLE_SIGNING_IDENTITY` | Passed to `codesign` by `scripts/build-macos-app.sh`. Default `-` is ad-hoc. |
 | `CALL_ANALYZER_CAPTURE_OUTPUT_DIR` | Helper install directory for `scripts/build-macos-capture.sh`. |
+| `CALL_ANALYZER_CAPTURE_SWIFT_SCRATCH` | Swift package scratch directory used by `scripts/build-macos-capture.sh`. |
 
-There is no database server, Redis, or other local service. Tests open SQLite with `storage.Open(ctx, ":memory:")`.
+There is no database server, Redis, or other local service. Most tests open SQLite with `storage.Open(ctx, ":memory:")`; persistence and migration tests use temporary database files.
 
 ## Fixtures and offline checks
 
@@ -81,11 +98,21 @@ The script exits non-zero on the first failed check. It runs:
 
 `assets.go` embeds `frontend/dist`. The frontend build is step 2 so a fresh clone can compile package main. `./scripts/setup.sh` also runs that build.
 
-Use a narrower command from `AGENTS.md` while iterating. Run the script before finishing a cross-component change.
+For focused checks while iterating, use the relevant package or boundary:
 
-`TestWailsMethodsMatchFrontendContract` fails when a name in `BACKEND_METHODS` is missing on `App`, or when a method other than `GenerateManualVocabulary` does not return `(AppSnapshot, error)`.
+| Change | Focused checks |
+| --- | --- |
+| Go package | `gofmt -l` on edited Go files, then `go test ./path/to/package` and `go vet ./path/to/package` |
+| Wails method or snapshot | After building the frontend if `frontend/dist` is absent, run `go test -count=1 -run TestWailsMethodsMatchFrontendContract .`, then `cd frontend && npm run typecheck && npm test -- --run` |
+| React UI | `cd frontend && npm run typecheck && npm test -- --run && npm run lint` |
+| SQL migration | `go test ./internal/storage` |
+| Swift helper or macOS adapter | `swift build -c release --package-path native/macos-capture`; run `swift test` in that directory when full Xcode is installed |
 
-GitHub Actions runs the same script on `macos-latest` after `npm ci --prefix frontend` (`.github/workflows/verify.yml`). The workflow uses `actions/checkout`, `actions/setup-go`, and `actions/setup-node` v7, which run on the Node.js 24 action runtime. The frontend itself is still installed as Node.js 22. That runner includes Xcode, so `swift test` runs there. A laptop with only Command Line Tools skips `swift test` and still prints `verify: ok` when everything else passes.
+Run `./scripts/verify.sh` before finishing a cross-component change.
+
+`TestWailsMethodsMatchFrontendContract` checks that each name in `BACKEND_METHODS` exists on `App` and validates the result shapes for `GenerateManualVocabulary`, `RecognizeVocabularyPhoto`, `ListLessonTranscripts`, and `GetLessonTranscript`.
+
+GitHub Actions runs the same script on `macos-latest` after `npm ci --prefix frontend` (`.github/workflows/verify.yml`). The Swift test step runs when `xctest` is available; otherwise the script reports that it skipped that step.
 
 ## Troubleshooting
 

@@ -27,9 +27,11 @@ The helper's plist is `native/macos-capture/Sources/call-analyzer-capture/Info.p
 | --- | --- | --- |
 | SQLite | `os.UserConfigDir()/call_analyzer/call_analyzer.db` | On macOS, `~/Library/Application Support/call_analyzer/call_analyzer.db`. Opened in `NewApp`. Mode `0600`. |
 | API key | Keychain service `github.com/oeggy03.call_analyzer`, account `OPENROUTER_API_KEY` | Not in SQLite. Environment variable wins. |
-| Capture audio | A temp directory created by `createSessionSpool` | Removed when the session stops. Leftover directories with a dead owner pid are removed on the next capture start. |
+| Capture audio | A temp directory created by `createSessionSpool` | 16 kHz mono chunks are deleted as the adapter reads them. The session spool is removed on stop; stale directories with no live owner are removed during source initialization and before a new session. |
 | Settings | `settings` table | JSON values. Keys are the constants in `internal/service/settings.go`. |
-| Model spend | `request_usage` | Per lesson id, plus `manual-vocabulary` for Add Word generation. |
+| Model usage | `request_usage` | Per lesson id, plus `manual-vocabulary` for Add Word generation and `photo-vocabulary` for photo recognition. |
+
+The selected audio-retention label is stored on lesson metadata, but the helper currently removes audio at the end of capture regardless of that setting.
 
 Do not copy the SQLite file to another machine as a sync mechanism. `README.md` says a future hosted API should consume the outbox, and that the desktop database must not be synchronized directly. The outbox dispatcher is not started.
 

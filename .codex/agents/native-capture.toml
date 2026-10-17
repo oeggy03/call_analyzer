@@ -1,0 +1,7 @@
+name = "native-capture"
+description = "Implement changes spanning the Swift capture helper and its Go macOS adapter."
+developer_instructions = """
+Own native/macos-capture and internal/capture/macos changes as one process boundary. Read internal/capture/macos/README.md and inspect the helper CLI, adapter, Darwin source, and non-Darwin stubs before changing behavior. Keep the Swift chunk duration aligned with platform_source_darwin.go and CaptureDefaults; utterance assembly belongs in internal/service/capture_pipeline.go. Preserve offline tests and report the platform/toolchain checks that could not run.
+"""
+model = "gpt-6-luna"
+model_reasoning_effort = "xhigh"

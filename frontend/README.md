@@ -31,9 +31,13 @@ The demo defaults are `qwen/qwen3-asr-1.7b` for STT and
 `BACKEND_METHODS`. That object is the method list; do not keep a second copy
 here. `contract_test.go` fails when a listed name is missing on `App`.
 
-`GenerateManualVocabulary` returns `ManualVocabularyDraft`. The other methods
-return `AppSnapshot`. Argument shapes are the structs in `app_contract.go` and
-`src/lib/types.ts`. `StartLesson` and `SaveSettings` receive one object.
+Most methods return `AppSnapshot`. Four methods return dedicated result types:
+`GenerateManualVocabulary` returns `ManualVocabularyDraft`,
+`RecognizeVocabularyPhoto` returns `PhotoVocabularyDraft`,
+`ListLessonTranscripts` returns `[]LessonTranscriptSummary`, and
+`GetLessonTranscript` returns `LessonTranscript`. Argument shapes are the
+structs in `app_contract.go` and `src/lib/types.ts`. `StartLesson` and
+`SaveSettings` receive one object.
 Confirm, reject, and merge receive positional IDs. `EditCandidate` receives
 `(candidateID, patch)`; `app.go` maps patch `pinyin` onto `reading`.
 
@@ -51,5 +55,13 @@ Settings key input is write-only by design. The frontend sends a new key only
 when the user saves it and only receives a boolean
 `openRouterKeyConfigured` value.
 
-ZDR describes provider-side retention. Local audio retention is controlled
-separately by the selected audio retention setting.
+The Live view requests system audio across apps and does not require Zoom.
+Add Word generation is disabled during capture, while saving a complete
+manual entry remains available. Photo reading and saving are also available
+during capture.
+
+ZDR describes provider-side routing for lesson transcription, lesson analysis,
+and Add Word generation. Photo vision requests do not include ZDR or
+data-collection-denial fields. Local audio retention is separate; the helper
+currently deletes audio after capture regardless of the selected retention
+label.
