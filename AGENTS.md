@@ -1,114 +1,54 @@
-# Agent instructions
+# Agent guide
 
-Mandarin Lesson Analyzer is a local-first macOS desktop app. It captures a consented Zoom lesson, sends short audio windows to OpenRouter, and stores Mandarin vocabulary in SQLite only after an explicit confirm or Add Word save.
+Mandarin Lesson Analyzer is a local-first macOS desktop app. Its window title is `Call Analyzer`, its bundle display name is `Mandarin Lesson Analyzer`, and its Go module is `github.com/oeggy03/call_analyzer`.
 
-The window title is "Call Analyzer". The bundle display name is "Mandarin Lesson Analyzer". The Go module is `github.com/oeggy03/call_analyzer`.
+## Source of truth
 
-## Read this, not everything
+Current executable code defines behavior. Use exported Go methods and request types, frontend types and clients, and embedded migrations for exact contracts. Generated files are outputs; inspect their source instead. Documentation explains those sources and gives workflow context. If a claim conflicts with current code, trace the call path and correct the relevant documentation when the task includes that behavior; do not repeat the stale claim as fact. A test can also encode an outdated expectation, so compare it with the implementation.
 
-| Document | Read it when |
+The budget fields are a legacy settings and display contract. `internal/openrouter/client.go` currently leaves `Budget.Check` and `HardExceeded` inactive; do not describe the displayed `hardBudgetUsd` setting as a runtime cloud-call cap.
+
+## Read by task
+
+| Need | Read |
 | --- | --- |
-| `README.md` | You need the product walkthrough or the package list. |
-| `docs/architecture.md` | A change crosses the UI, Wails app, Go service, capture helper, or database. |
-| `docs/behavior.md` | The change touches lessons, vocabulary, budget, privacy, or settings. |
-| `docs/development.md` | You are installing, starting, configuring, or choosing checks. |
-| `docs/operations.md` | You are building the app bundle, permissions, or local data files. |
-| `docs/decisions.md` | You are tempted to replace the desktop shell, database, capture process, or sync model. |
-| `docs/limitations.md` | Behavior looks unfinished or the UI and service disagree. |
-| `frontend/README.md` | You are changing the React UI or its backend boundary. |
-| `internal/capture/macos/README.md` | You are changing the helper process boundary. |
-| `docs/work/README.md` | The task will span sessions or another agent must resume it. |
+| Product walkthrough and package map | `README.md` |
+| UI, Wails, service, capture, or database boundary | `docs/architecture.md` |
+| Lesson, vocabulary, privacy, settings, or budget behavior | `docs/behavior.md` |
+| Install, environment, development, or checks | `docs/development.md` |
+| App bundle, permissions, or local data files | `docs/operations.md` |
+| Existing architectural choices | `docs/decisions.md` |
+| Verified unfinished behavior or mismatch | `docs/limitations.md` |
+| React boundary | `frontend/README.md` |
+| Capture helper process | `internal/capture/macos/README.md` |
+| Delegation and role map | `docs/agents.md` |
+| Multi-session handoff | `docs/work/README.md` |
 
-Do not read every document before a small edit inside one package.
+Do not read every document for a small single-package change.
 
-## Components
+## Models and delegation
 
-| Area | Entry |
-| --- | --- |
-| Desktop shell | `main.go`, `app.go`, `snapshot.go`, `wails.json` |
-| UI boundary | `frontend/src/lib/api.ts`, `frontend/src/lib/types.ts`, `frontend/src/App.tsx` |
-| Lesson pipeline | `internal/service` |
-| OpenRouter | `internal/openrouter/client.go` |
-| SQLite | `internal/storage`, `internal/storage/migrations` |
-| Capture interface | `internal/capture/capture.go` |
-| macOS helper adapter | `internal/capture/macos` |
-| Swift helper | `native/macos-capture` |
-| Vocabulary rules | `internal/vocabulary` |
-| Sync boundary, not started by the app | `internal/sync` |
-| Fixture check | `cmd/evaluate`, `fixtures/evaluation/manifest.json` |
+The repository Codex configuration assigns the orchestrator/planner `gpt-6.1-sol` with high reasoning. The orchestrator plans, reviews, integrates, and validates; it does not implement repository changes. Frontend, backend, native capture, tooling, and documentation implementation roles use `gpt-6-luna` with xhigh reasoning.
 
-Non-macOS builds use `platform_source_stub.go` and `internal/capture/macos/adapter_stub.go`. Keep those stubs compiling.
+These instructions authorize the orchestrator to delegate implementation work within the user's requested repository scope. Assign each task to the matching configured role with bounded, non-overlapping ownership; the orchestrator integrates cross-boundary contracts and reviews the result. If the required role or model is unavailable or not loaded, report that and pause dependent implementation instead of silently substituting a model. Role files do not change the user's approval or sandbox settings.
 
-## Commands
+## Project invariants
 
-Run these from the repository root. Details and troubleshooting are in `docs/development.md`.
-
-```sh
-./scripts/setup.sh
-./scripts/dev.sh
-./scripts/verify.sh
-```
-
-`./scripts/dev.sh` starts the Wails desktop session on macOS. For the UI only, run `npm run dev` in `frontend`. That uses the in-memory demo when Wails is absent.
-
-Cursor discovers project skills in `.cursor/skills`:
-
-- `verify-call-analyzer` when running checks or interpreting a `verify.sh` failure.
-- `wails-contract` when an `App` method or snapshot field changes.
-- `sqlite-migration` when a table or embedded SQL file changes.
-
-`./scripts/verify.sh` is the full local check. It must exit non-zero when a check fails. Do not replace it with `gofmt -w`. Do not pass `-execute` to `cmd/evaluate` unless the user explicitly wants billable OpenRouter calls.
-
-## Invariants
-
-- `StartLesson` requires consent, a supported target, and an OpenRouter key. Settings cannot change while a lesson is active.
-- Audio and OCR suggestions are stored as `candidate`. They become trusted vocabulary only through confirm, or through an explicit Add Word save. Generate returns a draft and does not insert a row.
-- The API key is never written to SQLite, logs, or `AppSnapshot`. The UI receives `openRouterKeyConfigured` only. On macOS the key comes from `OPENROUTER_API_KEY`, then Keychain.
-- Provider requests ask for Zero Data Retention and deny data collection. That is separate from the local audio-retention setting.
-- The hard lesson budget is greater than 0 and at most 0.50 USD. At the hard budget, cloud calls stop; capture and mark timestamps continue.
-- The desktop capture target is Zoom bundle `us.zoom.xos`. The helper emits 2-second chunks. Go assembles the 8–15 second utterance windows.
-- `loadSettings` forces sync off. The app never starts `internal/sync.Dispatcher`. Do not sync the SQLite file.
-- JSON at the Wails boundary is camelCase. `EditCandidate` sends `pinyin`; `app.go` maps it to `domain.CandidateEdit.Reading`.
-
-## Checks for a change
-
-| Change | Run |
-| --- | --- |
-| Go only | `gofmt -l` on the edited files, `go test` and `go vet` for those packages. The root package embeds `frontend/dist`, so run `npm run build` in `frontend` first on a fresh clone. |
-| Snapshot or Wails methods | The Go tests above, plus `cd frontend && npm run typecheck && npm test -- --run` |
-| React UI | `cd frontend && npm run typecheck && npm test -- --run && npm run lint` |
-| SQL migration | `go test ./internal/storage` |
-| Swift helper or macOS adapter | `swift build -c release --package-path native/macos-capture`, and `swift test` in that directory when Xcode is installed |
-| Setup, scripts, or docs that describe commands | `./scripts/verify.sh` |
-| Before finishing a cross-component change | `./scripts/verify.sh` |
-
-`go test ./...` from this module also sees `frontend/node_modules` after npm install. `./scripts/verify.sh` excludes that tree. Follow the script.
-
-## Cross-component changes
-
-Before editing across the UI, `app.go`, `internal/service`, capture, or SQLite:
-
-1. Find callers and consumers of the type, method, or table you are changing.
-2. Update the contract together: `app.go`, `app_contract.go`, `frontend/src/lib/types.ts`, and both the runtime and demo clients in `frontend/src/lib/api.ts`.
-3. Check what is persisted. Vocabulary status, lesson metadata, settings JSON, and outbox rows are not the same lifetime.
-4. Add or adjust a test at the boundary you changed. `TestWailsMethodsMatchFrontendContract` already fails when `BACKEND_METHODS` names a method `App` does not have.
-
-## macOS capture
-
-Apply this only when editing `native/macos-capture` or `internal/capture/macos`.
-
-- Change chunk duration in both `platform_source_darwin.go` and `CaptureDefaults.chunkSeconds`, or leave both at 2 seconds. Do not "fix" utterance length in Swift; that policy is in `internal/service/capture_pipeline.go`.
-- The helper's commands are `list`, `capture`, and `stop`. `capture` requires `--bundle-id` and `--spool`.
-- `swift test` needs full Xcode. Command Line Tools can `swift build`. `./scripts/verify.sh` skips `swift test` when `xctest` is missing and fails when `xctest` is present and the tests fail.
-
-## Working rules
-
-- Preserve unrelated user changes. Do not revert or reformat files you were not asked to change.
+- `StartLesson` checks consent, target, and API-key readiness. Settings are locked during an active lesson.
+- New automatic suggestions start as `candidate`; when a suggestion matches an existing word, its current status is preserved. Confirmation promotes a candidate to trusted vocabulary; reject and merge resolve it without promotion. `SaveManualVocabulary` creates a confirmed entry, while generation and photo recognition return drafts without inserting vocabulary.
+- Never put the OpenRouter key in SQLite, logs, or `AppSnapshot`. The UI receives only `openRouterKeyConfigured`. On macOS the environment value precedes Keychain.
+- Transcription and standard chat requests ask for Zero Data Retention and deny data collection. Vision photo-recognition chat intentionally omits those controls; inspect `internal/openrouter/client.go` before making claims about provider privacy flags. Provider flags are separate from local audio retention.
+- macOS `Source.Configure` maps system-audio aliases to its system-audio source and accepts a nonblank explicit bundle ID. Wails currently limits lesson targets in `validTarget`; Zoom is a default option, not the only app the capture source can target. Check both boundaries before claiming a target is supported in the UI. Swift emits 2-second chunks; Go assembles utterance windows in `internal/service/capture_pipeline.go`.
+- `loadSettings` forces sync off. The app does not start `internal/sync.Dispatcher`; never sync the SQLite file.
+- Wails JSON is camelCase. `EditCandidate` sends `pinyin`, mapped in `app.go` to `domain.CandidateEdit.Reading`.
+- Keep the non-Darwin capture stubs compiling when changing the capture implementation.
+- Tests and fixture evaluation stay offline. Never pass `-execute` to `cmd/evaluate` unless the user explicitly asks for live OpenRouter calls.
 - Do not read or write the real Keychain item or `~/Library/Application Support/call_analyzer/call_analyzer.db` unless the user asks.
-- Tests and `go run ./cmd/evaluate` without `-execute` must stay offline.
 
-## Completion
+## Contract and completion
 
-A change is complete when the requested behavior is implemented, the checks for that change have been run, and you have inspected the result that those checks can actually see. Report commands, outcomes, and anything you could not run.
+Before a cross-component change, find all callers and consumers, inspect persisted data, and update the Go and frontend contracts together. For a Wails change, inspect `app.go`, `app_contract.go`, `frontend/src/lib/types.ts`, and both clients in `frontend/src/lib/api.ts`. For a schema change, add the next migration; do not edit an applied migration.
 
-Update the relevant document in the table above when you change setup, a contract, a workflow, or architecture. A behavior change that is not obvious from the code belongs in `docs/behavior.md`. A new verified limitation belongs in `docs/limitations.md`.
+If work will span sessions or another agent must resume it, follow `docs/work/README.md`: create a focused `docs/work/<short-slug>.md` handoff note and delete it when the work is done. Do not add a handoff note for routine work.
+
+Preserve unrelated user changes. Run the checks in `docs/development.md` that match the change, inspect their output, and report what could not be verified. Update task-relevant docs when setup, a contract, workflow, architecture, or non-obvious behavior changes.

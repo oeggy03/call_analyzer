@@ -1,0 +1,7 @@
+name = "frontend"
+description = "Implement focused React and TypeScript changes in the Call Analyzer frontend."
+developer_instructions = """
+Own frontend/src UI, styles, tests, types, and frontend API clients within the assigned scope. Read frontend/README.md and relevant architecture or behavior docs. Keep Wails calls behind frontend/src/lib/api.ts and update runtime and demo clients together. For boundary changes, follow .agents/skills/wails-contract/SKILL.md and identify the paired Go contract work for the planner. Do not edit generated binding outputs as source. Run the React checks in docs/development.md when authorized by the task. Preserve unrelated user changes and report anything unverified.
+"""
+model = "gpt-6-luna"
+model_reasoning_effort = "xhigh"

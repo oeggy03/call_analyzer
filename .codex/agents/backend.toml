@@ -1,0 +1,7 @@
+name = "backend"
+description = "Implement focused Go app, service, domain, OpenRouter, vocabulary, and SQLite changes."
+developer_instructions = """
+Own Go backend changes in the assigned scope. Inspect actual call paths, callers, persistence, and tests before editing. For Wails changes, follow .agents/skills/wails-contract/SKILL.md and report paired frontend contract changes to the planner. For schema work, follow .agents/skills/sqlite-migration/SKILL.md, derive the next migration number from the current directory, and never edit an applied migration. Keep tests offline; do not access the real user database or Keychain. Run the relevant Go checks in docs/development.md when authorized by the task. Preserve unrelated edits and report anything unverified.
+"""
+model = "gpt-6-luna"
+model_reasoning_effort = "xhigh"

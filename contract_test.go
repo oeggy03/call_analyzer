@@ -30,8 +30,11 @@ func TestWailsMethodsMatchFrontendContract(t *testing.T) {
 	}
 
 	appType := reflect.TypeOf(&App{})
-	draftOnly := map[string]string{
-		"GenerateManualVocabulary": "ManualVocabularyDraft",
+	expectedResults := map[string]reflect.Type{
+		"GenerateManualVocabulary": reflect.TypeOf(ManualVocabularyDraft{}),
+		"RecognizeVocabularyPhoto": reflect.TypeOf(PhotoVocabularyDraft{}),
+		"ListLessonTranscripts":    reflect.TypeOf([]LessonTranscriptSummary{}),
+		"GetLessonTranscript":      reflect.TypeOf(LessonTranscript{}),
 	}
 	seen := map[string]bool{}
 	for _, match := range matches {
@@ -49,18 +52,17 @@ func TestWailsMethodsMatchFrontendContract(t *testing.T) {
 			t.Errorf("%s must return (result, error) for Wails", name)
 			continue
 		}
-		got := method.Type.Out(0).Name()
-		if want, ok := draftOnly[name]; ok {
-			if got != want {
-				t.Errorf("%s result = %s, want %s", name, got, want)
-			}
-			continue
+		want := reflect.TypeOf(AppSnapshot{})
+		if special, ok := expectedResults[name]; ok {
+			want = special
 		}
-		if got != "AppSnapshot" {
-			t.Errorf("%s result = %s, want AppSnapshot", name, got)
+		if got := method.Type.Out(0); got != want {
+			t.Errorf("%s result = %s, want %s", name, got, want)
 		}
 	}
-	if !seen["GenerateManualVocabulary"] || !seen["SaveManualVocabulary"] || !seen["DeleteLastLesson"] {
+	if !seen["GenerateManualVocabulary"] || !seen["RecognizeVocabularyPhoto"] ||
+		!seen["ListLessonTranscripts"] || !seen["GetLessonTranscript"] ||
+		!seen["SaveManualVocabulary"] || !seen["DeleteLastLesson"] {
 		t.Fatalf("backend contract is missing a current App method: %#v", seen)
 	}
 }

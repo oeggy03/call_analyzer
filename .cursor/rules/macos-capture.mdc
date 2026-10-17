@@ -1,5 +1,5 @@
 ---
-description: Swift ScreenCaptureKit helper and Go adapter requirements
+description: Swift capture helper and Go macOS adapter boundary
 globs:
   - native/macos-capture/**/*
   - internal/capture/macos/**/*
@@ -8,9 +8,8 @@ alwaysApply: false
 
 # macOS capture
 
-The helper and the Go adapter are one boundary. Follow the macOS capture section in `AGENTS.md` and `internal/capture/macos/README.md`.
+Follow the capture invariants in root `AGENTS.md` and `internal/capture/macos/README.md`. Treat the helper and Go adapter as one boundary; keep non-Darwin stubs building.
 
-- The desktop app sets 2-second chunks in `platform_source_darwin.go`. Swift's `CaptureDefaults.chunkSeconds` matches that. Utterance windows are assembled in `internal/service/capture_pipeline.go`.
-- Helper commands are `list`, `capture`, and `stop`. `capture` requires `--bundle-id` and `--spool`.
-- Keep the non-Darwin stubs building. The real adapter is `//go:build darwin`.
-- `swift test` needs full Xcode. `./scripts/verify.sh` skips it when `xctest` is absent and fails when `xctest` is present and tests fail.
+- The app and `CaptureDefaults.chunkSeconds` use 2-second chunks. Go assembles utterance windows in `internal/service/capture_pipeline.go`.
+- Helper commands are `list`, `capture`, and `stop`; `capture` requires `--bundle-id` and `--spool`.
+- `swift build` works with Command Line Tools. `swift test` requires full Xcode; `scripts/verify.sh` handles the XCTest skip on macOS.
