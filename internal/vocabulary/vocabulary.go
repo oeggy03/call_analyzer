@@ -341,12 +341,18 @@ func CanonicalPinyin(input string) (numbered, marked string, err error) {
 	numberedTokens := make([]string, 0, len(tokens))
 	markedTokens := make([]string, 0, len(tokens))
 	for _, token := range tokens {
-		n, m, err := canonicalSyllable(token)
+		syllables, err := segmentSyllable(token)
 		if err != nil {
 			return "", "", err
 		}
-		numberedTokens = append(numberedTokens, n)
-		markedTokens = append(markedTokens, m)
+		for _, syllable := range syllables {
+			n, m, err := canonicalSyllable(syllable)
+			if err != nil {
+				return "", "", err
+			}
+			numberedTokens = append(numberedTokens, n)
+			markedTokens = append(markedTokens, m)
+		}
 	}
 	return strings.Join(numberedTokens, " "), strings.Join(markedTokens, " "), nil
 }
@@ -370,6 +376,36 @@ func splitPinyin(input string) []string {
 		}
 	}
 	return result
+}
+
+// segmentSyllable splits a token such as "wǒmen" into valid syllables.
+// A token that is already one syllable is returned unchanged. Joined
+// tone-marked or plain syllables are divided by the longest valid prefix,
+// which keeps "xiān" whole and splits "wǒmen" into "wǒ" and "men".
+func segmentSyllable(token string) ([]string, error) {
+	if _, _, err := canonicalSyllable(token); err == nil {
+		return []string{token}, nil
+	}
+	runes := []rune(token)
+	parts := make([]string, 0, 2)
+	for start := 0; start < len(runes); {
+		found := -1
+		for end := len(runes); end > start; end-- {
+			if _, _, err := canonicalSyllable(string(runes[start:end])); err == nil {
+				found = end
+				break
+			}
+		}
+		if found < 0 {
+			return nil, fmt.Errorf("vocabulary: invalid pinyin syllable %q", token)
+		}
+		parts = append(parts, string(runes[start:found]))
+		start = found
+	}
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("vocabulary: invalid pinyin syllable %q", token)
+	}
+	return parts, nil
 }
 
 func canonicalSyllable(token string) (string, string, error) {

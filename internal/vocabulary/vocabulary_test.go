@@ -30,6 +30,27 @@ func TestCanonicalPinyin(t *testing.T) {
 	if numbered != "lao3 shi1 ni3 hao3" || marked != "lǎo shī nǐ hǎo" {
 		t.Fatalf("sentence punctuation was not normalized: numbered=%q marked=%q", numbered, marked)
 	}
+	numbered, marked, err = CanonicalPinyin("wǒmen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if numbered != "wo3 men5" || marked != "wǒ men" {
+		t.Fatalf("joined syllables were not split: numbered=%q marked=%q", numbered, marked)
+	}
+	numbered, marked, err = CanonicalPinyin("nǐhǎo, zhōngguó!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if numbered != "ni3 hao3 zhong1 guo2" || marked != "nǐ hǎo zhōng guó" {
+		t.Fatalf("joined sentence was not split: numbered=%q marked=%q", numbered, marked)
+	}
+	numbered, marked, err = CanonicalPinyin("xiān")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if numbered != "xian1" || marked != "xiān" {
+		t.Fatalf("single syllable was split: numbered=%q marked=%q", numbered, marked)
+	}
 }
 
 func TestNormalizeRequiresEvidence(t *testing.T) {
