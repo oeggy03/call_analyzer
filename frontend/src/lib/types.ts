@@ -141,9 +141,24 @@ export interface ManualVocabularyInput {
   aiGenerated?: boolean
 }
 
+export interface ManualVocabularyVariant {
+  traditional?: string
+  pinyin: string
+  meaning: string
+  partOfSpeech?: string
+  classifier?: string
+  example: string
+  examplePinyin: string
+  exampleTranslation: string
+}
+
 export interface ManualVocabularyDraft extends ManualVocabularyInput {
   model: string
   cost: number
+  needsChoice: boolean
+  matchedContext: boolean
+  appliedVariant: number
+  variants?: ManualVocabularyVariant[]
 }
 
 export interface PhotoVocabularyDraft {

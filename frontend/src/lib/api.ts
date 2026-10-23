@@ -13,6 +13,7 @@ import type {
   LessonTranscriptSummary,
   ManualVocabularyDraft,
   ManualVocabularyInput,
+  ManualVocabularyVariant,
   PhotoVocabularyDraft,
   TargetApp,
 } from './types'
@@ -417,18 +418,144 @@ function hasCompleteManualVocabulary(input: ManualVocabularyInput): boolean {
   )
 }
 
+function manualVocabularyInputToVariant(input: ManualVocabularyInput): ManualVocabularyVariant {
+  return {
+    traditional: input.traditional,
+    pinyin: input.pinyin?.trim() ?? '',
+    meaning: input.meaning?.trim() ?? '',
+    partOfSpeech: input.partOfSpeech,
+    classifier: input.classifier,
+    example: input.example?.trim() ?? '',
+    examplePinyin: input.examplePinyin?.trim() ?? '',
+    exampleTranslation: input.exampleTranslation?.trim() ?? '',
+  }
+}
+
+function hasManualVocabularyContext(input: ManualVocabularyInput): boolean {
+  return Boolean(
+    input.meaning?.trim() ||
+      input.pinyin?.trim() ||
+      input.example?.trim() ||
+      input.exampleTranslation?.trim() ||
+      input.partOfSpeech?.trim() ||
+      input.classifier?.trim() ||
+      input.tags?.length,
+  )
+}
+
+function mergeManualVocabularyVariant(
+  input: ManualVocabularyInput,
+  variant: ManualVocabularyVariant,
+): ManualVocabularyInput {
+  return {
+    simplified: input.simplified,
+    traditional: input.traditional || variant.traditional || input.simplified,
+    pinyin: input.pinyin || variant.pinyin,
+    meaning: input.meaning || variant.meaning,
+    partOfSpeech: input.partOfSpeech || variant.partOfSpeech || '',
+    classifier: input.classifier || variant.classifier || '',
+    example: input.example || variant.example,
+    examplePinyin: input.examplePinyin || variant.examplePinyin,
+    exampleTranslation: input.exampleTranslation || variant.exampleTranslation,
+    tags: [...(input.tags ?? [])],
+    aiGenerated: Boolean(input.aiGenerated) || !hasCompleteManualVocabulary(input),
+  }
+}
+
+function loosePinyin(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase()
+    .replace(/[0-9\s'’·]/g, '')
+}
+
+function meaningsMatch(left: string, right: string): boolean {
+  const normalizedLeft = left.trim().toLocaleLowerCase()
+  const normalizedRight = right.trim().toLocaleLowerCase()
+  if (!normalizedLeft || !normalizedRight) return false
+  return (
+    normalizedLeft === normalizedRight ||
+    (normalizedLeft.length >= 4 && normalizedRight.includes(normalizedLeft)) ||
+    (normalizedRight.length >= 4 && normalizedLeft.includes(normalizedRight))
+  )
+}
+
+function chooseDemoVariant(input: ManualVocabularyInput, variants: ManualVocabularyVariant[]): number | undefined {
+  if (variants.length === 1) return 0
+
+  const meaningMatches = input.meaning
+    ? variants.flatMap((variant, index) => (meaningsMatch(input.meaning ?? '', variant.meaning) ? [index] : []))
+    : []
+  if (meaningMatches.length === 1) return meaningMatches[0]
+
+  const inputPinyin = loosePinyin(input.pinyin ?? '')
+  if (inputPinyin) {
+    const pinyinMatches = variants.flatMap((variant, index) => (
+      loosePinyin(variant.pinyin) === inputPinyin ? [index] : []
+    ))
+    const allVariantsSharePinyin = variants.every((variant) => loosePinyin(variant.pinyin) === inputPinyin)
+    if (pinyinMatches.length === 1 && !allVariantsSharePinyin) return pinyinMatches[0]
+  }
+
+  return undefined
+}
+
 function isOptionalString(value: unknown): boolean {
   return value === undefined || typeof value === 'string'
 }
 
+function isManualVocabularyVariant(value: unknown): value is ManualVocabularyVariant {
+  if (!isRecord(value)) return false
+  const requiredStrings = ['pinyin', 'meaning', 'example', 'examplePinyin', 'exampleTranslation']
+  if (requiredStrings.some((field) => typeof value[field] !== 'string' || !value[field].trim())) return false
+  return ['traditional', 'partOfSpeech', 'classifier'].every((field) => isOptionalString(value[field]))
+}
+
 export function isManualVocabularyDraft(value: unknown): value is ManualVocabularyDraft {
   if (!isRecord(value)) return false
-  const requiredStrings = ['simplified', 'pinyin', 'meaning', 'example', 'examplePinyin', 'exampleTranslation', 'model']
-  if (requiredStrings.some((field) => typeof value[field] !== 'string' || !value[field].trim())) return false
+  if (typeof value.simplified !== 'string' || !value.simplified.trim()) return false
+  if (typeof value.model !== 'string' || !value.model.trim()) return false
   if (typeof value.cost !== 'number' || !Number.isFinite(value.cost) || value.cost < 0) return false
-  if (!['traditional', 'partOfSpeech', 'classifier'].every((field) => isOptionalString(value[field]))) return false
+  if (
+    ![
+      'traditional',
+      'pinyin',
+      'meaning',
+      'partOfSpeech',
+      'classifier',
+      'example',
+      'examplePinyin',
+      'exampleTranslation',
+    ].every((field) => isOptionalString(value[field]))
+  ) return false
   if (value.aiGenerated !== undefined && typeof value.aiGenerated !== 'boolean') return false
-  return value.tags === undefined || (Array.isArray(value.tags) && value.tags.every((tag) => typeof tag === 'string'))
+  if (value.tags !== undefined && (!Array.isArray(value.tags) || !value.tags.every((tag) => typeof tag === 'string'))) {
+    return false
+  }
+  if (value.needsChoice !== undefined && typeof value.needsChoice !== 'boolean') return false
+  if (value.matchedContext !== undefined && typeof value.matchedContext !== 'boolean') return false
+  if (
+    value.appliedVariant !== undefined &&
+    (typeof value.appliedVariant !== 'number' ||
+      !Number.isFinite(value.appliedVariant) ||
+      !Number.isInteger(value.appliedVariant) ||
+      value.appliedVariant < -1)
+  ) {
+    return false
+  }
+  if (value.variants !== undefined) {
+    if (!Array.isArray(value.variants) || !value.variants.every(isManualVocabularyVariant)) {
+      return false
+    }
+  }
+
+  if (value.needsChoice === true) {
+    return Array.isArray(value.variants) && value.variants.length >= 2
+  }
+
+  const requiredStrings = ['pinyin', 'meaning', 'example', 'examplePinyin', 'exampleTranslation']
+  return requiredStrings.every((field) => typeof value[field] === 'string' && value[field].trim())
 }
 
 function isManualVocabularyInputValue(value: unknown, requireAiGenerated = false): value is ManualVocabularyInput {
@@ -524,6 +651,50 @@ const DEMO_MANUAL_VOCABULARY_EXAMPLES: Record<string, ManualVocabularyInput> = {
   },
 }
 
+const DEMO_MANUAL_VOCABULARY_VARIANTS: Record<string, ManualVocabularyVariant[]> = {
+  吞吐: [
+    {
+      traditional: '吞吐',
+      pinyin: 'tūn tǔ',
+      meaning: 'throughput',
+      partOfSpeech: 'noun',
+      example: '这个接口的吞吐很高。',
+      examplePinyin: 'Zhè ge jiē kǒu de tūn tǔ hěn gāo.',
+      exampleTranslation: 'This interface has high throughput.',
+    },
+    {
+      traditional: '吞吐',
+      pinyin: 'tūn tǔ',
+      meaning: 'to take in and send out',
+      partOfSpeech: 'verb',
+      example: '江河在入海口不断吞吐。',
+      examplePinyin: 'Jiāng hé zài rù hǎi kǒu bú duàn tūn tǔ.',
+      exampleTranslation: 'Rivers keep taking in and sending out water where they meet the sea.',
+    },
+  ],
+  行: [
+    {
+      traditional: '行',
+      pinyin: 'xíng',
+      meaning: 'to walk; to be OK',
+      partOfSpeech: 'verb',
+      example: '这样行不行？',
+      examplePinyin: 'Zhè yàng xíng bu xíng?',
+      exampleTranslation: 'Is this OK?',
+    },
+    {
+      traditional: '行',
+      pinyin: 'háng',
+      meaning: 'row; profession',
+      partOfSpeech: 'noun',
+      classifier: '个',
+      example: '他已经在这一行工作了十年。',
+      examplePinyin: 'Tā yǐ jīng zài zhè yì háng gōng zuò le shí nián.',
+      exampleTranslation: 'He has worked in this profession for ten years.',
+    },
+  ],
+}
+
 const DEMO_PHOTO_VOCABULARY_ENTRIES: ManualVocabularyInput[] = [
   {
     simplified: '学习',
@@ -609,22 +780,30 @@ class DemoApi implements AppApi {
       tags: ['manual'],
     }
     const generated = DEMO_MANUAL_VOCABULARY_EXAMPLES[normalized.simplified] ?? fallback
+    const variants = (DEMO_MANUAL_VOCABULARY_VARIANTS[normalized.simplified] ?? [
+      manualVocabularyInputToVariant(generated),
+    ]).map((variant) => ({ ...variant }))
+    const appliedVariant = chooseDemoVariant(normalized, variants)
     const cost = DEMO_MANUAL_VOCABULARY_COST
-    const draft: ManualVocabularyDraft = {
-      simplified: normalized.simplified,
-      traditional: normalized.traditional || generated.traditional || normalized.simplified,
-      pinyin: normalized.pinyin || generated.pinyin,
-      meaning: normalized.meaning || generated.meaning,
-      partOfSpeech: normalized.partOfSpeech || generated.partOfSpeech,
-      classifier: normalized.classifier || generated.classifier || '',
-      example: normalized.example || generated.example,
-      examplePinyin: normalized.examplePinyin || generated.examplePinyin,
-      exampleTranslation: normalized.exampleTranslation || generated.exampleTranslation,
-      tags: normalized.tags ?? [],
-      aiGenerated: Boolean(normalized.aiGenerated) || !hasCompleteManualVocabulary(normalized),
-      model: DEMO_MANUAL_VOCABULARY_MODEL,
-      cost,
-    }
+    const draft: ManualVocabularyDraft = appliedVariant === undefined
+      ? {
+          ...normalized,
+          model: DEMO_MANUAL_VOCABULARY_MODEL,
+          cost,
+          needsChoice: true,
+          matchedContext: false,
+          appliedVariant: -1,
+          variants,
+        }
+      : {
+          ...mergeManualVocabularyVariant(normalized, variants[appliedVariant]),
+          model: DEMO_MANUAL_VOCABULARY_MODEL,
+          cost,
+          needsChoice: false,
+          matchedContext: hasManualVocabularyContext(normalized),
+          appliedVariant,
+          variants,
+        }
     this.snapshot.cost = {
       ...this.snapshot.cost,
       currentUsd: this.snapshot.cost.currentUsd + cost,

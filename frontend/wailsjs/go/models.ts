@@ -365,6 +365,32 @@ export namespace main {
 		}
 	}
 	
+	export class ManualVocabularyVariant {
+	    traditional?: string;
+	    pinyin: string;
+	    meaning: string;
+	    partOfSpeech?: string;
+	    classifier?: string;
+	    example: string;
+	    examplePinyin: string;
+	    exampleTranslation: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ManualVocabularyVariant(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.traditional = source["traditional"];
+	        this.pinyin = source["pinyin"];
+	        this.meaning = source["meaning"];
+	        this.partOfSpeech = source["partOfSpeech"];
+	        this.classifier = source["classifier"];
+	        this.example = source["example"];
+	        this.examplePinyin = source["examplePinyin"];
+	        this.exampleTranslation = source["exampleTranslation"];
+	    }
+	}
 	export class ManualVocabularyDraft {
 	    simplified: string;
 	    traditional?: string;
@@ -379,6 +405,10 @@ export namespace main {
 	    aiGenerated?: boolean;
 	    model: string;
 	    cost: number;
+	    needsChoice: boolean;
+	    matchedContext: boolean;
+	    appliedVariant: number;
+	    variants?: ManualVocabularyVariant[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ManualVocabularyDraft(source);
@@ -399,7 +429,29 @@ export namespace main {
 	        this.aiGenerated = source["aiGenerated"];
 	        this.model = source["model"];
 	        this.cost = source["cost"];
+	        this.needsChoice = source["needsChoice"];
+	        this.matchedContext = source["matchedContext"];
+	        this.appliedVariant = source["appliedVariant"];
+	        this.variants = this.convertValues(source["variants"], ManualVocabularyVariant);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ManualVocabularyInput {
 	    simplified: string;
@@ -433,6 +485,7 @@ export namespace main {
 	        this.aiGenerated = source["aiGenerated"];
 	    }
 	}
+	
 	export class PhotoVocabularyDraft {
 	    entries: ManualVocabularyInput[];
 	    model: string;

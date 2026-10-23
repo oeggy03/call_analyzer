@@ -98,7 +98,10 @@ The helper can be overridden with
 
 You can also open **Add Word** and enter only the simplified Chinese word.
 **Generate missing details** uses the configured analyzer (Qwen 3 32B by
-default) to propose pinyin, meanings, usage, examples, and tags. Generation is
+default) to propose pinyin, an English meaning, and an example. When the word
+has more than one reading or meaning, the form stays as you typed it until you
+pick a variant. A meaning or distinguishing pinyin you already entered selects
+the matching variant. Generation does not invent tags. Generation is
 unavailable during a live lesson. Review or edit every field before saving.
 Fully completed forms can be saved without an API call, including during a
 live lesson. The UI displays the model and actual request cost for each

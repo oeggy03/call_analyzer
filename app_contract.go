@@ -23,19 +23,34 @@ type ManualVocabularyInput struct {
 }
 
 type ManualVocabularyDraft struct {
-	Simplified         string   `json:"simplified"`
-	Traditional        string   `json:"traditional,omitempty"`
-	Pinyin             string   `json:"pinyin,omitempty"`
-	Meaning            string   `json:"meaning,omitempty"`
-	PartOfSpeech       string   `json:"partOfSpeech,omitempty"`
-	Classifier         string   `json:"classifier,omitempty"`
-	Example            string   `json:"example,omitempty"`
-	ExamplePinyin      string   `json:"examplePinyin,omitempty"`
-	ExampleTranslation string   `json:"exampleTranslation,omitempty"`
-	Tags               []string `json:"tags,omitempty"`
-	AiGenerated        bool     `json:"aiGenerated,omitempty"`
-	Model              string   `json:"model"`
-	Cost               float64  `json:"cost"`
+	Simplified         string                    `json:"simplified"`
+	Traditional        string                    `json:"traditional,omitempty"`
+	Pinyin             string                    `json:"pinyin,omitempty"`
+	Meaning            string                    `json:"meaning,omitempty"`
+	PartOfSpeech       string                    `json:"partOfSpeech,omitempty"`
+	Classifier         string                    `json:"classifier,omitempty"`
+	Example            string                    `json:"example,omitempty"`
+	ExamplePinyin      string                    `json:"examplePinyin,omitempty"`
+	ExampleTranslation string                    `json:"exampleTranslation,omitempty"`
+	Tags               []string                  `json:"tags,omitempty"`
+	AiGenerated        bool                      `json:"aiGenerated,omitempty"`
+	Model              string                    `json:"model"`
+	Cost               float64                   `json:"cost"`
+	NeedsChoice        bool                      `json:"needsChoice"`
+	MatchedContext     bool                      `json:"matchedContext"`
+	AppliedVariant     int                       `json:"appliedVariant"`
+	Variants           []ManualVocabularyVariant `json:"variants,omitempty"`
+}
+
+type ManualVocabularyVariant struct {
+	Traditional        string `json:"traditional,omitempty"`
+	Pinyin             string `json:"pinyin"`
+	Meaning            string `json:"meaning"`
+	PartOfSpeech       string `json:"partOfSpeech,omitempty"`
+	Classifier         string `json:"classifier,omitempty"`
+	Example            string `json:"example"`
+	ExamplePinyin      string `json:"examplePinyin"`
+	ExampleTranslation string `json:"exampleTranslation"`
 }
 
 type PhotoVocabularyDraft struct {

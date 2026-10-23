@@ -298,6 +298,118 @@ describe('Call Analyzer frontend', () => {
     expect(await screen.findByText(/学习 saved to Vocabulary/i)).toBeInTheDocument()
   })
 
+  it('lets the user choose between demo meanings before filling an Add Word form', async () => {
+    renderDemo()
+    await openView('Add Word')
+
+    fireEvent.change(screen.getByLabelText(/Chinese word \(simplified\)/i), { target: { value: '吞吐' } })
+    fireEvent.click(screen.getByRole('button', { name: /Generate missing details/i }))
+
+    expect(await screen.findByLabelText('Pinyin')).toHaveValue('')
+    expect(screen.getByLabelText('English meaning')).toHaveValue('')
+    expect(screen.getByText('Which meaning do you want?')).toBeInTheDocument()
+    expect(screen.getByText('throughput')).toBeInTheDocument()
+    expect(screen.getByText('to take in and send out')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('radio', { name: 'throughput, tūn tǔ' }))
+    expect(screen.getByLabelText('Pinyin')).toHaveValue('tūn tǔ')
+    expect(screen.getByLabelText('English meaning')).toHaveValue('throughput')
+    expect(screen.getByLabelText('Chinese sample sentence')).toHaveValue('这个接口的吞吐很高。')
+    expect(screen.getByText('Which meaning do you want?')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('radio', { name: 'to take in and send out, tūn tǔ' }))
+    expect(screen.getByLabelText('English meaning')).toHaveValue('to take in and send out')
+    expect(screen.getByLabelText(/Chinese word \(simplified\)/i)).toHaveValue('吞吐')
+  })
+
+  it('drops the previous word choices when the simplified word changes', async () => {
+    renderDemo()
+    await openView('Add Word')
+
+    fireEvent.change(screen.getByLabelText(/Chinese word \(simplified\)/i), { target: { value: '吞吐' } })
+    fireEvent.click(screen.getByRole('button', { name: /Generate missing details/i }))
+    fireEvent.click(await screen.findByRole('radio', { name: 'throughput, tūn tǔ' }))
+    expect(screen.getByLabelText('Pinyin')).toHaveValue('tūn tǔ')
+    expect(screen.getByLabelText('English meaning')).toHaveValue('throughput')
+
+    fireEvent.change(screen.getByLabelText(/Chinese word \(simplified\)/i), { target: { value: '行' } })
+
+    expect(screen.getByLabelText(/Chinese word \(simplified\)/i)).toHaveValue('行')
+    expect(screen.getByLabelText('Pinyin')).toHaveValue('')
+    expect(screen.getByLabelText('English meaning')).toHaveValue('')
+    expect(screen.getByLabelText('Chinese sample sentence')).toHaveValue('')
+    expect(screen.queryByText('Which meaning do you want?')).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'throughput, tūn tǔ' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Generate missing details/i }))
+    expect(await screen.findByRole('radio', { name: 'to walk; to be OK, xíng' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'row; profession, háng' })).toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'throughput, tūn tǔ' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Pinyin')).toHaveValue('')
+  })
+
+  it('auto-applies the demo meaning selected by an entered meaning', async () => {
+    const api = createDemoApi()
+    const generateManualVocabulary = vi.spyOn(api, 'generateManualVocabulary')
+    render(<App apiClient={api} />)
+    await openView('Add Word')
+
+    fireEvent.change(screen.getByLabelText(/Chinese word \(simplified\)/i), { target: { value: '吞吐' } })
+    fireEvent.change(screen.getByLabelText('English meaning'), { target: { value: 'throughput' } })
+    fireEvent.click(screen.getByRole('button', { name: /Generate missing details/i }))
+
+    expect(await screen.findByLabelText('Pinyin')).toHaveValue('tūn tǔ')
+    expect(screen.getByLabelText('English meaning')).toHaveValue('throughput')
+    expect(screen.getByLabelText('Chinese sample sentence')).toHaveValue('这个接口的吞吐很高。')
+    expect(screen.getByText('Which meaning do you want?')).toBeInTheDocument()
+    expect(screen.getByText('to take in and send out')).toBeInTheDocument()
+    expect(screen.getByText('Used the details you already entered.')).toBeInTheDocument()
+    expect(generateManualVocabulary).toHaveBeenCalledWith(expect.objectContaining({
+      simplified: '吞吐',
+      meaning: 'throughput',
+    }))
+  })
+
+  it('auto-applies a demo meaning contained in a broader entered gloss', async () => {
+    renderDemo()
+    await openView('Add Word')
+
+    fireEvent.change(screen.getByLabelText(/Chinese word \(simplified\)/i), { target: { value: '吞吐' } })
+    fireEvent.change(screen.getByLabelText('English meaning'), { target: { value: 'network throughput' } })
+    fireEvent.click(screen.getByRole('button', { name: /Generate missing details/i }))
+
+    expect(await screen.findByLabelText('Pinyin')).toHaveValue('tūn tǔ')
+    expect(screen.getByLabelText('English meaning')).toHaveValue('network throughput')
+    expect(screen.getByText('Which meaning do you want?')).toBeInTheDocument()
+    expect(screen.getByText('to take in and send out')).toBeInTheDocument()
+    expect(screen.getByLabelText('Chinese sample sentence')).toHaveValue('这个接口的吞吐很高。')
+  })
+
+  it('clears the Add Word form without touching photo suggestions', async () => {
+    mockDecodedPhoto('single')
+    renderDemo()
+    await openView('Add Word')
+
+    fireEvent.change(screen.getByLabelText(/Chinese word \(simplified\)/i), { target: { value: '吞吐' } })
+    fireEvent.click(screen.getByRole('button', { name: /Generate missing details/i }))
+    fireEvent.click(await screen.findByRole('radio', { name: 'throughput, tūn tǔ' }))
+    expect(screen.getByLabelText('Pinyin')).toHaveValue('tūn tǔ')
+
+    const file = new File(['photo'], 'single.png', { type: 'image/png' })
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(fileInput, { target: { files: [file] } })
+    await waitFor(() => expect(screen.getByAltText('Photo 1 preview')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear form' }))
+
+    expect(screen.getByLabelText(/Chinese word \(simplified\)/i)).toHaveValue('')
+    expect(screen.getByLabelText('Pinyin')).toHaveValue('')
+    expect(screen.getByLabelText('English meaning')).toHaveValue('')
+    expect(screen.queryByText('Which meaning do you want?')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Clear form' })).toBeDisabled()
+    expect(screen.getByAltText('Photo 1 preview')).toBeInTheDocument()
+  })
+
   it('keeps a single demo photo result in the suggestion list', async () => {
     mockDecodedPhoto('single')
     renderDemo()
@@ -623,6 +735,99 @@ describe('Call Analyzer frontend', () => {
 
     const runtimeApi = createApi({ mode: 'runtime' })
     await expect(runtimeApi.generateManualVocabulary({ simplified: '学习' })).rejects.toThrow(
+      'invalid manual vocabulary draft',
+    )
+  })
+
+  it('validates unresolved manual vocabulary variants without requiring top-level learning fields', async () => {
+    const variants = [
+      {
+        traditional: '吞吐',
+        pinyin: 'tūn tǔ',
+        meaning: 'throughput',
+        partOfSpeech: 'noun',
+        example: '这个接口的吞吐很高。',
+        examplePinyin: 'Zhè ge jiē kǒu de tūn tǔ hěn gāo.',
+        exampleTranslation: 'This interface has high throughput.',
+      },
+      {
+        traditional: '吞吐',
+        pinyin: 'tūn tǔ',
+        meaning: 'to take in and send out',
+        partOfSpeech: 'verb',
+        example: '江河在入海口不断吞吐。',
+        examplePinyin: 'Jiāng hé zài rù hǎi kǒu bú duàn tūn tǔ.',
+        exampleTranslation: 'Rivers keep taking in and sending out water where they meet the sea.',
+      },
+    ]
+    const draft = {
+      simplified: '吞吐',
+      pinyin: '',
+      meaning: '',
+      example: '',
+      examplePinyin: '',
+      exampleTranslation: '',
+      model: 'qwen/qwen3-32b',
+      cost: 0.0002,
+      needsChoice: true,
+      matchedContext: false,
+      appliedVariant: -1,
+      variants,
+    }
+    window.go = {
+      main: {
+        App: {
+          GenerateManualVocabulary: vi.fn().mockResolvedValue(draft),
+        },
+      },
+    }
+
+    await expect(createApi({ mode: 'runtime' }).generateManualVocabulary({ simplified: '吞吐' })).resolves.toEqual(draft)
+
+    window.go = {
+      main: {
+        App: {
+          GenerateManualVocabulary: vi.fn().mockResolvedValue({ ...draft, variants: [variants[0]] }),
+        },
+      },
+    }
+    await expect(createApi({ mode: 'runtime' }).generateManualVocabulary({ simplified: '吞吐' })).rejects.toThrow(
+      'invalid manual vocabulary draft',
+    )
+
+    const resolvedDraft = {
+      ...draft,
+      needsChoice: false,
+      pinyin: variants[0].pinyin,
+      meaning: variants[0].meaning,
+      example: variants[0].example,
+      examplePinyin: variants[0].examplePinyin,
+      exampleTranslation: variants[0].exampleTranslation,
+      appliedVariant: 0,
+      variants: [variants[0]],
+    }
+    window.go = {
+      main: {
+        App: {
+          GenerateManualVocabulary: vi.fn().mockResolvedValue(resolvedDraft),
+        },
+      },
+    }
+    await expect(createApi({ mode: 'runtime' }).generateManualVocabulary({ simplified: '吞吐' })).resolves.toEqual(
+      resolvedDraft,
+    )
+
+    window.go = {
+      main: {
+        App: {
+          GenerateManualVocabulary: vi.fn().mockResolvedValue({
+            ...resolvedDraft,
+            pinyin: '',
+          }),
+        },
+      },
+    }
+    await expect(createApi({ mode: 'runtime' }).generateManualVocabulary({ simplified: '吞吐' })).rejects.toThrow(
       'invalid manual vocabulary draft',
     )
   })

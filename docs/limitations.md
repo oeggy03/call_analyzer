@@ -16,6 +16,7 @@ Verified against the current tree. Product boundaries also listed in `README.md`
 - `frontend/wailsjs` and `frontend/dist` are generated. They are not the contract. `frontend/src/lib/api.ts` is.
 - `go test ./...` compiles `frontend/node_modules/flatted/golang/pkg/flatted` when npm dependencies are installed. `./scripts/verify.sh` excludes it.
 - `swift test` does not run on Command Line Tools alone (`no such module 'XCTest'`).
+- Add Word variant choice depends on the model returning distinct senses. There is no local dictionary lookup for Add Word. If the model returns only one variant, the form fills immediately.
 
 ## Unresolved
 
