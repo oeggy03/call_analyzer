@@ -21,7 +21,7 @@ func (manualTestKeyProvider) APIKey(context.Context) (string, error) {
 }
 
 func TestGenerateManualVocabularyUsesStrictModelAndPreservesUserValues(t *testing.T) {
-	const generatedResponse = `{"simplified":"学习","traditional":"学习","pinyin":"xue2 xi2","meaning":"generated meaning","partOfSpeech":"verb","classifier":"个","example":"generated example","examplePinyin":"generated pinyin","exampleTranslation":"generated translation","tags":["generated"]}`
+	const generatedResponse = `{"resolution":"selected","entry":{"simplified":"学习","traditional":"学习","pinyin":"xue2 xi2","meaning":"generated meaning","partOfSpeech":"verb","classifier":"个","example":"我每天学习中文。","examplePinyin":"wo3 mei3 tian1 xue2 xi2 zhong1 wen2","exampleTranslation":"I study Chinese every day.","tags":["generated"]},"variants":[{"traditional":"学习","pinyin":"xue2 xi2","meaning":"generated meaning","partOfSpeech":"verb","classifier":"个","example":"我每天学习中文。","examplePinyin":"wo3 mei3 tian1 xue2 xi2 zhong1 wen2","exampleTranslation":"I study Chinese every day."}]}`
 	var requestPayload map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/chat/completions" {
@@ -97,6 +97,9 @@ func TestGenerateManualVocabularyUsesStrictModelAndPreservesUserValues(t *testin
 	if draft.AiGenerated {
 		t.Fatal("fully user-provided example was marked generated")
 	}
+	if draft.NeedsChoice {
+		t.Fatal("one valid variant unexpectedly required a choice")
+	}
 	if requestPayload["model"] != openrouter.DefaultChatModel {
 		t.Fatalf("unexpected request model: %#v", requestPayload["model"])
 	}
@@ -120,6 +123,13 @@ func TestGenerateManualVocabularyUsesStrictModelAndPreservesUserValues(t *testin
 	if !strings.Contains(userMessage["content"].(string), `"simplified":"学习"`) {
 		t.Fatalf("form was not serialized into the prompt: %#v", userMessage["content"])
 	}
+	systemMessage, _ := messages[0].(map[string]any)
+	systemContent, _ := systemMessage["content"].(string)
+	for _, substring := range []string{"resolution", "ambiguous", "throughput", "tūn tǔ"} {
+		if !strings.Contains(systemContent, substring) {
+			t.Fatalf("system prompt is missing %q: %s", substring, systemContent)
+		}
+	}
 
 	usages, err := store.Usage().ListBySession(ctx, ManualVocabularySessionID, 10)
 	if err != nil {
@@ -138,6 +148,222 @@ func TestGenerateManualVocabularyUsesStrictModelAndPreservesUserValues(t *testin
 	}
 	if len(vocabulary) != 0 {
 		t.Fatalf("generation persisted vocabulary: %#v", vocabulary)
+	}
+}
+
+func newManualVocabularyGenerationService(
+	t *testing.T,
+	generatedResponse string,
+) (*Service, *storage.Store) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"message": map[string]string{"content": generatedResponse},
+			}},
+			"usage": map[string]any{
+				"prompt_tokens":     11,
+				"completion_tokens": 19,
+				"total_tokens":      30,
+				"cost":              0.0042,
+			},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	ctx := context.Background()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	router, err := openrouter.NewClient(openrouter.Config{
+		BaseURL:    server.URL,
+		MaxRetries: 1,
+	}, manualTestKeyProvider{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := New(store, capture.NewMockSource(), NewMemorySecretStore(), router)
+	if err := svc.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return svc, store
+}
+
+func TestGenerateManualVocabularySelectsMeaningVariant(t *testing.T) {
+	const generatedResponse = `{"resolution":"ambiguous","entry":{"simplified":"吞吐","traditional":"吞吐","pinyin":"tūn tǔ","meaning":"to take in and send out","partOfSpeech":"verb","classifier":"","example":"江河在入海口不断吞吐。","examplePinyin":"jiāng hé zài rù hǎi kǒu bù duàn tūn tǔ","exampleTranslation":"Rivers continuously take in and send out water at the estuary.","tags":[]},"variants":[{"traditional":"吞吐","pinyin":"tūn tǔ","meaning":"throughput","partOfSpeech":"noun","classifier":"","example":"这个接口的吞吐很高。","examplePinyin":"zhè ge jiē kǒu de tūn tǔ hěn gāo","exampleTranslation":"This interface has high throughput."},{"traditional":"吞吐","pinyin":"tūn tǔ","meaning":"to take in and send out","partOfSpeech":"verb","classifier":"","example":"江河在入海口不断吞吐。","examplePinyin":"jiāng hé zài rù hǎi kǒu bù duàn tūn tǔ","exampleTranslation":"Rivers continuously take in and send out water at the estuary."}]}`
+	svc, store := newManualVocabularyGenerationService(t, generatedResponse)
+
+	draft, err := svc.GenerateManualVocabulary(context.Background(), ManualVocabularyInput{
+		Simplified: "吞吐",
+		Meaning:    "throughput",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.NeedsChoice ||
+		!draft.MatchedContext ||
+		draft.AppliedVariant != 0 ||
+		draft.Meaning != "throughput" ||
+		draft.Pinyin != "tūn tǔ" ||
+		draft.Example != "这个接口的吞吐很高。" {
+		t.Fatalf("meaning did not select the expected variant: %#v", draft)
+	}
+	vocabulary, err := store.Vocabulary().ListAll(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vocabulary) != 0 {
+		t.Fatalf("generation persisted vocabulary: %#v", vocabulary)
+	}
+}
+
+func TestGenerateManualVocabularySelectsContainedMeaningVariant(t *testing.T) {
+	const generatedResponse = `{"resolution":"ambiguous","entry":{"simplified":"吞吐","traditional":"吞吐","pinyin":"tūn tǔ","meaning":"to take in and send out","partOfSpeech":"verb","classifier":"","example":"江河在入海口不断吞吐。","examplePinyin":"jiāng hé zài rù hǎi kǒu bù duàn tūn tǔ","exampleTranslation":"Rivers continuously take in and send out water at the estuary.","tags":[]},"variants":[{"traditional":"吞吐","pinyin":"tūn tǔ","meaning":"throughput","partOfSpeech":"noun","classifier":"","example":"这个接口的吞吐很高。","examplePinyin":"zhè ge jiē kǒu de tūn tǔ hěn gāo","exampleTranslation":"This interface has high throughput."},{"traditional":"吞吐","pinyin":"tūn tǔ","meaning":"to take in and send out","partOfSpeech":"verb","classifier":"","example":"江河在入海口不断吞吐。","examplePinyin":"jiāng hé zài rù hǎi kǒu bù duàn tūn tǔ","exampleTranslation":"Rivers continuously take in and send out water at the estuary."}]}`
+	svc, _ := newManualVocabularyGenerationService(t, generatedResponse)
+
+	draft, err := svc.GenerateManualVocabulary(context.Background(), ManualVocabularyInput{
+		Simplified: "吞吐",
+		Meaning:    "network throughput",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.NeedsChoice ||
+		draft.AppliedVariant != 0 ||
+		draft.Meaning != "network throughput" ||
+		draft.Pinyin != "tūn tǔ" ||
+		draft.Example != "这个接口的吞吐很高。" {
+		t.Fatalf("contained meaning did not select the expected variant: %#v", draft)
+	}
+}
+
+func TestGenerateManualVocabularyDoesNotMatchShortContainedMeaning(t *testing.T) {
+	const generatedResponse = `{"resolution":"ambiguous","entry":{"simplified":"行","traditional":"行","pinyin":"háng","meaning":"a row of people","partOfSpeech":"noun","classifier":"","example":"一行人走在路上。","examplePinyin":"yì háng rén zǒu zài lù shàng","exampleTranslation":"A row of people walked along the road.","tags":[]},"variants":[{"traditional":"行","pinyin":"háng","meaning":"a row of people","partOfSpeech":"noun","classifier":"","example":"一行人走在路上。","examplePinyin":"yì háng rén zǒu zài lù shàng","exampleTranslation":"A row of people walked along the road."},{"traditional":"行","pinyin":"xíng","meaning":"to walk; to be OK","partOfSpeech":"verb","classifier":"","example":"这样做也行。","examplePinyin":"zhè yàng zuò yě xíng","exampleTranslation":"Doing it this way is also OK."}]}`
+	svc, _ := newManualVocabularyGenerationService(t, generatedResponse)
+
+	draft, err := svc.GenerateManualVocabulary(context.Background(), ManualVocabularyInput{
+		Simplified: "行",
+		Meaning:    "row",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !draft.NeedsChoice ||
+		draft.AppliedVariant != -1 ||
+		draft.Meaning != "row" {
+		t.Fatalf("short contained meaning unexpectedly selected a variant: %#v", draft)
+	}
+}
+
+func TestGenerateManualVocabularySelectsDistinguishingPinyinVariant(t *testing.T) {
+	const generatedResponse = `{"resolution":"ambiguous","entry":{"simplified":"行","traditional":"行","pinyin":"háng","meaning":"row; profession","partOfSpeech":"noun","classifier":"","example":"银行里有很多客户。","examplePinyin":"yín háng lǐ yǒu hěn duō kè hù","exampleTranslation":"There are many customers in the bank.","tags":[]},"variants":[{"traditional":"行","pinyin":"xíng","meaning":"to walk; to be OK","partOfSpeech":"verb","classifier":"","example":"这样做也行。","examplePinyin":"zhè yàng zuò yě xíng","exampleTranslation":"Doing it this way is also OK."},{"traditional":"行","pinyin":"háng","meaning":"row; profession","partOfSpeech":"noun","classifier":"","example":"银行里有很多客户。","examplePinyin":"yín háng lǐ yǒu hěn duō kè hù","exampleTranslation":"There are many customers in the bank."}]}`
+	svc, _ := newManualVocabularyGenerationService(t, generatedResponse)
+
+	draft, err := svc.GenerateManualVocabulary(context.Background(), ManualVocabularyInput{
+		Simplified: "行",
+		Pinyin:     "xing2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.NeedsChoice ||
+		!draft.MatchedContext ||
+		draft.AppliedVariant != 0 ||
+		draft.Meaning != "to walk; to be OK" ||
+		draft.Example != "这样做也行。" ||
+		draft.Pinyin != "xing2" {
+		t.Fatalf("pinyin did not select the expected variant: %#v", draft)
+	}
+}
+
+func TestGenerateManualVocabularyKeepsAmbiguousDraftUnapplied(t *testing.T) {
+	const generatedResponse = `{"resolution":"selected","entry":{"simplified":"行","traditional":"行","pinyin":"xíng","meaning":"to walk; to be OK","partOfSpeech":"verb","classifier":"","example":"这样做也行。","examplePinyin":"zhè yàng zuò yě xíng","exampleTranslation":"Doing it this way is also OK.","tags":[]},"variants":[{"traditional":"行","pinyin":"xíng","meaning":"to walk; to be OK","partOfSpeech":"verb","classifier":"","example":"这样做也行。","examplePinyin":"zhè yàng zuò yě xíng","exampleTranslation":"Doing it this way is also OK."},{"traditional":"行","pinyin":"háng","meaning":"row; profession","partOfSpeech":"noun","classifier":"","example":"银行里有很多客户。","examplePinyin":"yín háng lǐ yǒu hěn duō kè hù","exampleTranslation":"There are many customers in the bank."}]}`
+	svc, store := newManualVocabularyGenerationService(t, generatedResponse)
+
+	draft, err := svc.GenerateManualVocabulary(context.Background(), ManualVocabularyInput{
+		Simplified: "行",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !draft.NeedsChoice ||
+		draft.MatchedContext ||
+		draft.AppliedVariant != -1 ||
+		draft.Pinyin != "" ||
+		draft.Meaning != "" ||
+		draft.Example != "" ||
+		len(draft.Variants) != 2 {
+		t.Fatalf("ambiguous draft was unexpectedly applied: %#v", draft)
+	}
+	usages, err := store.Usage().ListBySession(
+		context.Background(),
+		ManualVocabularySessionID,
+		10,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(usages) != 1 {
+		t.Fatalf("ambiguous generation did not record usage: %#v", usages)
+	}
+	vocabulary, err := store.Vocabulary().ListAll(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vocabulary) != 0 {
+		t.Fatalf("ambiguous generation persisted vocabulary: %#v", vocabulary)
+	}
+}
+
+func TestGenerateManualVocabularyAutoFillsOneValidVariant(t *testing.T) {
+	const generatedResponse = `{"resolution":"selected","entry":{"simplified":"你好","traditional":"你好","pinyin":"nǐ hǎo","meaning":"hello","partOfSpeech":"greeting","classifier":"","example":"你好，很高兴认识你。","examplePinyin":"nǐ hǎo hěn gāo xìng rèn shi nǐ","exampleTranslation":"Hello, nice to meet you.","tags":[]},"variants":[{"traditional":"你好","pinyin":"nǐ hǎo","meaning":"hello","partOfSpeech":"greeting","classifier":"","example":"你好，很高兴认识你。","examplePinyin":"nǐ hǎo hěn gāo xìng rèn shi nǐ","exampleTranslation":"Hello, nice to meet you."}]}`
+	svc, _ := newManualVocabularyGenerationService(t, generatedResponse)
+
+	draft, err := svc.GenerateManualVocabulary(context.Background(), ManualVocabularyInput{
+		Simplified: "你好",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.NeedsChoice ||
+		draft.MatchedContext ||
+		draft.AppliedVariant != 0 ||
+		draft.Pinyin != "nǐ hǎo" ||
+		draft.Meaning != "hello" ||
+		draft.Example != "你好，很高兴认识你。" ||
+		!draft.AiGenerated {
+		t.Fatalf("single variant did not fill the draft: %#v", draft)
+	}
+}
+
+func TestParseManualVocabularyGenerationJSONIsStrict(t *testing.T) {
+	const valid = `{"resolution":"selected","entry":{"simplified":"你好","traditional":"你好","pinyin":"ni3 hao3","meaning":"hello","partOfSpeech":"greeting","classifier":"","example":"你好！","examplePinyin":"ni3 hao3","exampleTranslation":"Hello!","tags":[]},"variants":[{"traditional":"你好","pinyin":"ni3 hao3","meaning":"hello","partOfSpeech":"greeting","classifier":"","example":"你好！","examplePinyin":"ni3 hao3","exampleTranslation":"Hello!"}]}`
+	if _, err := ParseManualVocabularyGenerationJSON(valid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseManualVocabularyGenerationJSON(
+		strings.Replace(valid, `"resolution":"selected",`, "", 1),
+	); err == nil {
+		t.Fatal("missing resolution was accepted")
+	}
+	if _, err := ParseManualVocabularyGenerationJSON(
+		strings.Replace(valid, `"resolution":"selected"`, `"resolution":"unknown"`, 1),
+	); err == nil {
+		t.Fatal("unknown resolution was accepted")
+	}
+	if _, err := ParseManualVocabularyGenerationJSON(valid + valid); err == nil {
+		t.Fatal("trailing JSON was accepted")
+	}
+	if _, err := ParseManualVocabularyGenerationJSON(
+		strings.Replace(valid, `"meaning":"hello"`, `"meaning":null`, 1),
+	); err == nil {
+		t.Fatal("null field was accepted")
 	}
 }
 

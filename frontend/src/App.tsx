@@ -11,6 +11,7 @@ import type {
   LessonTranscriptSummary,
   ManualVocabularyDraft,
   ManualVocabularyInput,
+  ManualVocabularyVariant,
   SettingsPatch,
   TargetApp,
   TranscriptSource,
@@ -159,6 +160,13 @@ type PhotoSuggestion = {
   expanded: boolean
 }
 
+type ManualVariantPrompt = {
+  headword: string
+  origin: ManualVocabularyForm
+  variants: ManualVocabularyVariant[]
+  appliedIndex: number
+}
+
 const EMPTY_MANUAL_VOCABULARY_FORM: ManualVocabularyForm = {
   simplified: '',
   traditional: '',
@@ -201,6 +209,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
   const [editError, setEditError] = useState<string>()
   const [manualForm, setManualForm] = useState<ManualVocabularyForm>(EMPTY_MANUAL_VOCABULARY_FORM)
   const [manualGeneration, setManualGeneration] = useState<ManualVocabularyDraft>()
+  const [manualVariantPrompt, setManualVariantPrompt] = useState<ManualVariantPrompt>()
   const [photoQueue, setPhotoQueue] = useState<PhotoQueueItem[]>([])
   const [photoSuggestions, setPhotoSuggestions] = useState<PhotoSuggestion[]>([])
   const [photoInputError, setPhotoInputError] = useState<string>()
@@ -208,6 +217,8 @@ export function App({ apiClient = defaultApi }: AppProps) {
   const [photoModel, setPhotoModel] = useState<string>()
   const [photoReadProgress, setPhotoReadProgress] = useState<{ current: number; total: number }>()
   const photoId = useRef(0)
+  const manualFormRef = useRef<ManualVocabularyForm>({ ...EMPTY_MANUAL_VOCABULARY_FORM })
+  const manualGenerationRequest = useRef(0)
 
   const current = snapshot ?? EMPTY_SNAPSHOT
   const backendUnavailable = apiClient.mode === 'unavailable' || Boolean(loadError)
@@ -424,13 +435,36 @@ export function App({ apiClient = defaultApi }: AppProps) {
     void runAction('save-settings', () => apiClient.saveSettings(patch), successMessage)
   }
 
-  const updateManualForm = (nextForm: ManualVocabularyForm) => {
+  const setManualFormValue = (nextForm: ManualVocabularyForm) => {
+    manualFormRef.current = nextForm
     setManualForm(nextForm)
+  }
+
+  const updateManualForm = (nextForm: ManualVocabularyForm) => {
+    const previousForm = manualFormRef.current
+    const headwordChanged = nextForm.simplified.trim() !== previousForm.simplified.trim()
+    const formToStore = headwordChanged
+      ? { ...EMPTY_MANUAL_VOCABULARY_FORM, simplified: nextForm.simplified }
+      : nextForm
+    manualFormRef.current = formToStore
+    setManualForm(formToStore)
     setActionError(undefined)
+    if (headwordChanged) {
+      manualGenerationRequest.current += 1
+      setManualGeneration(undefined)
+      setManualVariantPrompt(undefined)
+      setActionMessage(undefined)
+      return
+    }
+    setManualVariantPrompt((prompt) => {
+      if (!prompt || prompt.appliedIndex >= 0) return prompt
+      return { ...prompt, origin: { ...formToStore } }
+    })
   }
 
   const handleGenerateManualVocabulary = () => {
-    const input = manualVocabularyFormToInput(manualForm)
+    const formAtRequest = manualFormRef.current
+    const input = manualVocabularyFormToInput(formAtRequest)
     if (!input.simplified.trim()) {
       setActionError('Enter a Chinese word (simplified) before generating details.')
       setActionMessage(undefined)
@@ -441,27 +475,81 @@ export function App({ apiClient = defaultApi }: AppProps) {
       setActionMessage(undefined)
       return
     }
-    if (hasCompleteManualVocabularyForm(manualForm)) {
+    if (hasCompleteManualVocabularyForm(formAtRequest)) {
       setActionError(undefined)
       setActionMessage('All learning details are already complete; generation is not needed.')
       return
     }
+    const requestedHeadword = input.simplified.trim()
+    const requestId = manualGenerationRequest.current + 1
+    manualGenerationRequest.current = requestId
     setBusyAction('generate-manual-vocabulary')
     setActionError(undefined)
     setActionMessage(undefined)
+    setManualGeneration(undefined)
+    setManualVariantPrompt(undefined)
     void apiClient
       .generateManualVocabulary(input)
       .then((draft) => {
-        setManualForm(manualVocabularyDraftToForm(draft))
+        if (requestId !== manualGenerationRequest.current) return
+        if (manualFormRef.current.simplified.trim() !== requestedHeadword) return
+        const origin = { ...manualFormRef.current }
         setManualGeneration(draft)
+        if (draft.needsChoice) {
+          setManualVariantPrompt({
+            headword: origin.simplified.trim(),
+            origin,
+            variants: draft.variants ?? [],
+            appliedIndex: -1,
+          })
+          setActionMessage('Choose a meaning to fill the empty fields.')
+          return
+        }
+
+        setManualFormValue(manualVocabularyDraftToForm(draft))
+        const variants = draft.variants ?? []
+        if (variants.length >= 2) {
+          const appliedIndex = draft.appliedVariant >= 0 && draft.appliedVariant < variants.length
+            ? draft.appliedVariant
+            : -1
+          setManualVariantPrompt({
+            headword: origin.simplified.trim(),
+            origin,
+            variants,
+            appliedIndex,
+          })
+        } else {
+          setManualVariantPrompt(undefined)
+        }
         setActionMessage('Missing details generated. Review every field before saving.')
       })
       .catch((error: unknown) => {
         setActionError(getErrorMessage(error))
       })
       .finally(() => {
-        setBusyAction(undefined)
+        if (requestId === manualGenerationRequest.current) setBusyAction(undefined)
       })
+  }
+
+  const applyManualVariant = (index: number) => {
+    const prompt = manualVariantPrompt
+    const variant = prompt?.variants[index]
+    if (!prompt || !variant) return
+    setManualFormValue(manualVocabularyVariantToForm(prompt.origin, variant))
+    setManualGeneration((draft) => draft
+      ? { ...draft, needsChoice: false, matchedContext: false, appliedVariant: index }
+      : draft)
+    setManualVariantPrompt({ ...prompt, appliedIndex: index })
+    setActionError(undefined)
+  }
+
+  const clearManualForm = () => {
+    if (busyAction) return
+    setManualFormValue({ ...EMPTY_MANUAL_VOCABULARY_FORM })
+    setManualVariantPrompt(undefined)
+    setManualGeneration(undefined)
+    setActionError(undefined)
+    setActionMessage(undefined)
   }
 
   const handlePhotoFiles = useCallback((files: File[]) => {
@@ -611,8 +699,9 @@ export function App({ apiClient = defaultApi }: AppProps) {
       setPhotoCost(0)
       setPhotoModel(undefined)
       setPhotoReadProgress(undefined)
-      setManualForm({ ...EMPTY_MANUAL_VOCABULARY_FORM })
+      setManualFormValue({ ...EMPTY_MANUAL_VOCABULARY_FORM })
       setManualGeneration(undefined)
+      setManualVariantPrompt(undefined)
       setActionMessage(`${savedCount} words saved to Vocabulary.`)
       setActiveView('vocabulary')
     } catch (error: unknown) {
@@ -640,8 +729,9 @@ export function App({ apiClient = defaultApi }: AppProps) {
       `${input.simplified} saved to Vocabulary.`,
     ).then((didSave) => {
       if (!didSave) return
-      setManualForm({ ...EMPTY_MANUAL_VOCABULARY_FORM })
+      setManualFormValue({ ...EMPTY_MANUAL_VOCABULARY_FORM })
       setManualGeneration(undefined)
+      setManualVariantPrompt(undefined)
       setPhotoQueue([])
       setPhotoSuggestions([])
       setPhotoInputError(undefined)
@@ -741,6 +831,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
                 <ManualVocabularyView
                   form={manualForm}
                   generatedDraft={manualGeneration}
+                  variantPrompt={manualVariantPrompt}
                   photoQueue={photoQueue}
                   photoSuggestions={photoSuggestions}
                   photoInputError={photoInputError}
@@ -753,6 +844,8 @@ export function App({ apiClient = defaultApi }: AppProps) {
                   busyAction={busyAction}
                   onFormChange={updateManualForm}
                   onGenerate={handleGenerateManualVocabulary}
+                  onApplyVariant={applyManualVariant}
+                  onClear={clearManualForm}
                   onPhotoFiles={handlePhotoFiles}
                   onRemovePhoto={handleRemovePhoto}
                   onReadPhotos={handleReadPhotos}
@@ -1450,6 +1543,7 @@ function CandidateCard({
 function ManualVocabularyView({
   form,
   generatedDraft,
+  variantPrompt,
   photoQueue,
   photoSuggestions,
   photoInputError,
@@ -1462,6 +1556,8 @@ function ManualVocabularyView({
   busyAction,
   onFormChange,
   onGenerate,
+  onApplyVariant,
+  onClear,
   onPhotoFiles,
   onRemovePhoto,
   onReadPhotos,
@@ -1474,6 +1570,7 @@ function ManualVocabularyView({
 }: {
   form: ManualVocabularyForm
   generatedDraft?: ManualVocabularyDraft
+  variantPrompt?: ManualVariantPrompt
   photoQueue: PhotoQueueItem[]
   photoSuggestions: PhotoSuggestion[]
   photoInputError?: string
@@ -1486,6 +1583,8 @@ function ManualVocabularyView({
   busyAction?: string
   onFormChange: (form: ManualVocabularyForm) => void
   onGenerate: () => void
+  onApplyVariant: (index: number) => void
+  onClear: () => void
   onPhotoFiles: (files: File[]) => void
   onRemovePhoto: (photoId: string) => void
   onReadPhotos: () => void
@@ -1502,6 +1601,18 @@ function ManualVocabularyView({
   const missingFields = manualVocabularyMissingFields(form)
   const hasCompleteDetails = missingFields.length === 0
   const canGenerate = Boolean(form.simplified.trim()) && hasApiKey && !lessonActive && !hasCompleteDetails && !isBusy
+  const canClear = !isBusy && (
+    Boolean(variantPrompt || generatedDraft) ||
+    Object.entries(form).some(([, value]) => typeof value === 'string' && value.trim())
+  )
+  const variantPickerRef = useRef<HTMLFieldSetElement>(null)
+  const variantKey = variantPrompt
+    ? `${variantPrompt.headword}:${variantPrompt.variants.map((variant) => `${variant.pinyin}:${variant.meaning}`).join('|')}`
+    : ''
+  useEffect(() => {
+    if (!variantKey || typeof variantPickerRef.current?.scrollIntoView !== 'function') return
+    variantPickerRef.current.scrollIntoView({ block: 'center' })
+  }, [variantKey])
 
   return (
     <div className="view-stack">
@@ -1707,6 +1818,9 @@ function ManualVocabularyView({
               <div>
                 <strong>Generated with {generatedDraft.model}</strong>
                 <p>Actual request cost: {formatUsd(generatedDraft.cost)}. The default analyzer uses an OpenRouter zero-data-retention endpoint.</p>
+                {generatedDraft.matchedContext && !generatedDraft.needsChoice && (
+                  <p>Used the details you already entered.</p>
+                )}
               </div>
             </div>
           )}
@@ -1718,7 +1832,49 @@ function ManualVocabularyView({
             </div>
           )}
 
+          {variantPrompt && variantPrompt.variants.length > 1 && (
+            <fieldset className="manual-variant-picker" ref={variantPickerRef}>
+              <legend>Which meaning do you want?</legend>
+              <p className="manual-variant-explanation">
+                This word has more than one reading or meaning. Pick one to fill the empty fields. Nothing is saved yet.
+              </p>
+              <div className="manual-variant-options" role="radiogroup" aria-label="Meaning choices">
+                {variantPrompt.variants.map((variant, index) => {
+                  const radioId = `manual-variant-${index}`
+                  const isSelected = variantPrompt.appliedIndex === index
+                  return (
+                    <label
+                      className={`manual-variant-card${isSelected ? ' is-selected' : ''}`}
+                      htmlFor={radioId}
+                      key={`${variant.meaning}-${variant.pinyin}-${index}`}
+                    >
+                      <input
+                        id={radioId}
+                        type="radio"
+                        name="manual-vocabulary-variant"
+                        checked={isSelected}
+                        onChange={() => onApplyVariant(index)}
+                        aria-label={`${variant.meaning}, ${variant.pinyin}`}
+                      />
+                      <span className="manual-variant-card-content">
+                        <strong>{variant.meaning}</strong>
+                        <span className="manual-variant-detail">
+                          {[variant.pinyin, variant.partOfSpeech, variant.classifier].filter(Boolean).join(' · ')}
+                        </span>
+                        <span className="manual-variant-example">{variant.example}</span>
+                        <span className="manual-variant-translation">{variant.exampleTranslation}</span>
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            </fieldset>
+          )}
+
           <div className="manual-action-row">
+            <button className="button button-secondary manual-clear-button" type="button" onClick={onClear} disabled={!canClear}>
+              Clear form
+            </button>
             <button className="button button-secondary" type="button" onClick={onGenerate} disabled={!canGenerate}>
               <Icon name="spark" />
               {isGenerating ? 'Generating…' : 'Generate missing details'}
@@ -1728,7 +1884,9 @@ function ManualVocabularyView({
               {isSaving ? 'Saving…' : 'Save to Vocabulary'}
             </button>
           </div>
-          {lessonActive
+          {variantPrompt && variantPrompt.appliedIndex < 0
+            ? <p className="helper-text">The form stays as you typed it until you pick a meaning.</p>
+            : lessonActive
             ? <p className="helper-text">Missing-detail generation is available again after the active lesson finishes. Photo reading remains available.</p>
             : !hasApiKey
             ? <p className="helper-text">Generation is unavailable without a key, but saving does not use AI.</p>
@@ -2950,6 +3108,28 @@ function manualVocabularyDraftToForm(draft: ManualVocabularyDraft): ManualVocabu
     exampleTranslation: draft.exampleTranslation ?? '',
     tags: (draft.tags ?? []).join(', '),
     aiGenerated: Boolean(draft.aiGenerated),
+  }
+}
+
+function manualVocabularyVariantToForm(
+  origin: ManualVocabularyForm,
+  variant: ManualVocabularyVariant,
+): ManualVocabularyForm {
+  const useOrigin = (value: string, replacement?: string) => value.trim() ? value : replacement ?? ''
+  return {
+    simplified: origin.simplified,
+    traditional: useOrigin(origin.traditional, variant.traditional),
+    pinyin: useOrigin(origin.pinyin, variant.pinyin),
+    meaning: useOrigin(origin.meaning, variant.meaning),
+    partOfSpeech: useOrigin(origin.partOfSpeech, variant.partOfSpeech),
+    classifier: useOrigin(origin.classifier, variant.classifier),
+    example: useOrigin(origin.example, variant.example),
+    examplePinyin: useOrigin(origin.examplePinyin, variant.examplePinyin),
+    exampleTranslation: useOrigin(origin.exampleTranslation, variant.exampleTranslation),
+    tags: origin.tags,
+    aiGenerated: !origin.example.trim() || !origin.examplePinyin.trim() || !origin.exampleTranslation.trim()
+      ? true
+      : origin.aiGenerated,
   }
 }
 

@@ -126,6 +126,19 @@ func (a *App) GenerateManualVocabulary(input ManualVocabularyInput) (ManualVocab
 	if err != nil {
 		return ManualVocabularyDraft{}, err
 	}
+	variants := make([]ManualVocabularyVariant, 0, len(draft.Variants))
+	for _, variant := range draft.Variants {
+		variants = append(variants, ManualVocabularyVariant{
+			Traditional:        variant.Traditional,
+			Pinyin:             variant.Pinyin,
+			Meaning:            variant.Meaning,
+			PartOfSpeech:       variant.PartOfSpeech,
+			Classifier:         variant.Classifier,
+			Example:            variant.Example,
+			ExamplePinyin:      variant.ExamplePinyin,
+			ExampleTranslation: variant.ExampleTranslation,
+		})
+	}
 	return ManualVocabularyDraft{
 		Simplified:         draft.Simplified,
 		Traditional:        draft.Traditional,
@@ -140,6 +153,10 @@ func (a *App) GenerateManualVocabulary(input ManualVocabularyInput) (ManualVocab
 		AiGenerated:        draft.AiGenerated,
 		Model:              draft.Model,
 		Cost:               draft.Cost,
+		NeedsChoice:        draft.NeedsChoice,
+		MatchedContext:     draft.MatchedContext,
+		AppliedVariant:     draft.AppliedVariant,
+		Variants:           variants,
 	}, nil
 }
 

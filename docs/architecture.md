@@ -43,7 +43,7 @@ Mark Moment is `App.MarkMoment` → `Service.MarkMoment`. It inserts a `system/m
 
 ## Add Word
 
-`App.GenerateManualVocabulary` calls the analyzer and records usage under `ManualVocabularySessionID`. It returns a draft and does not insert vocabulary; the UI disables generation during a live lesson. `App.SaveManualVocabulary` persists a confirmed entry, and the UI permits saving a complete manual form during capture. Photo recognition returns a draft and records usage under `PhotoVocabularySessionID`; reading and saving photos also remain available during capture.
+`App.GenerateManualVocabulary` calls the analyzer and records usage under `ManualVocabularySessionID`. It returns a draft and does not insert vocabulary. The draft adds `needsChoice`, `matchedContext`, `appliedVariant`, and `variants`. The UI leaves the form unchanged when `needsChoice` is true and shows those variants for selection. The UI disables generation during a live lesson. `App.SaveManualVocabulary` persists a confirmed entry, and the UI permits saving a complete manual form during capture. Photo recognition returns a draft and records usage under `PhotoVocabularySessionID`; reading and saving photos also remain available during capture.
 
 Lesson transcription, lesson analysis, and Add Word generation request ZDR routing and deny data collection. Photo vision requests do not include those routing fields. Photo usage is recorded separately from lesson cost.
 
