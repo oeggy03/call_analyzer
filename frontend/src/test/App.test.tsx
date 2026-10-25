@@ -296,6 +296,35 @@ describe('Call Analyzer frontend', () => {
     expect(screen.queryByText(/no automatic cost stop/i)).not.toBeInTheDocument()
   })
 
+  it('asks for a cloud vocabulary key when the saved key cannot be used', async () => {
+    const api = createDemoApi()
+    const snapshot = await api.getSnapshot()
+    vi.spyOn(api, 'getSnapshot').mockResolvedValue({
+      ...snapshot,
+      settings: {
+        ...snapshot.settings,
+        supabaseAccessStatus: 'missing',
+        supabaseAccessDetail: 'Add the cloud vocabulary key for this computer.',
+      },
+    })
+    const saveSupabaseKey = vi.spyOn(api, 'saveSupabaseKey').mockResolvedValue({
+      ...snapshot,
+      settings: {
+        ...snapshot.settings,
+        supabaseAccessStatus: 'ready',
+        supabaseAccessDetail: 'Cloud vocabulary can be read and written.',
+      },
+    })
+    render(<App apiClient={api} />)
+
+    expect(await screen.findByText('Add the cloud vocabulary key for this computer.')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Cloud vocabulary key'), { target: { value: 'sb_secret_fixture' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
+
+    await waitFor(() => expect(saveSupabaseKey).toHaveBeenCalledWith('sb_secret_fixture'))
+    expect(await screen.findByText('Cloud vocabulary key saved.')).toBeInTheDocument()
+  })
+
   it('shows the cloud pull in a banner that can be closed', async () => {
     const api = createDemoApi()
     const snapshot = await api.getSnapshot()

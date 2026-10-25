@@ -62,6 +62,10 @@ export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
 }
 
+export function SaveSupabaseKey(arg1) {
+  return window['go']['main']['App']['SaveSupabaseKey'](arg1);
+}
+
 export function StartLesson(arg1) {
   return window['go']['main']['App']['StartLesson'](arg1);
 }

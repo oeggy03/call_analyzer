@@ -207,6 +207,8 @@ type SettingsSnapshot struct {
 	PullChangeCount         int     `json:"pullChangeCount,omitempty"`
 	LastPullAt              string  `json:"lastPullAt,omitempty"`
 	PullError               string  `json:"pullError,omitempty"`
+	SupabaseAccessStatus    string  `json:"supabaseAccessStatus,omitempty"`
+	SupabaseAccessDetail    string  `json:"supabaseAccessDetail,omitempty"`
 	STTModel                string  `json:"sttModel"`
 	AnalyzerModel           string  `json:"analyzerModel"`
 	VisionModel             string  `json:"visionModel"`

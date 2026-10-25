@@ -78,6 +78,7 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 		}
 	}
 	syncStatus := a.service.SyncStatus(ctx)
+	accessStatus, accessDetail := a.service.SupabaseAccess()
 	target := a.service.Target()
 	if target == "" || target == "zoom" || target == "us.zoom.xos" || target == "googleMeet" || target == "teams" {
 		target = "system"
@@ -137,6 +138,8 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 			PullChangeCount:         syncStatus.PullChangeCount,
 			LastPullAt:              timestampFromPointer(syncStatus.LastPullAt),
 			PullError:               syncStatus.PullError,
+			SupabaseAccessStatus:    accessStatus,
+			SupabaseAccessDetail:    accessDetail,
 			STTModel:                settings.STTModel,
 			AnalyzerModel:           settings.AnalyzerModel,
 			VisionModel:             settings.VisionModel,

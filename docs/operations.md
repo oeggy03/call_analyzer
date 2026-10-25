@@ -27,7 +27,7 @@ The helper's plist is `native/macos-capture/Sources/call-analyzer-capture/Info.p
 | --- | --- | --- |
 | SQLite | `os.UserConfigDir()/call_analyzer/call_analyzer.db` | On macOS, `~/Library/Application Support/call_analyzer/call_analyzer.db`. Opened in `NewApp`. Mode `0600`. |
 | API key | Keychain service `github.com/oeggy03.call_analyzer`, account `OPENROUTER_API_KEY` | Not in SQLite. Environment variable wins. |
-| Supabase secret | `SUPABASE_SECRET_KEY` environment variable, or on macOS only the Keychain service `github.com/oeggy03.call_analyzer`, account `SUPABASE_SECRET_KEY` | Not in SQLite, logs, tests, docs, or snapshots. The fallback item belongs only to this Mac. |
+| Supabase secret | `SUPABASE_SECRET_KEY` environment variable, or on macOS only the Keychain service `github.com/oeggy03.call_analyzer`, account `SUPABASE_SECRET_KEY` | Not in SQLite, logs, tests, docs, or snapshots. The fallback item belongs only to this Mac. Startup checks read and write access, and a replacement entered in the app is saved to that same Keychain item. The environment value still wins. |
 | Supabase URL | `SUPABASE_URL`, defaulting to `https://zoiwsytnyrdifggwleru.supabase.co` | Used only by the vocabulary PostgREST client. |
 | Capture audio | A temp directory created by `createSessionSpool` | 16 kHz mono chunks are deleted as the adapter reads them. The session spool is removed on stop; stale directories with no live owner are removed during source initialization and before a new session. |
 | Settings | `settings` table | JSON values. Keys are the constants in `internal/service/settings.go`. |

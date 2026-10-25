@@ -12,6 +12,8 @@ export namespace main {
 	    pullChangeCount?: number;
 	    lastPullAt?: string;
 	    pullError?: string;
+	    supabaseAccessStatus?: string;
+	    supabaseAccessDetail?: string;
 	    sttModel: string;
 	    analyzerModel: string;
 	    visionModel: string;
@@ -37,6 +39,8 @@ export namespace main {
 	        this.pullChangeCount = source["pullChangeCount"];
 	        this.lastPullAt = source["lastPullAt"];
 	        this.pullError = source["pullError"];
+	        this.supabaseAccessStatus = source["supabaseAccessStatus"];
+	        this.supabaseAccessDetail = source["supabaseAccessDetail"];
 	        this.sttModel = source["sttModel"];
 	        this.analyzerModel = source["analyzerModel"];
 	        this.visionModel = source["visionModel"];

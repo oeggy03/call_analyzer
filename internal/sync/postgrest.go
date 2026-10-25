@@ -119,6 +119,60 @@ func (c *PostgRESTClient) PublishVocabularyEntry(
 	return nil
 }
 
+const accessProbeTagName = "call-analyzer-access-probe"
+const accessProbeTagID = "f8c1a6d2-4b3e-4f1a-9c7d-0a1b2c3d4e5f"
+
+// ProbeReadWrite checks that the secret can read vocabulary and write a tag.
+// The probe tag is removed before the method returns.
+func (c *PostgRESTClient) ProbeReadWrite(ctx context.Context) error {
+	if c == nil {
+		return errors.New("sync: PostgREST client is not configured")
+	}
+	var rows []struct {
+		ID string `json:"id"`
+	}
+	if err := c.requestJSON(
+		ctx,
+		http.MethodGet,
+		"vocabulary_entries",
+		url.Values{
+			"select": []string{"id"},
+			"limit":  []string{"1"},
+		},
+		nil,
+		"",
+		&rows,
+	); err != nil {
+		return fmt.Errorf("sync: read vocabulary: %w", err)
+	}
+	if err := c.requestJSON(
+		ctx,
+		http.MethodPost,
+		"tags",
+		url.Values{"on_conflict": []string{"name"}},
+		[]map[string]any{{
+			"id":   accessProbeTagID,
+			"name": accessProbeTagName,
+		}},
+		"resolution=merge-duplicates,return=minimal",
+		nil,
+	); err != nil {
+		return fmt.Errorf("sync: write vocabulary: %w", err)
+	}
+	if err := c.requestJSON(
+		ctx,
+		http.MethodDelete,
+		"tags",
+		url.Values{"name": []string{"eq." + accessProbeTagName}},
+		nil,
+		"",
+		nil,
+	); err != nil {
+		return fmt.Errorf("sync: write vocabulary: %w", err)
+	}
+	return nil
+}
+
 func (c *PostgRESTClient) ListConfirmedVocabulary(ctx context.Context) ([]domain.VocabularyEntry, error) {
 	if c == nil {
 		return nil, errors.New("sync: PostgREST client is not configured")

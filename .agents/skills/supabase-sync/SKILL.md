@@ -42,4 +42,7 @@ other non-Darwin builds have no Keychain and use only their own
 `SUPABASE_SECRET_KEY`; never reuse or copy the Mac key.
 
 The secret is sent only as PostgREST `apikey` and `Authorization: Bearer`
-headers. It is never part of an `AppSnapshot`.
+headers. It is never part of an `AppSnapshot`. Startup checks read one
+vocabulary id and write then delete the tag `call-analyzer-access-probe`.
+A replacement key is saved with the same secret store. The environment value
+still wins, so a Keychain write does not override `SUPABASE_SECRET_KEY`.

@@ -66,6 +66,7 @@ export const BACKEND_METHODS = {
   mergeCandidates: 'MergeCandidates',
   saveSettings: 'SaveSettings',
   syncNow: 'SyncNow',
+  saveSupabaseKey: 'SaveSupabaseKey',
   deleteLastLesson: 'DeleteLastLesson',
   refresh: 'Refresh',
 } as const
@@ -96,6 +97,7 @@ export interface AppApi {
   mergeCandidates(sourceId: string, targetId: string): Promise<AppSnapshot>
   saveSettings(patch: SettingsPatch): Promise<AppSnapshot>
   syncNow(): Promise<AppSnapshot>
+  saveSupabaseKey(key: string): Promise<AppSnapshot>
   deleteLastLesson(): Promise<AppSnapshot>
   refresh(): Promise<AppSnapshot>
   subscribe(listener: (snapshot: AppSnapshot) => void): () => void
@@ -380,6 +382,8 @@ function createDemoSnapshot(): AppSnapshot {
       syncPendingCount: 0,
       syncStatus: 'idle',
       lastSyncAt: DEMO_TIMESTAMP,
+      supabaseAccessStatus: 'ready',
+      supabaseAccessDetail: 'Cloud vocabulary can be read and written.',
       sttModel: 'qwen/qwen3-asr-1.7b',
       analyzerModel: 'qwen/qwen3-32b',
       visionModel: 'qwen/qwen3.7-flash',
@@ -1059,6 +1063,18 @@ class DemoApi implements AppApi {
     return this.getSnapshot()
   }
 
+  async saveSupabaseKey(key: string): Promise<AppSnapshot> {
+    if (!key.trim()) throw new ApiValidationError('Cloud vocabulary key is required.')
+    this.snapshot.settings = {
+      ...this.snapshot.settings,
+      supabaseSyncConfigured: true,
+      supabaseAccessStatus: 'ready',
+      supabaseAccessDetail: 'Cloud vocabulary can be read and written.',
+    }
+    this.publish()
+    return this.getSnapshot()
+  }
+
   async deleteLastLesson(): Promise<AppSnapshot> {
     if (this.snapshot.lesson.status === 'live') {
       throw new ApiValidationError('Stop the live lesson before deleting its data.')
@@ -1192,6 +1208,10 @@ class RuntimeApi implements AppApi {
 
   async syncNow(): Promise<AppSnapshot> {
     return this.callMutation(BACKEND_METHODS.syncNow)
+  }
+
+  async saveSupabaseKey(key: string): Promise<AppSnapshot> {
+    return this.callMutation(BACKEND_METHODS.saveSupabaseKey, key)
   }
 
   async deleteLastLesson(): Promise<AppSnapshot> {
@@ -1339,6 +1359,10 @@ class UnavailableApi implements AppApi {
   }
 
   syncNow(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  saveSupabaseKey(): Promise<AppSnapshot> {
     return this.fail()
   }
 

@@ -49,6 +49,10 @@ These rules are enforced in code, but they are easy to miss because the UI, the 
   simplified, traditional, and reading under a different id keeps the local
   id. A confirmed local word with no pending outbox row is removed when that
   id is gone from the cloud. `SyncNow` uploads only and does not pull.
+  Startup checks probe that the saved Supabase secret can read vocabulary and
+  write a tag, then delete that tag. A missing or rejected key asks for a
+  replacement. On macOS the replacement is stored in the Keychain. An
+  environment value still wins over the Keychain.
   Closing the window asks "You still have unsynced items. Sync now?" when a flush would upload a row. Sync now sends those rows and then closes. Not now closes and leaves them in the outbox.
 - The runner collapses events by vocabulary id and reads the current SQLite
   row. Confirmed and manually saved rows are uploaded. A merged candidate is

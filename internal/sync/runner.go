@@ -96,6 +96,15 @@ func NewRunner(
 	}
 }
 
+func (r *Runner) Running() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.started
+}
+
 func (r *Runner) Start(ctx context.Context) {
 	if r == nil {
 		return

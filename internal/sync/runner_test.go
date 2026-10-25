@@ -630,3 +630,58 @@ func TestSyncNowDoesNotPull(t *testing.T) {
 		t.Fatalf("sync now set pull status %q", runner.Status().PullStatus)
 	}
 }
+
+func TestProbeReadWriteChecksVocabularyAndTag(t *testing.T) {
+	var sawRead, sawWrite, sawDelete bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == "/rest/v1/vocabulary_entries":
+			sawRead = true
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `[]`)
+		case req.Method == http.MethodPost && req.URL.Path == "/rest/v1/tags":
+			sawWrite = true
+			body, _ := io.ReadAll(req.Body)
+			if !strings.Contains(string(body), accessProbeTagName) {
+				t.Errorf("probe tag missing from %s", body)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case req.Method == http.MethodDelete && req.URL.Path == "/rest/v1/tags":
+			sawDelete = true
+			if !strings.Contains(req.URL.RawQuery, "name=eq."+accessProbeTagName) {
+				t.Errorf("delete query = %s", req.URL.RawQuery)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected %s %s", req.Method, req.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client, err := NewPostgRESTClient(server.URL, "fixture-secret", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ProbeReadWrite(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !sawRead || !sawWrite || !sawDelete {
+		t.Fatalf("read=%v write=%v delete=%v", sawRead, sawWrite, sawDelete)
+	}
+}
+
+func TestProbeReadWriteRejectsUnauthorized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"message":"bad"}`)
+	}))
+	defer server.Close()
+	client, err := NewPostgRESTClient(server.URL, "fixture-secret", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.ProbeReadWrite(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "HTTP 401") {
+		t.Fatal(err)
+	}
+}

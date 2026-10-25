@@ -89,6 +89,7 @@ export interface PrivacyState {
 
 export type SyncStatus = 'not_configured' | 'waiting' | 'syncing' | 'idle' | 'error'
 export type PullStatus = 'pulling' | 'idle' | 'error'
+export type SupabaseAccessStatus = 'unchecked' | 'checking' | 'missing' | 'ready' | 'invalid'
 
 export interface Settings {
   openRouterKeyConfigured: boolean
@@ -102,6 +103,8 @@ export interface Settings {
   pullChangeCount?: number
   lastPullAt?: string
   pullError?: string
+  supabaseAccessStatus?: SupabaseAccessStatus
+  supabaseAccessDetail?: string
   sttModel: string
   analyzerModel: string
   visionModel: string

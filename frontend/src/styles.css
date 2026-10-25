@@ -1041,6 +1041,13 @@ select:hover,
   margin-top: 1px;
 }
 
+.cloud-key-form {
+  display: grid;
+  gap: 8px;
+  background: var(--paper);
+  padding: 10px 11px 12px;
+}
+
 .setup-settings-button {
   justify-self: stretch;
   border-radius: 0;

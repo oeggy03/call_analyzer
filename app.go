@@ -78,6 +78,7 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 	a.emit("backend.ready", a.service.Config(ctx))
+	go a.checkSupabaseAccess()
 }
 
 func (a *App) beforeClose(ctx context.Context) bool {
@@ -285,6 +286,7 @@ func (a *App) SaveManualVocabulary(input ManualVocabularyInput) (AppSnapshot, er
 
 func (a *App) RequestCapturePermission() (AppSnapshot, error) {
 	err := a.checkReadiness(a.context(), a.service.Target())
+	a.checkSupabaseAccess()
 	snapshot, snapshotErr := a.GetAppSnapshot()
 	if snapshotErr == nil {
 		a.emit("snapshot_changed", snapshot)
@@ -440,6 +442,19 @@ func (a *App) SaveSettings(patch SettingsPatch) (AppSnapshot, error) {
 
 func (a *App) Refresh() (AppSnapshot, error) {
 	return a.GetAppSnapshot()
+}
+
+func (a *App) SaveSupabaseKey(key string) (AppSnapshot, error) {
+	if err := a.service.SetSupabaseSecret(a.context(), key); err != nil {
+		return AppSnapshot{}, err
+	}
+	return a.GetAppSnapshot()
+}
+
+func (a *App) checkSupabaseAccess() {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_ = a.service.CheckSupabaseAccess(ctx)
 }
 
 func (a *App) SyncNow() (AppSnapshot, error) {

@@ -44,7 +44,9 @@ These instructions authorize the orchestrator to delegate implementation work wi
   `Service.Initialize`; it does not use or revive the legacy `SyncEnabled` flag.
   It waits ten minutes after the newest eligible vocabulary outbox row and
   uploads the current confirmed or manually saved SQLite row. Launch pulls
-  confirmed vocabulary first. `SyncNow` uploads only. A merged candidate
+  confirmed vocabulary first. `SyncNow` uploads only. Startup checks that the
+  secret can read and write; a replacement is saved through the same secret
+  store and is never placed in the snapshot. A merged candidate
   is not uploaded; when its target is confirmed, that target is uploaded with
   the moved senses, examples, and tags. Closing asks before uploading pending
   rows; declining leaves them in the outbox. Study review events stay pending.

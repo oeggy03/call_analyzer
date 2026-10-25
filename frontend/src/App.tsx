@@ -342,6 +342,27 @@ export function App({ apiClient = defaultApi }: AppProps) {
     void runAction('permission', () => apiClient.requestCapturePermission(), 'Capture permission status updated.')
   }
 
+  const saveCloudKey = async (key: string) => {
+    setBusyAction('save-cloud-key')
+    setActionError(undefined)
+    setActionMessage(undefined)
+    try {
+      const next = await apiClient.saveSupabaseKey(key)
+      setSnapshot(next)
+      if (next.settings.supabaseAccessStatus === 'ready') {
+        setActionMessage('Cloud vocabulary key saved.')
+        return true
+      }
+      setActionError(next.settings.supabaseAccessDetail || 'This key cannot read and write cloud vocabulary.')
+      return false
+    } catch (error: unknown) {
+      setActionError(getErrorMessage(error))
+      return false
+    } finally {
+      setBusyAction(undefined)
+    }
+  }
+
   const openEdit = (candidate: Candidate) => {
     setEditingCandidate(candidate)
     setEditDraft({
@@ -829,6 +850,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
                     )
                   }
                   onPermission={handlePermission}
+                  onSaveCloudKey={saveCloudKey}
                 />
               )}
               {activeView === 'transcripts' && <PastTranscriptsView apiClient={apiClient} />}
@@ -1023,6 +1045,7 @@ function LiveLessonView({
   onOpenSettings,
   onMarkMoment,
   onPermission,
+  onSaveCloudKey,
 }: {
   snapshot: AppSnapshot
   consent: boolean
@@ -1035,6 +1058,7 @@ function LiveLessonView({
   onOpenSettings: () => void
   onMarkMoment: () => void
   onPermission: () => void
+  onSaveCloudKey: (key: string) => Promise<boolean>
 }) {
   const isLive = snapshot.lesson.status === 'live'
   const isInterrupted = snapshot.lesson.status === 'error' && Boolean(snapshot.lesson.id)
@@ -1045,6 +1069,10 @@ function LiveLessonView({
   const hasApiKey = snapshot.settings.openRouterKeyConfigured
   const captureReady = snapshot.capturePermission === 'granted'
   const setupReady = hasApiKey && captureReady
+  const cloudAccess = snapshot.settings.supabaseAccessStatus ?? 'unchecked'
+  const cloudReady = cloudAccess === 'ready'
+  const cloudNeedsKey = cloudAccess === 'missing' || cloudAccess === 'invalid'
+  const [cloudKeyDraft, setCloudKeyDraft] = useState('')
   const pendingCandidates = snapshot.candidates.filter((candidate) => candidate.status === 'pending').length
 
   return (
@@ -1127,13 +1155,18 @@ function LiveLessonView({
                 <div className="setup-checklist-heading">
                   <div>
                     <strong>Startup checks</strong>
-                    <p>Run these checks again after changing macOS permissions.</p>
+                    <p>Run these checks again after changing macOS permissions or the cloud key.</p>
                   </div>
                   <button className="button button-secondary button-small" type="button" onClick={onPermission} disabled={!canInteract || Boolean(busyAction)}>
                     {busyAction === 'permission' ? 'Checking…' : 'Check setup'}
                   </button>
                 </div>
                 <SetupCheck label="OpenRouter API key" detail={hasApiKey ? 'Saved securely' : 'Add a key in Settings'} status={hasApiKey ? 'ready' : 'blocked'} />
+                <SetupCheck
+                  label="Cloud vocabulary key"
+                  detail={snapshot.settings.supabaseAccessDetail || (cloudAccess === 'checking' ? 'Checking cloud vocabulary access.' : 'Not checked')}
+                  status={cloudReady ? 'ready' : cloudAccess === 'unchecked' || cloudAccess === 'checking' ? 'pending' : 'blocked'}
+                />
                 <SetupCheck
                   label="Screen and system audio"
                   detail={captureReady ? 'Permission granted' : snapshot.capturePermission === 'denied' ? 'Permission denied' : 'Not checked'}
@@ -1150,6 +1183,38 @@ function LiveLessonView({
                   <button className="button button-secondary button-small setup-settings-button" type="button" onClick={onOpenSettings}>
                     Open Settings
                   </button>
+                )}
+                {cloudNeedsKey && (
+                  <form
+                    className="cloud-key-form"
+                    onSubmit={(event) => {
+                      event.preventDefault()
+                      if (!cloudKeyDraft.trim() || busyAction === 'save-cloud-key') return
+                      void onSaveCloudKey(cloudKeyDraft.trim()).then((saved) => {
+                        if (saved) setCloudKeyDraft('')
+                      })
+                    }}
+                  >
+                    <label className="field-label" htmlFor="cloud-vocabulary-key">Cloud vocabulary key</label>
+                    <input
+                      id="cloud-vocabulary-key"
+                      className="text-input"
+                      type="password"
+                      value={cloudKeyDraft}
+                      onChange={(event) => setCloudKeyDraft(event.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="Supabase secret key"
+                    />
+                    <p className="helper-text">
+                      {cloudAccess === 'invalid'
+                        ? 'This key cannot read and write cloud vocabulary. Enter a replacement. On this Mac it is saved in the Keychain.'
+                        : 'Add the Supabase secret key for this computer. On this Mac it is saved in the Keychain.'}
+                    </p>
+                    <button className="button button-secondary button-small" type="submit" disabled={!cloudKeyDraft.trim() || busyAction === 'save-cloud-key'}>
+                      {busyAction === 'save-cloud-key' ? 'Saving…' : 'Save key'}
+                    </button>
+                  </form>
                 )}
               </div>
               <div className="lesson-tag-field">
