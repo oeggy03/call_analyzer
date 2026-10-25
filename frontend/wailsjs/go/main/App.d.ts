@@ -32,6 +32,10 @@ export function SaveManualVocabulary(arg1:main.ManualVocabularyInput):Promise<ma
 
 export function SaveSettings(arg1:main.SettingsPatch):Promise<main.AppSnapshot>;
 
+export function SaveSupabaseKey(arg1:string):Promise<main.AppSnapshot>;
+
 export function StartLesson(arg1:main.StartLessonInput):Promise<main.AppSnapshot>;
 
 export function StopLesson():Promise<main.AppSnapshot>;
+
+export function SyncNow():Promise<main.AppSnapshot>;

@@ -14,7 +14,7 @@ Package roles are listed in `README.md`. This file is the boundary and flow map.
 | Model HTTP | `internal/openrouter/client.go` | OpenRouter | Audio transcription, text chat, and vision chat |
 | Database | `internal/storage/store.go` | embedded SQL | `internal/storage/migrations/*.sql`, applied in filename order |
 | Vocabulary rules | `internal/vocabulary/vocabulary.go` | used by `internal/service/vocabulary.go` | `NormalizeCandidate`, `ExtractionSchema` |
-| Sync | `internal/sync/sync.go` | nothing at runtime | `Dispatcher` exists; the app does not construct it |
+| Sync | `internal/sync/runner.go`, `postgrest.go` | service, storage, Supabase PostgREST | `Runner` is started by `Service.Initialize`; the legacy `Dispatcher` and `SyncEnabled` flag remain unused |
 
 `assets.go` embeds `frontend/dist` for the packaged app. Vite writes that directory. It is not hand-edited source.
 
@@ -53,6 +53,6 @@ Lesson transcription, lesson analysis, and Add Word generation request ZDR routi
 
 ## Database
 
-`storage.Open` runs embedded migrations once and records them in `schema_migrations`. Repositories live next to `store.go` (`lessons.go`, `vocabulary.go`, `outbox.go`, `study.go`). Supported vocabulary and lesson mutations write outbox rows in their transaction. No app startup path calls `sync.Dispatcher.Dispatch`.
+`storage.Open` runs embedded migrations once and records them in `schema_migrations`. Repositories live next to `store.go` (`lessons.go`, `vocabulary.go`, `outbox.go`, `study.go`). Supported vocabulary and lesson mutations write outbox rows in their transaction. The vocabulary runner consumes only undelivered `vocabulary_entry` events after a ten-minute quiet period, collapses each aggregate to one operation, and reads the current SQLite row. It acknowledges candidate, rejected, and merged-source rows locally, uploads confirmed and manually saved rows through PostgREST, republishes a confirmed merge target, and leaves `study.review.recorded` pending. It does not sync lessons, transcripts, observations, or study-state updates. Launch pulls confirmed vocabulary before the upload loop. `SyncNow` uploads only. Closing asks before uploading pending vocabulary, and shutdown flushes only when that prompt was accepted or there was nothing to upload. The legacy `SyncEnabled` flag and `sync.Dispatcher` remain unused.
 
 The legacy `hardBudgetUsd` setting remains validated as greater than zero and no more than US$0.50. `Budget.Check` does not block requests and the snapshot always reports `hardExceeded: false`; the Settings UI describes the session as uncapped.

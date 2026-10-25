@@ -37,6 +37,8 @@ The app does not load `.env` files. `.env.example` lists the process environment
 | Variable | Effect |
 | --- | --- |
 | `OPENROUTER_API_KEY` | Read before Keychain. When set, Settings cannot clear the key. Required only for `cmd/evaluate -execute` and for live model calls if Keychain is empty. |
+| `SUPABASE_SECRET_KEY` | Enables vocabulary sync. Environment lookup wins on every OS; macOS otherwise uses its own Keychain item, while Windows and other non-Darwin builds use this variable only. |
+| `SUPABASE_URL` | Optional vocabulary PostgREST endpoint override. Defaults to the configured hosted Supabase project. |
 | `CALL_ANALYZER_CAPTURE_HELPER` | Absolute helper path; tried before `CALL_ANALYZER_CAPTURE_BIN`, the executable-adjacent helper, and `build/bin/call-analyzer-capture`. See `resolveHelperPath`. |
 | `CALL_ANALYZER_CAPTURE_BIN` | Alternate helper path. |
 | `WAILS_BIN` | Wails CLI used by `scripts/setup.sh`, `scripts/dev.sh`, and `scripts/build-macos-app.sh`. |

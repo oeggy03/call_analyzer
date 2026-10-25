@@ -197,6 +197,18 @@ type PrivacyState struct {
 
 type SettingsSnapshot struct {
 	OpenRouterKeyConfigured bool    `json:"openRouterKeyConfigured"`
+	SupabaseSyncConfigured  bool    `json:"supabaseSyncConfigured"`
+	SyncPendingCount        int     `json:"syncPendingCount"`
+	SyncStatus              string  `json:"syncStatus"`
+	SyncWaitingUntil        string  `json:"syncWaitingUntil,omitempty"`
+	LastSyncAt              string  `json:"lastSyncAt,omitempty"`
+	LastSyncError           string  `json:"lastSyncError,omitempty"`
+	PullStatus              string  `json:"pullStatus,omitempty"`
+	PullChangeCount         int     `json:"pullChangeCount,omitempty"`
+	LastPullAt              string  `json:"lastPullAt,omitempty"`
+	PullError               string  `json:"pullError,omitempty"`
+	SupabaseAccessStatus    string  `json:"supabaseAccessStatus,omitempty"`
+	SupabaseAccessDetail    string  `json:"supabaseAccessDetail,omitempty"`
 	STTModel                string  `json:"sttModel"`
 	AnalyzerModel           string  `json:"analyzerModel"`
 	VisionModel             string  `json:"visionModel"`

@@ -97,6 +97,52 @@ func (r *OutboxRepository) ListPending(ctx context.Context, limit int) ([]domain
 	return events, nil
 }
 
+func (r *OutboxRepository) ListPendingVocabulary(ctx context.Context, limit int) ([]domain.OutboxEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := r.store.db.QueryContext(ctx, `
+		SELECT id, event_type, aggregate_type, aggregate_id, payload_json,
+			idempotency_key, created_at, delivered_at, attempts, last_error
+		FROM outbox
+		WHERE delivered_at IS NULL AND aggregate_type = 'vocabulary_entry'
+		ORDER BY created_at, id
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("outbox: list pending vocabulary: %w", err)
+	}
+	defer rows.Close()
+	var events []domain.OutboxEvent
+	for rows.Next() {
+		event, err := scanOutbox(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("outbox: list pending vocabulary rows: %w", err)
+	}
+	return events, nil
+}
+
+func (r *OutboxRepository) NewestPendingVocabularyCreatedAt(
+	ctx context.Context,
+) (time.Time, bool, error) {
+	var created sql.NullInt64
+	if err := r.store.db.QueryRowContext(ctx, `
+		SELECT MAX(created_at)
+		FROM outbox
+		WHERE delivered_at IS NULL AND aggregate_type = 'vocabulary_entry'`,
+	).Scan(&created); err != nil {
+		return time.Time{}, false, fmt.Errorf("outbox: newest pending vocabulary: %w", err)
+	}
+	if !created.Valid {
+		return time.Time{}, false, nil
+	}
+	return timeFromValue(created.Int64), true, nil
+}
+
 func scanOutbox(scanner interface{ Scan(...any) error }) (domain.OutboxEvent, error) {
 	var event domain.OutboxEvent
 	var created int64

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/oeggy03/call_analyzer/internal/domain"
 	"github.com/oeggy03/call_analyzer/internal/openrouter"
 	"github.com/oeggy03/call_analyzer/internal/storage"
+	syncer "github.com/oeggy03/call_analyzer/internal/sync"
 	"github.com/oeggy03/call_analyzer/internal/vocabulary"
 )
 
@@ -25,10 +27,17 @@ const (
 type EventHook func(string, any)
 
 type Service struct {
-	store   *storage.Store
-	source  capture.Source
-	secrets SecretStore
-	router  *openrouter.Client
+	store                *storage.Store
+	source               capture.Source
+	secrets              SecretStore
+	router               *openrouter.Client
+	syncSecrets          SecretStore
+	syncRunner           *syncer.Runner
+	skipShutdownSync     bool
+	supabaseBaseURL      string
+	supabaseHTTP         *http.Client
+	supabaseAccessStatus string
+	supabaseAccessDetail string
 
 	mu              sync.RWMutex
 	capturing       bool
@@ -53,8 +62,26 @@ type Service struct {
 }
 
 func New(store *storage.Store, source capture.Source, secrets SecretStore, router *openrouter.Client) *Service {
+	return NewWithSyncSecretStore(store, source, secrets, router, nil)
+}
+
+func NewWithSyncSecretStore(
+	store *storage.Store,
+	source capture.Source,
+	secrets SecretStore,
+	router *openrouter.Client,
+	syncSecrets SecretStore,
+) *Service {
+	usedDefaultSecrets := secrets == nil
 	if secrets == nil {
 		secrets = NewDefaultSecretStore()
+	}
+	if syncSecrets == nil {
+		if usedDefaultSecrets {
+			syncSecrets = NewSupabaseSecretStore()
+		} else {
+			syncSecrets = secrets
+		}
 	}
 	databasePath := ""
 	if store != nil {
@@ -64,6 +91,7 @@ func New(store *storage.Store, source capture.Source, secrets SecretStore, route
 		store:        store,
 		source:       source,
 		secrets:      secrets,
+		syncSecrets:  syncSecrets,
 		router:       router,
 		databasePath: databasePath,
 		settings:     defaultRuntimeSettings(),
@@ -109,7 +137,191 @@ func (s *Service) Initialize(ctx context.Context) error {
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("service: load latest lesson: %w", err)
 	}
+	s.startSync(ctx)
 	return nil
+}
+
+func (s *Service) startSync(ctx context.Context) {
+	s.mu.Lock()
+	if s.syncRunner != nil {
+		s.mu.Unlock()
+		return
+	}
+	runner := syncer.NewRunner(s.store, s.syncSecrets, syncer.RunnerOptions{
+		OnStatusChange: func(status syncer.Status) {
+			s.emit("sync.changed", status)
+		},
+	})
+	s.syncRunner = runner
+	s.mu.Unlock()
+	runner.Start(ctx)
+}
+
+func (s *Service) Shutdown(ctx context.Context) error {
+	s.mu.RLock()
+	runner := s.syncRunner
+	skip := s.skipShutdownSync
+	s.mu.RUnlock()
+	if runner == nil {
+		return nil
+	}
+	if skip {
+		return runner.StopWithoutFlush(ctx)
+	}
+	return runner.Stop(ctx)
+}
+
+func (s *Service) SkipShutdownSync() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.skipShutdownSync = true
+	s.mu.Unlock()
+}
+
+func (s *Service) HasUnsyncedVocabulary(ctx context.Context) (bool, error) {
+	s.mu.RLock()
+	runner := s.syncRunner
+	s.mu.RUnlock()
+	if runner == nil || !runner.Status().Configured {
+		return false, nil
+	}
+	return runner.HasUploadablePending(ctx)
+}
+
+func (s *Service) SyncNow(ctx context.Context) error {
+	s.mu.RLock()
+	runner := s.syncRunner
+	s.mu.RUnlock()
+	if runner == nil {
+		return nil
+	}
+	return runner.SyncNow(ctx)
+}
+
+func (s *Service) SyncStatus(context.Context) syncer.Status {
+	s.mu.RLock()
+	runner := s.syncRunner
+	s.mu.RUnlock()
+	if runner == nil {
+		return syncer.Status{Status: syncer.SyncStatusNotConfigured}
+	}
+	return runner.Status()
+}
+
+func (s *Service) SupabaseAccess() (string, string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	status := s.supabaseAccessStatus
+	if status == "" {
+		status = "unchecked"
+	}
+	return status, s.supabaseAccessDetail
+}
+
+// SetSupabaseSecret stores the cloud vocabulary key in the app secret store.
+// On macOS that store writes the Keychain after the environment. An environment
+// value still wins on the next read.
+func (s *Service) SetSupabaseSecret(ctx context.Context, key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errors.New("cloud vocabulary key is required")
+	}
+	if s.syncSecrets == nil {
+		return errors.New("cloud vocabulary key storage is not configured")
+	}
+	if err := s.syncSecrets.Set(ctx, syncer.SupabaseSecretName, key); err != nil {
+		return errors.New("this computer cannot store a cloud vocabulary key; set SUPABASE_SECRET_KEY in the environment")
+	}
+	stored, err := s.syncSecrets.Get(ctx, syncer.SupabaseSecretName)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(stored) != key {
+		_ = s.CheckSupabaseAccess(ctx)
+		return errors.New("SUPABASE_SECRET_KEY is set in the environment and overrides the saved key")
+	}
+	return s.CheckSupabaseAccess(ctx)
+}
+
+// CheckSupabaseAccess reports whether the saved key can read and write cloud vocabulary.
+func (s *Service) CheckSupabaseAccess(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.mu.RLock()
+	wasBroken := s.supabaseAccessStatus == "missing" || s.supabaseAccessStatus == "invalid"
+	runner := s.syncRunner
+	baseURL := s.supabaseBaseURL
+	httpClient := s.supabaseHTTP
+	s.mu.RUnlock()
+
+	s.setSupabaseAccess("checking", "Checking cloud vocabulary access.")
+	if s.syncSecrets == nil {
+		s.setSupabaseAccess("missing", "Add the cloud vocabulary key for this computer.")
+		return nil
+	}
+	secret, err := s.syncSecrets.Get(ctx, syncer.SupabaseSecretName)
+	if err != nil || strings.TrimSpace(secret) == "" {
+		s.setSupabaseAccess("missing", "Add the cloud vocabulary key for this computer.")
+		return nil
+	}
+	client, err := syncer.NewPostgRESTClient(baseURL, strings.TrimSpace(secret), httpClient)
+	if err != nil {
+		s.setSupabaseAccess("invalid", "The cloud vocabulary key could not be used.")
+		return nil
+	}
+	if err := client.ProbeReadWrite(ctx); err != nil {
+		s.setSupabaseAccess("invalid", supabaseAccessFailure(err))
+		return nil
+	}
+	s.setSupabaseAccess("ready", "Cloud vocabulary can be read and written.")
+	if runner == nil || !runner.Running() {
+		s.resumeSync(ctx)
+	} else if wasBroken {
+		go func() {
+			pullCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			_ = runner.Pull(pullCtx)
+		}()
+	}
+	return nil
+}
+
+func (s *Service) resumeSync(ctx context.Context) {
+	s.mu.RLock()
+	runner := s.syncRunner
+	s.mu.RUnlock()
+	if runner == nil {
+		s.startSync(ctx)
+		return
+	}
+	if !runner.Running() {
+		runner.Start(ctx)
+	}
+}
+
+func (s *Service) setSupabaseAccess(status, detail string) {
+	s.mu.Lock()
+	changed := s.supabaseAccessStatus != status || s.supabaseAccessDetail != detail
+	s.supabaseAccessStatus = status
+	s.supabaseAccessDetail = detail
+	s.mu.Unlock()
+	if changed {
+		s.emit("supabase.access", map[string]string{"status": status})
+	}
+}
+
+func supabaseAccessFailure(err error) string {
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	if strings.Contains(message, "HTTP 401") || strings.Contains(message, "HTTP 403") {
+		return "This key cannot read and write cloud vocabulary."
+	}
+	return "Cloud vocabulary could not be reached."
 }
 
 func (s *Service) Health(ctx context.Context) domain.Health {

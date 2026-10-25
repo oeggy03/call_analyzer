@@ -87,8 +87,24 @@ export interface PrivacyState {
   audioRetention: 'sessionOnly' | 'oneDay' | 'sevenDays'
 }
 
+export type SyncStatus = 'not_configured' | 'waiting' | 'syncing' | 'idle' | 'error'
+export type PullStatus = 'pulling' | 'idle' | 'error'
+export type SupabaseAccessStatus = 'unchecked' | 'checking' | 'missing' | 'ready' | 'invalid'
+
 export interface Settings {
   openRouterKeyConfigured: boolean
+  supabaseSyncConfigured: boolean
+  syncPendingCount: number
+  syncStatus: SyncStatus
+  syncWaitingUntil?: string
+  lastSyncAt?: string
+  lastSyncError?: string
+  pullStatus?: PullStatus
+  pullChangeCount?: number
+  lastPullAt?: string
+  pullError?: string
+  supabaseAccessStatus?: SupabaseAccessStatus
+  supabaseAccessDetail?: string
   sttModel: string
   analyzerModel: string
   visionModel: string

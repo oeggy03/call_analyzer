@@ -41,7 +41,13 @@ func NewApp() (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewAppWithDependencies(store, newPlatformSource(), service.NewDefaultSecretStore(), nil), nil
+	return NewAppWithDependencies(
+		store,
+		newPlatformSource(),
+		service.NewDefaultSecretStore(),
+		nil,
+		service.NewSupabaseSecretStore(),
+	), nil
 }
 
 func NewAppWithDependencies(
@@ -49,10 +55,15 @@ func NewAppWithDependencies(
 	source capture.Source,
 	secrets service.SecretStore,
 	router *openrouter.Client,
+	syncSecrets ...service.SecretStore,
 ) *App {
+	var syncSecretStore service.SecretStore
+	if len(syncSecrets) > 0 {
+		syncSecretStore = syncSecrets[0]
+	}
 	app := &App{
 		store:   store,
-		service: service.New(store, source, secrets, router),
+		service: service.NewWithSyncSecretStore(store, source, secrets, router, syncSecretStore),
 	}
 	app.service.SetEventHook(app.onServiceEvent)
 	return app
@@ -67,10 +78,47 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 	a.emit("backend.ready", a.service.Config(ctx))
+	go a.checkSupabaseAccess()
+}
+
+func (a *App) beforeClose(ctx context.Context) bool {
+	needsSync, err := a.service.HasUnsyncedVocabulary(ctx)
+	if err != nil || !needsSync {
+		return false
+	}
+	choice, dialogErr := runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
+		Type:          runtime.QuestionDialog,
+		Title:         "Unsynced vocabulary",
+		Message:       "You still have unsynced items. Sync now?",
+		Buttons:       []string{"Sync now", "Not now"},
+		DefaultButton: "Sync now",
+		CancelButton:  "Not now",
+	})
+	if dialogErr != nil {
+		return true
+	}
+	if choice != "Sync now" {
+		a.service.SkipShutdownSync()
+		return false
+	}
+	syncCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := a.service.SyncNow(syncCtx); err != nil {
+		_, _ = runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
+			Type:    runtime.ErrorDialog,
+			Title:   "Sync failed",
+			Message: "The vocabulary sync did not finish. The app will stay open.",
+		})
+		return true
+	}
+	return false
 }
 
 func (a *App) shutdown(ctx context.Context) {
 	_ = a.service.StopCapture(ctx)
+	flushCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	_ = a.service.Shutdown(flushCtx)
+	cancel()
 	if a.store != nil {
 		_ = a.store.Close()
 	}
@@ -238,6 +286,7 @@ func (a *App) SaveManualVocabulary(input ManualVocabularyInput) (AppSnapshot, er
 
 func (a *App) RequestCapturePermission() (AppSnapshot, error) {
 	err := a.checkReadiness(a.context(), a.service.Target())
+	a.checkSupabaseAccess()
 	snapshot, snapshotErr := a.GetAppSnapshot()
 	if snapshotErr == nil {
 		a.emit("snapshot_changed", snapshot)
@@ -393,6 +442,31 @@ func (a *App) SaveSettings(patch SettingsPatch) (AppSnapshot, error) {
 
 func (a *App) Refresh() (AppSnapshot, error) {
 	return a.GetAppSnapshot()
+}
+
+func (a *App) SaveSupabaseKey(key string) (AppSnapshot, error) {
+	if err := a.service.SetSupabaseSecret(a.context(), key); err != nil {
+		return AppSnapshot{}, err
+	}
+	return a.GetAppSnapshot()
+}
+
+func (a *App) checkSupabaseAccess() {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_ = a.service.CheckSupabaseAccess(ctx)
+}
+
+func (a *App) SyncNow() (AppSnapshot, error) {
+	err := a.service.SyncNow(a.context())
+	snapshot, snapshotErr := a.GetAppSnapshot()
+	if snapshotErr != nil {
+		return AppSnapshot{}, snapshotErr
+	}
+	if err != nil {
+		return snapshot, err
+	}
+	return snapshot, nil
 }
 
 func (a *App) ListLessonTranscripts(limit int) ([]LessonTranscriptSummary, error) {

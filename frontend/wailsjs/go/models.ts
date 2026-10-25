@@ -2,6 +2,18 @@ export namespace main {
 	
 	export class SettingsSnapshot {
 	    openRouterKeyConfigured: boolean;
+	    supabaseSyncConfigured: boolean;
+	    syncPendingCount: number;
+	    syncStatus: string;
+	    syncWaitingUntil?: string;
+	    lastSyncAt?: string;
+	    lastSyncError?: string;
+	    pullStatus?: string;
+	    pullChangeCount?: number;
+	    lastPullAt?: string;
+	    pullError?: string;
+	    supabaseAccessStatus?: string;
+	    supabaseAccessDetail?: string;
 	    sttModel: string;
 	    analyzerModel: string;
 	    visionModel: string;
@@ -17,6 +29,18 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.openRouterKeyConfigured = source["openRouterKeyConfigured"];
+	        this.supabaseSyncConfigured = source["supabaseSyncConfigured"];
+	        this.syncPendingCount = source["syncPendingCount"];
+	        this.syncStatus = source["syncStatus"];
+	        this.syncWaitingUntil = source["syncWaitingUntil"];
+	        this.lastSyncAt = source["lastSyncAt"];
+	        this.lastSyncError = source["lastSyncError"];
+	        this.pullStatus = source["pullStatus"];
+	        this.pullChangeCount = source["pullChangeCount"];
+	        this.lastPullAt = source["lastPullAt"];
+	        this.pullError = source["pullError"];
+	        this.supabaseAccessStatus = source["supabaseAccessStatus"];
+	        this.supabaseAccessDetail = source["supabaseAccessDetail"];
 	        this.sttModel = source["sttModel"];
 	        this.analyzerModel = source["analyzerModel"];
 	        this.visionModel = source["visionModel"];

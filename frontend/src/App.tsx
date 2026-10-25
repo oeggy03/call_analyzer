@@ -49,6 +49,9 @@ const EMPTY_SNAPSHOT: AppSnapshot = {
   },
   settings: {
     openRouterKeyConfigured: false,
+    supabaseSyncConfigured: false,
+    syncPendingCount: 0,
+    syncStatus: 'not_configured',
     sttModel: 'qwen/qwen3-asr-1.7b',
     analyzerModel: 'qwen/qwen3-32b',
     visionModel: 'qwen/qwen3.7-flash',
@@ -339,6 +342,27 @@ export function App({ apiClient = defaultApi }: AppProps) {
     void runAction('permission', () => apiClient.requestCapturePermission(), 'Capture permission status updated.')
   }
 
+  const saveCloudKey = async (key: string) => {
+    setBusyAction('save-cloud-key')
+    setActionError(undefined)
+    setActionMessage(undefined)
+    try {
+      const next = await apiClient.saveSupabaseKey(key)
+      setSnapshot(next)
+      if (next.settings.supabaseAccessStatus === 'ready') {
+        setActionMessage('Cloud vocabulary key saved.')
+        return true
+      }
+      setActionError(next.settings.supabaseAccessDetail || 'This key cannot read and write cloud vocabulary.')
+      return false
+    } catch (error: unknown) {
+      setActionError(getErrorMessage(error))
+      return false
+    } finally {
+      setBusyAction(undefined)
+    }
+  }
+
   const openEdit = (candidate: Candidate) => {
     setEditingCandidate(candidate)
     setEditDraft({
@@ -433,6 +457,11 @@ export function App({ apiClient = defaultApi }: AppProps) {
       ? 'API key cleared. Settings saved securely.'
       : 'Settings saved securely.'
     void runAction('save-settings', () => apiClient.saveSettings(patch), successMessage)
+  }
+
+  const syncNow = () => {
+    if (!current.settings.supabaseSyncConfigured || busyAction === 'sync-now') return
+    void runAction('sync-now', () => apiClient.syncNow(), 'Cloud vocabulary sync requested.')
   }
 
   const setManualFormValue = (nextForm: ManualVocabularyForm) => {
@@ -758,6 +787,8 @@ export function App({ apiClient = defaultApi }: AppProps) {
     )
   }
 
+  const pullBanner = cloudPullBanner(current.settings)
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -781,6 +812,11 @@ export function App({ apiClient = defaultApi }: AppProps) {
             <>
               {(backendUnavailable || apiClient.mode === 'demo') && (
                 <BackendUnavailable mode={apiClient.mode} onRetry={handleRefresh} />
+              )}
+              {pullBanner && (
+                <InlineAlert tone={pullBanner.tone}>
+                  {pullBanner.text}
+                </InlineAlert>
               )}
               {actionError && (
                 <InlineAlert tone="error" onDismiss={() => setActionError(undefined)}>
@@ -814,6 +850,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
                     )
                   }
                   onPermission={handlePermission}
+                  onSaveCloudKey={saveCloudKey}
                 />
               )}
               {activeView === 'transcripts' && <PastTranscriptsView apiClient={apiClient} />}
@@ -870,6 +907,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
                   apiMode={apiClient.mode}
                   busyAction={busyAction}
                   onSave={saveSettings}
+                  onSyncNow={syncNow}
                   onDeleteLastLesson={handleDeleteLastLesson}
                 />
               )}
@@ -1007,6 +1045,7 @@ function LiveLessonView({
   onOpenSettings,
   onMarkMoment,
   onPermission,
+  onSaveCloudKey,
 }: {
   snapshot: AppSnapshot
   consent: boolean
@@ -1019,6 +1058,7 @@ function LiveLessonView({
   onOpenSettings: () => void
   onMarkMoment: () => void
   onPermission: () => void
+  onSaveCloudKey: (key: string) => Promise<boolean>
 }) {
   const isLive = snapshot.lesson.status === 'live'
   const isInterrupted = snapshot.lesson.status === 'error' && Boolean(snapshot.lesson.id)
@@ -1029,6 +1069,10 @@ function LiveLessonView({
   const hasApiKey = snapshot.settings.openRouterKeyConfigured
   const captureReady = snapshot.capturePermission === 'granted'
   const setupReady = hasApiKey && captureReady
+  const cloudAccess = snapshot.settings.supabaseAccessStatus ?? 'unchecked'
+  const cloudReady = cloudAccess === 'ready'
+  const cloudNeedsKey = cloudAccess === 'missing' || cloudAccess === 'invalid'
+  const [cloudKeyDraft, setCloudKeyDraft] = useState('')
   const pendingCandidates = snapshot.candidates.filter((candidate) => candidate.status === 'pending').length
 
   return (
@@ -1111,13 +1155,18 @@ function LiveLessonView({
                 <div className="setup-checklist-heading">
                   <div>
                     <strong>Startup checks</strong>
-                    <p>Run these checks again after changing macOS permissions.</p>
+                    <p>Run these checks again after changing macOS permissions or the cloud key.</p>
                   </div>
                   <button className="button button-secondary button-small" type="button" onClick={onPermission} disabled={!canInteract || Boolean(busyAction)}>
                     {busyAction === 'permission' ? 'Checking…' : 'Check setup'}
                   </button>
                 </div>
                 <SetupCheck label="OpenRouter API key" detail={hasApiKey ? 'Saved securely' : 'Add a key in Settings'} status={hasApiKey ? 'ready' : 'blocked'} />
+                <SetupCheck
+                  label="Cloud vocabulary key"
+                  detail={snapshot.settings.supabaseAccessDetail || (cloudAccess === 'checking' ? 'Checking cloud vocabulary access.' : 'Not checked')}
+                  status={cloudReady ? 'ready' : cloudAccess === 'unchecked' || cloudAccess === 'checking' ? 'pending' : 'blocked'}
+                />
                 <SetupCheck
                   label="Screen and system audio"
                   detail={captureReady ? 'Permission granted' : snapshot.capturePermission === 'denied' ? 'Permission denied' : 'Not checked'}
@@ -1134,6 +1183,38 @@ function LiveLessonView({
                   <button className="button button-secondary button-small setup-settings-button" type="button" onClick={onOpenSettings}>
                     Open Settings
                   </button>
+                )}
+                {cloudNeedsKey && (
+                  <form
+                    className="cloud-key-form"
+                    onSubmit={(event) => {
+                      event.preventDefault()
+                      if (!cloudKeyDraft.trim() || busyAction === 'save-cloud-key') return
+                      void onSaveCloudKey(cloudKeyDraft.trim()).then((saved) => {
+                        if (saved) setCloudKeyDraft('')
+                      })
+                    }}
+                  >
+                    <label className="field-label" htmlFor="cloud-vocabulary-key">Cloud vocabulary key</label>
+                    <input
+                      id="cloud-vocabulary-key"
+                      className="text-input"
+                      type="password"
+                      value={cloudKeyDraft}
+                      onChange={(event) => setCloudKeyDraft(event.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="Supabase secret key"
+                    />
+                    <p className="helper-text">
+                      {cloudAccess === 'invalid'
+                        ? 'This key cannot read and write cloud vocabulary. Enter a replacement. On this Mac it is saved in the Keychain.'
+                        : 'Add the Supabase secret key for this computer. On this Mac it is saved in the Keychain.'}
+                    </p>
+                    <button className="button button-secondary button-small" type="submit" disabled={!cloudKeyDraft.trim() || busyAction === 'save-cloud-key'}>
+                      {busyAction === 'save-cloud-key' ? 'Saving…' : 'Save key'}
+                    </button>
+                  </form>
                 )}
               </div>
               <div className="lesson-tag-field">
@@ -1803,13 +1884,9 @@ function ManualVocabularyView({
           </div>
 
           {lessonActive && (
-            <div className="manual-key-alert" role="status">
-              <div className="manual-key-alert-icon"><Icon name="waveform" /></div>
-              <div>
-                <strong>Generation pauses during live lessons</strong>
-                <p>Finish the lesson before generating missing details; photo reading remains available during capture.</p>
-              </div>
-            </div>
+            <KeyBanner icon="waveform" title="Generation pauses during live lessons">
+              Finish the lesson before generating missing details; photo reading remains available during capture.
+            </KeyBanner>
           )}
 
           {generatedDraft && (
@@ -2053,16 +2130,18 @@ function PhotoDropZone({
       {isPreparing && <p className="photo-reader-status" role="status">Preparing photo previews…</p>}
       {photoInputError && <div className="photo-reader-error" role="alert">{photoInputError}</div>}
       {!hasApiKey && (
-        <div className="manual-key-alert photo-key-alert" role="status">
-          <div className="manual-key-alert-icon"><Icon name="spark" /></div>
-          <div>
-            <strong>AI generation needs an API key</strong>
-            <p>Add an OpenRouter key in Settings to find words in photos. A complete manual form can still be saved.</p>
-          </div>
-          <button className="button button-secondary button-small" type="button" onClick={onOpenSettings} disabled={isReading}>
-            Open Settings
-          </button>
-        </div>
+        <KeyBanner
+          className="photo-key-alert"
+          icon="spark"
+          title="AI generation needs an API key"
+          action={(
+            <button className="button button-secondary button-small" type="button" onClick={onOpenSettings} disabled={isReading}>
+              Open Settings
+            </button>
+          )}
+        >
+          Add an OpenRouter key in Settings to find words in photos. A complete manual form can still be saved.
+        </KeyBanner>
       )}
       <div className="photo-reader-action-row">
         <div>
@@ -2236,6 +2315,7 @@ function VocabularyView({
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<VocabularyStatus | 'all'>('all')
   const [tag, setTag] = useState('all')
+  const [page, setPage] = useState(1)
   const tags = useMemo(() => Array.from(new Set(entries.flatMap((entry) => entry.tags))).sort(), [entries])
   const filteredEntries = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -2250,6 +2330,14 @@ function VocabularyView({
       return matchesQuery && matchesStatus && matchesTag
     })
   }, [entries, query, status, tag])
+  const pageSize = 9
+  const pageCount = Math.max(1, Math.ceil(filteredEntries.length / pageSize))
+  const currentPage = Math.min(page, pageCount)
+  const pageEntries = filteredEntries.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+
+  useEffect(() => {
+    setPage(1)
+  }, [query, status, tag])
 
   return (
     <div className="view-stack">
@@ -2299,9 +2387,32 @@ function VocabularyView({
           />
         </section>
       ) : (
-        <section className="vocabulary-grid" aria-live="polite">
-          {filteredEntries.map((entry) => <VocabularyCard entry={entry} key={entry.id} />)}
-        </section>
+        <>
+          <section className="vocabulary-grid" aria-live="polite">
+            {pageEntries.map((entry) => <VocabularyCard entry={entry} key={entry.id} />)}
+          </section>
+          {pageCount > 1 && (
+            <nav className="vocabulary-pager" aria-label="Vocabulary pages">
+              <button
+                className="button button-secondary button-small"
+                type="button"
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+                disabled={currentPage === 1}
+              >
+                Previous page
+              </button>
+              <span>Page {currentPage} of {pageCount}</span>
+              <button
+                className="button button-secondary button-small"
+                type="button"
+                onClick={() => setPage((current) => Math.min(pageCount, current + 1))}
+                disabled={currentPage === pageCount}
+              >
+                Next page
+              </button>
+            </nav>
+          )}
+        </>
       )}
     </div>
   )
@@ -2344,12 +2455,14 @@ function SettingsView({
   apiMode,
   busyAction,
   onSave,
+  onSyncNow,
   onDeleteLastLesson,
 }: {
   snapshot: AppSnapshot
   apiMode: AppApi['mode']
   busyAction?: string
   onSave: (patch: SettingsPatch) => void
+  onSyncNow: () => void
   onDeleteLastLesson: () => void
 }) {
   const [keyDraft, setKeyDraft] = useState('')
@@ -2479,6 +2592,53 @@ function SettingsView({
                 <p>ZDR controls provider-side retention. Local audio follows the selected retention policy; confirmed vocabulary remains in your local collection.</p>
               </div>
               <span className="status-pill status-mastered">Enabled</span>
+            </div>
+          </section>
+          <section className="panel settings-panel">
+            <PanelHeading
+              eyebrow="Cloud sync"
+              title="Cloud vocabulary"
+              description="Confirmed words are downloaded when the app opens. Uploads wait about 10 minutes after the latest change. Sync now uploads only."
+            />
+            <div className="budget-row">
+              <div>
+                <strong>Sync status</strong>
+                {snapshot.settings.syncStatus === 'not_configured' && (
+                  <p>No Supabase key is configured on this computer.</p>
+                )}
+                {snapshot.settings.syncStatus === 'waiting' && (
+                  <>
+                    <p>
+                      {snapshot.settings.syncWaitingUntil
+                        ? `Waiting until ${formatLessonDate(snapshot.settings.syncWaitingUntil)}.`
+                        : 'Waiting for the next sync window.'}
+                    </p>
+                    <p>
+                      {snapshot.settings.syncPendingCount} pending {snapshot.settings.syncPendingCount === 1 ? 'word' : 'words'}.
+                    </p>
+                  </>
+                )}
+                {snapshot.settings.syncStatus === 'syncing' && <p>Syncing.</p>}
+                {snapshot.settings.syncStatus === 'idle' && (
+                  <p>
+                    {snapshot.settings.lastSyncAt
+                      ? `Last synced ${formatLessonDate(snapshot.settings.lastSyncAt)}.`
+                      : 'No sync completed yet.'}
+                  </p>
+                )}
+                {snapshot.settings.syncStatus === 'error' && (
+                  <p>{snapshot.settings.lastSyncError || 'Sync failed.'}</p>
+                )}
+              </div>
+              <button
+                className="button button-secondary button-small"
+                type="button"
+                onClick={onSyncNow}
+                disabled={!snapshot.settings.supabaseSyncConfigured || busyAction === 'sync-now'}
+              >
+                <Icon name="refresh" />
+                {busyAction === 'sync-now' ? 'Syncing…' : 'Sync now'}
+              </button>
             </div>
           </section>
           <section className="panel settings-panel danger-zone">
@@ -2767,6 +2927,8 @@ function PrivacyBadge() {
 }
 
 function CostStatusAlert({ cost }: { cost: AppSnapshot['cost'] }) {
+  const [dismissed, setDismissed] = useState(false)
+  if (dismissed) return null
   const hardExceeded = Boolean(cost.hardExceeded)
   return (
     <div className={`cost-alert ${hardExceeded ? 'cost-alert-hard' : 'cost-alert-warning'}`} role="alert">
@@ -2776,6 +2938,7 @@ function CostStatusAlert({ cost }: { cost: AppSnapshot['cost'] }) {
         <p>Capture and analysis continue. There is no automatic cost stop.</p>
         <span>Current {formatUsd(cost.currentUsd)} · Projected {formatUsd(cost.projectedUsd)}</span>
       </div>
+      <DismissButton onClick={() => setDismissed(true)} />
     </div>
   )
 }
@@ -2798,17 +2961,60 @@ function SetupCheck({
   )
 }
 
-function InlineAlert({ tone, children, onDismiss }: { tone: 'error' | 'success'; children: string; onDismiss?: () => void }) {
+function InlineAlert({ tone, children, onDismiss }: { tone: 'error' | 'success' | 'info'; children: string; onDismiss?: () => void }) {
+  const [dismissedText, setDismissedText] = useState<string>()
+  if (dismissedText === children) return null
   return (
     <div className={`inline-alert alert-${tone}`} role={tone === 'error' ? 'alert' : 'status'}>
-      <Icon name={tone === 'error' ? 'warning' : 'check'} />
+      <Icon name={tone === 'error' ? 'warning' : tone === 'info' ? 'refresh' : 'check'} />
       <span>{children}</span>
-      {onDismiss && <button className="alert-dismiss" type="button" aria-label="Dismiss message" onClick={onDismiss}><Icon name="close" /></button>}
+      <DismissButton onClick={() => {
+        setDismissedText(children)
+        onDismiss?.()
+      }} />
     </div>
   )
 }
 
+function KeyBanner({
+  icon,
+  title,
+  children,
+  action,
+  className,
+}: {
+  icon: IconName
+  title: string
+  children: string
+  action?: ReactNode
+  className?: string
+}) {
+  const [dismissed, setDismissed] = useState(false)
+  if (dismissed) return null
+  return (
+    <div className={`manual-key-alert ${className ?? ''}`.trim()} role="status">
+      <div className="manual-key-alert-icon"><Icon name={icon} /></div>
+      <div>
+        <strong>{title}</strong>
+        <p>{children}</p>
+      </div>
+      {action}
+      <DismissButton onClick={() => setDismissed(true)} />
+    </div>
+  )
+}
+
+function DismissButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button className="alert-dismiss" type="button" aria-label="Dismiss message" onClick={onClick}>
+      <Icon name="close" />
+    </button>
+  )
+}
+
 function BackendUnavailable({ mode, onRetry }: { mode: AppApi['mode']; onRetry: () => void }) {
+  const [dismissed, setDismissed] = useState(false)
+  if (dismissed) return null
   return (
     <div className="backend-alert" role="status">
       <div className="backend-alert-icon"><Icon name="plug" /></div>
@@ -2823,6 +3029,7 @@ function BackendUnavailable({ mode, onRetry }: { mode: AppApi['mode']; onRetry: 
       {mode !== 'demo' && (
         <button className="button button-secondary button-small" type="button" onClick={onRetry}>Retry connection</button>
       )}
+      <DismissButton onClick={() => setDismissed(true)} />
     </div>
   )
 }
@@ -2845,6 +3052,22 @@ function EmptyState({ icon, title, description }: { icon: IconName; title: strin
       <p>{description}</p>
     </div>
   )
+}
+
+function cloudPullBanner(settings: AppSnapshot['settings']): { tone: 'info' | 'success' | 'error'; text: string } | undefined {
+  if (settings.pullStatus === 'pulling') {
+    return { tone: 'info', text: 'Checking cloud vocabulary…' }
+  }
+  if (settings.pullStatus === 'error') {
+    return { tone: 'error', text: settings.pullError || 'Cloud vocabulary could not be checked.' }
+  }
+  if (settings.pullStatus === 'idle' && settings.lastPullAt) {
+    const count = settings.pullChangeCount ?? 0
+    if (count === 0) return { tone: 'info', text: 'Cloud vocabulary is up to date.' }
+    const noun = count === 1 ? 'change' : 'changes'
+    return { tone: 'success', text: `Brought in ${count} vocabulary ${noun} from the cloud.` }
+  }
+  return undefined
 }
 
 function getConnectionStatus(connection: AppSnapshot['connection'], mode: AppApi['mode']) {

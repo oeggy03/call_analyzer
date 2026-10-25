@@ -42,5 +42,28 @@ These rules are enforced in code, but they are easy to miss because the UI, the 
 ## Sync and study data
 
 - `loadSettings` sets `syncEnabled` to false on every load.
-- Outbox rows are still written for vocabulary and lesson mutations. They are not delivered.
+- Vocabulary outbox rows are delivered by a cross-platform background runner
+  after a ten-minute quiet period from the newest undelivered eligible row.
+  On launch the runner reads confirmed cloud vocabulary in one paged request
+  and applies it locally. A newer local `updated_at` is kept. The same
+  simplified, traditional, and reading under a different id keeps the local
+  id. A confirmed local word with no pending outbox row is removed when that
+  id is gone from the cloud. `SyncNow` uploads only and does not pull.
+  Startup checks probe that the saved Supabase secret can read vocabulary and
+  write a tag, then delete that tag. A missing or rejected key asks for a
+  replacement. On macOS the replacement is stored in the Keychain. An
+  environment value still wins over the Keychain.
+  Closing the window asks "You still have unsynced items. Sync now?" when a flush would upload a row. Sync now sends those rows and then closes. Not now closes and leaves them in the outbox.
+- The runner collapses events by vocabulary id and reads the current SQLite
+  row. Confirmed and manually saved rows are uploaded. A merged candidate is
+  not uploaded; a confirmed merge target is uploaded with its moved senses,
+  examples, and tags. Candidate and rejected
+  rows are acknowledged locally without HTTP. A missing local row or
+  `vocabulary.entry.deleted` event sends an upstream DELETE.
+- Child senses, examples, and entry tags are replaced from SQLite, while tags
+  are upserted by name. The first confirmed/manual publish initializes
+  `study_state` with ignore-duplicates resolution.
+- `study.review.recorded` remains pending and does not block the vocabulary
+  quiet timer. Lessons, transcripts, observations, and later study-state
+  changes are not synced.
 - Lesson, manual generation, and photo recognition usage are recorded separately under the lesson id, `manual-vocabulary`, and `photo-vocabulary` respectively.

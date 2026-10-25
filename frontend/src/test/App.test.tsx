@@ -233,6 +233,41 @@ describe('Call Analyzer frontend', () => {
     expect(await screen.findByText(/API key cleared/i)).toBeInTheDocument()
   })
 
+  it('shows nine vocabulary words per page', async () => {
+    const api = createDemoApi()
+    const snapshot = await api.getSnapshot()
+    const base = snapshot.vocabulary[0]
+    const vocabulary = Array.from({ length: 10 }, (_, index) => ({
+      ...base,
+      id: `page-${index}`,
+      simplified: `词${index}`,
+    }))
+    vi.spyOn(api, 'getSnapshot').mockResolvedValue({ ...snapshot, vocabulary })
+    render(<App apiClient={api} />)
+    await openView('Vocabulary')
+
+    expect(screen.getByText('词0')).toBeInTheDocument()
+    expect(screen.queryByText('词9')).not.toBeInTheDocument()
+    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(await screen.findByText('词9')).toBeInTheDocument()
+    expect(screen.queryByText('词0')).not.toBeInTheDocument()
+    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument()
+  })
+
+  it('opens Settings and clicks Sync now', async () => {
+    const api = createDemoApi()
+    const syncNow = vi.spyOn(api, 'syncNow')
+    render(<App apiClient={api} />)
+    await openView('Settings')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sync now' }))
+
+    await waitFor(() => expect(syncNow).toHaveBeenCalledWith())
+    expect(await screen.findByText(/Cloud vocabulary sync requested/i)).toBeInTheDocument()
+  })
+
   it('deletes the last lesson only after confirmation', async () => {
     const api = createDemoApi()
     const deleteLastLesson = vi.spyOn(api, 'deleteLastLesson')
@@ -255,7 +290,55 @@ describe('Call Analyzer frontend', () => {
     vi.spyOn(api, 'getSnapshot').mockResolvedValue(snapshot)
     render(<App apiClient={api} />)
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/no automatic cost stop/i)
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/no automatic cost stop/i)
+    fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss message' }))
+    expect(screen.queryByText(/no automatic cost stop/i)).not.toBeInTheDocument()
+  })
+
+  it('asks for a cloud vocabulary key when the saved key cannot be used', async () => {
+    const api = createDemoApi()
+    const snapshot = await api.getSnapshot()
+    vi.spyOn(api, 'getSnapshot').mockResolvedValue({
+      ...snapshot,
+      settings: {
+        ...snapshot.settings,
+        supabaseAccessStatus: 'missing',
+        supabaseAccessDetail: 'Add the cloud vocabulary key for this computer.',
+      },
+    })
+    const saveSupabaseKey = vi.spyOn(api, 'saveSupabaseKey').mockResolvedValue({
+      ...snapshot,
+      settings: {
+        ...snapshot.settings,
+        supabaseAccessStatus: 'ready',
+        supabaseAccessDetail: 'Cloud vocabulary can be read and written.',
+      },
+    })
+    render(<App apiClient={api} />)
+
+    expect(await screen.findByText('Add the cloud vocabulary key for this computer.')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Cloud vocabulary key'), { target: { value: 'sb_secret_fixture' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }))
+
+    await waitFor(() => expect(saveSupabaseKey).toHaveBeenCalledWith('sb_secret_fixture'))
+    expect(await screen.findByText('Cloud vocabulary key saved.')).toBeInTheDocument()
+  })
+
+  it('shows the cloud pull in a banner that can be closed', async () => {
+    const api = createDemoApi()
+    const snapshot = await api.getSnapshot()
+    vi.spyOn(api, 'getSnapshot').mockResolvedValue({
+      ...snapshot,
+      settings: { ...snapshot.settings, pullStatus: 'pulling' },
+    })
+    render(<App apiClient={api} />)
+
+    expect(await screen.findByText('Checking cloud vocabulary…')).toBeInTheDocument()
+    const banner = screen.getByText('Checking cloud vocabulary…').closest('.inline-alert')
+    if (!banner) throw new Error('pull banner missing')
+    fireEvent.click(within(banner as HTMLElement).getByRole('button', { name: 'Dismiss message' }))
+    expect(screen.queryByText('Checking cloud vocabulary…')).not.toBeInTheDocument()
   })
 
   it('filters vocabulary by search text', async () => {
@@ -608,6 +691,7 @@ describe('Call Analyzer frontend', () => {
       RejectCandidate: vi.fn().mockResolvedValue(snapshot),
       MergeCandidates: vi.fn().mockResolvedValue(snapshot),
       SaveSettings: vi.fn().mockResolvedValue(snapshot),
+      SyncNow: vi.fn().mockResolvedValue(snapshot),
       DeleteLastLesson: vi.fn().mockResolvedValue(snapshot),
       Refresh: vi.fn().mockResolvedValue(snapshot),
     }
@@ -657,6 +741,7 @@ describe('Call Analyzer frontend', () => {
     await runtimeApi.rejectCandidate('candidate-1')
     await runtimeApi.mergeCandidates('candidate-1', 'candidate-2')
     await runtimeApi.saveSettings(settingsPatch)
+    await runtimeApi.syncNow()
     await runtimeApi.deleteLastLesson()
     await runtimeApi.refresh()
 
@@ -671,6 +756,7 @@ describe('Call Analyzer frontend', () => {
     expect(fakeApp.RejectCandidate).toHaveBeenCalledWith('candidate-1')
     expect(fakeApp.MergeCandidates).toHaveBeenCalledWith('candidate-1', 'candidate-2')
     expect(fakeApp.SaveSettings).toHaveBeenCalledWith(settingsPatch)
+    expect(fakeApp.SyncNow).toHaveBeenCalledWith()
     expect(fakeApp.DeleteLastLesson).toHaveBeenCalledWith()
     expect(BACKEND_EVENTS.snapshotChanged).toBe('call_analyzer:snapshot_changed')
   })
