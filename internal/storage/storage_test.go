@@ -436,6 +436,65 @@ func TestSettingsAndContextCancellation(t *testing.T) {
 	}
 }
 
+func TestPendingVocabularyOutboxQueries(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	older, err := store.Outbox().Enqueue(ctx, domain.OutboxEvent{
+		EventType:     "vocabulary.candidate.confirmed",
+		AggregateType: "vocabulary_entry",
+		AggregateID:   "entry",
+		CreatedAt:     timeAt(1_000),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err := store.Outbox().Enqueue(ctx, domain.OutboxEvent{
+		EventType:     "study.review.recorded",
+		AggregateType: "vocabulary_entry",
+		AggregateID:   "entry",
+		CreatedAt:     timeAt(2_000),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Outbox().Enqueue(ctx, domain.OutboxEvent{
+		EventType:     "lesson.updated",
+		AggregateType: "lesson",
+		AggregateID:   "lesson",
+		CreatedAt:     timeAt(3_000),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Outbox().ListPendingVocabulary(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].ID != older.ID || events[1].ID != review.ID {
+		t.Fatalf("unexpected vocabulary outbox rows: %#v", events)
+	}
+	newest, ok, err := store.Outbox().NewestPendingVocabularyCreatedAt(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !newest.Equal(timeAt(2_000)) {
+		t.Fatalf("newest pending timestamp=%s present=%t", newest, ok)
+	}
+	if err := store.Outbox().MarkDelivered(ctx, review.ID); err != nil {
+		t.Fatal(err)
+	}
+	newest, ok, err = store.Outbox().NewestPendingVocabularyCreatedAt(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !newest.Equal(timeAt(1_000)) {
+		t.Fatalf("newest after delivery=%s present=%t", newest, ok)
+	}
+}
+
 func TestLessonRecoveryMetadataAndLatestComplete(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, ":memory:")

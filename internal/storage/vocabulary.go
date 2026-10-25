@@ -933,6 +933,16 @@ func (r *VocabularyRepository) Merge(ctx context.Context, sourceID, targetID str
 		if err != nil {
 			return err
 		}
+		if err := enqueueOutboxTx(ctx, tx, domain.OutboxEvent{
+			EventType:      "vocabulary.entry.merged",
+			AggregateType:  "vocabulary_entry",
+			AggregateID:    sourceID,
+			PayloadJSON:    string(payload),
+			IdempotencyKey: "vocabulary:merge:source:" + sourceID + ":" + targetID,
+			CreatedAt:      now,
+		}); err != nil {
+			return err
+		}
 		return enqueueOutboxTx(ctx, tx, domain.OutboxEvent{
 			EventType:      "vocabulary.candidate.merged",
 			AggregateType:  "vocabulary_entry",
