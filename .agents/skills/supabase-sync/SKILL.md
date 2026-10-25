@@ -5,6 +5,8 @@ description: Verify and change Call Analyzer's desktop vocabulary sync without c
 
 # Supabase vocabulary sync
 
+This skill is the desktop runner in `call_analyzer`. The hosted tables are defined in `../call-analyzer-lesson-db`. `../call-analyzer-active-recall` reads confirmed rows with a different Supabase secret and does not write `study_state` yet. Do not reuse this Mac's key for either of those.
+
 Keep this path offline. Use `httptest.Server` and `storage.Open(ctx,
 ":memory:")`; never call the hosted Supabase project or put a secret, access
 token, service key, or password in source, tests, logs, or docs.

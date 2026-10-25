@@ -8,7 +8,9 @@ description: >-
 
 # SQLite migration
 
-Use this for a schema change. Read the Database section of `docs/architecture.md` and inspect `internal/storage/store.go`, the affected repository, and its callers.
+Use this for a SQLite schema change. Read the Database section of `docs/architecture.md` and inspect `internal/storage/store.go`, the affected repository, and its callers.
+
+A column that confirmed vocabulary must share with the recall service is a Postgres change first. Add that migration in `../call-analyzer-lesson-db` and apply it before changing this app's sync mapping. Local-only tables (`outbox`, `settings`, `request_usage`) stay in this repository.
 
 ## Workflow
 

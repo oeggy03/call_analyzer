@@ -18,7 +18,7 @@ For the supported role configuration and skill discovery formats, see [Codex sub
 | --- | --- | --- |
 | `planner` | Task framing, package ownership, cross-boundary review, integration, and final validation. It does not implement repository changes; it delegates those to the matching Luna implementation role. | Root `AGENTS.md`, relevant source and docs |
 | `frontend` | React screens, styles, frontend types and API clients. When changing the Wails boundary, coordinate its Go side through the contract files. | `frontend/README.md`, `docs/architecture.md`, `wails-contract` |
-| `backend` | Go app methods, service, domain, OpenRouter, vocabulary, and SQLite repositories/migrations. Coordinate any UI-facing shape through the Wails contract. | `docs/architecture.md`, relevant package tests, `wails-contract` or `sqlite-migration` |
+| `backend` | Go app methods, service, domain, OpenRouter, vocabulary, SQLite repositories, and the desktop vocabulary sync runner. Coordinate any UI-facing shape through the Wails contract. Shared Postgres columns start in `../call-analyzer-lesson-db`, not in this repo. | `docs/architecture.md`, relevant package tests, `wails-contract`, `sqlite-migration`, or `supabase-sync` |
 | `native-capture` | Swift capture helper and Go macOS adapter as one process boundary. Keep platform stubs compiling. | Capture invariants in root `AGENTS.md`, `internal/capture/macos/README.md` |
 | `tooling-docs` | Setup, build, verification scripts, CI, and task-relevant documentation. Describe behavior after checking the implementation. | `docs/development.md`, `docs/operations.md`, relevant source |
 

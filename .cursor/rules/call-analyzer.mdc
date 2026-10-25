@@ -7,6 +7,8 @@ alwaysApply: true
 
 Follow the root `AGENTS.md`. Current source code defines behavior and contracts; documentation describes the verified implementation. When those disagree, inspect the call path and do not repeat the stale claim.
 
-Use the canonical skills in `.agents/skills` for verification, Wails contracts, and SQLite migrations. Cursor compatibility pointers live in `.cursor/skills`.
+Use the canonical skills in `.agents/skills` for verification, Wails contracts, SQLite migrations, and desktop vocabulary sync. Cursor compatibility pointers live in `.cursor/skills`.
+
+The shared Postgres schema lives in `../call-analyzer-lesson-db`. The live morning Telegram job lives in `../call-analyzer-active-recall`. Do not edit those repos from this workspace unless the user opened them. Never copy the Mac `SUPABASE_SECRET_KEY` into the recall service or a Windows environment.
 
 Keep checks offline: do not run `go run ./cmd/evaluate -execute` or send live lesson audio unless the user asks. Preserve unrelated changes and report checks that could not be run.
