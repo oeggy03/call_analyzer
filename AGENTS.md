@@ -40,6 +40,20 @@ These instructions authorize the orchestrator to delegate implementation work wi
 - Transcription and standard chat requests ask for Zero Data Retention and deny data collection. Vision photo-recognition chat intentionally omits those controls; inspect `internal/openrouter/client.go` before making claims about provider privacy flags. Provider flags are separate from local audio retention.
 - macOS `Source.Configure` maps system-audio aliases to its system-audio source and accepts a nonblank explicit bundle ID. Wails currently limits lesson targets in `validTarget`; Zoom is a default option, not the only app the capture source can target. Check both boundaries before claiming a target is supported in the UI. Swift emits 2-second chunks; Go assembles utterance windows in `internal/service/capture_pipeline.go`.
 - `loadSettings` forces sync off. The app does not start `internal/sync.Dispatcher`; never sync the SQLite file.
+- The vocabulary sync runner is a separate cross-platform goroutine started by
+  `Service.Initialize`; it does not use or revive the legacy `SyncEnabled` flag.
+  It waits ten minutes after the newest eligible vocabulary outbox row and
+  uploads the current confirmed or manually saved SQLite row. A merged candidate
+  is not uploaded; when its target is confirmed, that target is uploaded with
+  the moved senses, examples, and tags. Study review events stay pending.
+- `SUPABASE_SECRET_KEY` is read from the environment first on every OS. On
+  macOS only, the fallback is this machine's Keychain item under service
+  `github.com/oeggy03.call_analyzer` and account `SUPABASE_SECRET_KEY`.
+  Windows and other non-Darwin builds have no Keychain fallback and must use a
+  different `SUPABASE_SECRET_KEY` environment value; never reuse the Mac key.
+- The sync runner must use the app-provided secret store, not construct a
+  default store internally. Never place the Supabase secret in SQLite, logs,
+  tests, documentation, or `AppSnapshot`.
 - Wails JSON is camelCase. `EditCandidate` sends `pinyin`, mapped in `app.go` to `domain.CandidateEdit.Reading`.
 - Keep the non-Darwin capture stubs compiling when changing the capture implementation.
 - Tests and fixture evaluation stay offline. Never pass `-execute` to `cmd/evaluate` unless the user explicitly asks for live OpenRouter calls.

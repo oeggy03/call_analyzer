@@ -145,8 +145,9 @@ The Settings screen reports that the session has no cap.
   unattended automatic capture.
 - OCR is off by default. In system mode it receives screen frames from the
   largest display; there is no user-selected display or crop.
-- Windows capture and hosted sync are extension boundaries only; this release
-  implements macOS ScreenCaptureKit, local SQLite, and a disabled outbox API.
+- Windows capture remains a stub. Vocabulary sync is opt-in through the
+  cross-platform outbox runner when `SUPABASE_SECRET_KEY` is configured; it
+  sends current confirmed and manually saved vocabulary rows only.
 - Audio is session-only in this MVP. Evidence is retained as transcript text
   and timestamps, not encrypted replayable clips.
 - A native stream failure is surfaced in the lesson UI but does not
@@ -188,10 +189,12 @@ Flows and boundaries are in `docs/architecture.md`. Package roles:
 - `internal/capture`: cross-platform Go capture boundary.
 - `internal/capture/macos`: native helper process adapter.
 - `native/macos-capture`: ScreenCaptureKit, microphone capture, and local OCR.
-- `internal/sync`: disabled-by-default idempotent outbox HTTP boundary.
+- `internal/sync`: quiet-period vocabulary outbox runner and PostgREST client.
 - `frontend`: React/TypeScript desktop experience.
 
 Windows expansion should implement the existing capture interfaces with
-process-specific WASAPI loopback and Windows Graphics Capture. Future online
-access should dispatch the existing outbox to an authenticated Go/PostgreSQL
-service; the desktop SQLite file must not be synchronized directly.
+process-specific WASAPI loopback and Windows Graphics Capture. The desktop
+SQLite file must not be synchronized directly; the current runner sends only
+eligible vocabulary rows to the authenticated Supabase PostgREST endpoint.
+Lessons, transcripts, observations, and study-state changes remain outside
+this sync boundary.

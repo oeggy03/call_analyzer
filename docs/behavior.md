@@ -42,5 +42,19 @@ These rules are enforced in code, but they are easy to miss because the UI, the 
 ## Sync and study data
 
 - `loadSettings` sets `syncEnabled` to false on every load.
-- Outbox rows are still written for vocabulary and lesson mutations. They are not delivered.
+- Vocabulary outbox rows are delivered by a cross-platform background runner
+  after a ten-minute quiet period from the newest undelivered eligible row.
+  `SyncNow` and shutdown flush immediately.
+- The runner collapses events by vocabulary id and reads the current SQLite
+  row. Confirmed and manually saved rows are uploaded. A merged candidate is
+  not uploaded; a confirmed merge target is uploaded with its moved senses,
+  examples, and tags. Candidate and rejected
+  rows are acknowledged locally without HTTP. A missing local row or
+  `vocabulary.entry.deleted` event sends an upstream DELETE.
+- Child senses, examples, and entry tags are replaced from SQLite, while tags
+  are upserted by name. The first confirmed/manual publish initializes
+  `study_state` with ignore-duplicates resolution.
+- `study.review.recorded` remains pending and does not block the vocabulary
+  quiet timer. Lessons, transcripts, observations, and later study-state
+  changes are not synced.
 - Lesson, manual generation, and photo recognition usage are recorded separately under the lesson id, `manual-vocabulary`, and `photo-vocabulary` respectively.

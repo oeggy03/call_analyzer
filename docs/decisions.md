@@ -30,9 +30,15 @@ The UI warns at US$0.35 and labels the session as uncapped. The legacy `hardBudg
 
 `reconcileLesson` still labels 30-second windows with 5 seconds of overlap, then sends them in one prompt. The comment in `internal/service/reconcile.go` says a one-hour lesson would otherwise need about 144 sequential calls and would not finish when the learner presses Stop.
 
-## Sync is an unused outbox
+## Vocabulary sync consumes the outbox
 
-`internal/sync` can POST pending rows, and storage writes those rows in the same transaction as the mutation. `loadSettings` sets `syncEnabled` to false, and `NewApp` does not start a dispatcher. SQLite stays the source of truth.
+Storage writes vocabulary outbox rows in the same transaction as the
+mutation. `Service.Initialize` starts the cross-platform vocabulary runner,
+which waits ten minutes, reads current SQLite rows, and sends eligible
+confirmed and manually saved entries through PostgREST. A merged candidate stays local unless its target is confirmed, in which case that target is republished. `study.review.recorded`
+and non-vocabulary data remain local to this boundary. `loadSettings` still
+sets the legacy `syncEnabled` flag to false, and `sync.Dispatcher` remains
+unused. SQLite stays the source of truth.
 
 ## SQLite is embedded and migrated in-process
 

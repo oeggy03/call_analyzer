@@ -11,7 +11,15 @@ Verified against the current tree. Product boundaries also listed in `README.md`
 - `fixtures/evaluation/manifest.json` is synthetic text. It has no WAV files. The root README says accuracy should be recalibrated with consent-cleared lessons before unattended capture.
 - OCR is off by default. In system mode the helper captures screen frames from the largest display; there is no user-selected display or crop (`defaultRuntimeSettings`).
 - A native stream failure is shown on the lesson and does not restart capture.
-- Outbox rows accumulate. Nothing in the desktop app delivers them. There is no hosted API in this repository.
+- Vocabulary outbox delivery requires a configured per-machine Supabase
+  secret. Without it, rows remain local. The runner does not sync lessons,
+  transcripts, observations, study-state changes, or review events.
+- The hosted vocabulary sync is intentionally last-write-from-current-SQLite
+  state per aggregate; it has no multi-device conflict UI or pull/reconcile
+  flow.
+- macOS stores the Supabase secret in this Mac's Keychain when the environment
+  variable is absent. Windows and other non-Darwin builds have no Keychain and
+  must use their own `SUPABASE_SECRET_KEY`; the Mac value is not portable.
 - Windows uses a stub `MockSource` and does not capture audio. On Windows, `go test ./internal/storage` currently fails to open embedded migrations 001, 003, and 004 because the migration path uses Windows separators; run complete Go verification on macOS.
 - `frontend/wailsjs` and `frontend/dist` are generated. They are not the contract. `frontend/src/lib/api.ts` is.
 - `go test ./...` compiles `frontend/node_modules/flatted/golang/pkg/flatted` when npm dependencies are installed. `./scripts/verify.sh` excludes it.
@@ -20,5 +28,7 @@ Verified against the current tree. Product boundaries also listed in `README.md`
 
 ## Unresolved
 
-- No server contract accompanies `internal/sync.HTTPSyncer`. The payload is the JSON form of `domain.OutboxEvent`.
+- The legacy `internal/sync.HTTPSyncer` remains a generic event POST helper
+  without a server contract; the active vocabulary runner uses the explicit
+  PostgREST table contract instead.
 - No importer exists for the CC-CEDICT-sized dictionary mentioned in `README.md`.
