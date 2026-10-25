@@ -26,12 +26,13 @@ const (
 type EventHook func(string, any)
 
 type Service struct {
-	store       *storage.Store
-	source      capture.Source
-	secrets     SecretStore
-	router      *openrouter.Client
-	syncSecrets SecretStore
-	syncRunner  *syncer.Runner
+	store            *storage.Store
+	source           capture.Source
+	secrets          SecretStore
+	router           *openrouter.Client
+	syncSecrets      SecretStore
+	syncRunner       *syncer.Runner
+	skipShutdownSync bool
 
 	mu              sync.RWMutex
 	capturing       bool
@@ -154,11 +155,34 @@ func (s *Service) startSync(ctx context.Context) {
 func (s *Service) Shutdown(ctx context.Context) error {
 	s.mu.RLock()
 	runner := s.syncRunner
+	skip := s.skipShutdownSync
 	s.mu.RUnlock()
 	if runner == nil {
 		return nil
 	}
+	if skip {
+		return runner.StopWithoutFlush(ctx)
+	}
 	return runner.Stop(ctx)
+}
+
+func (s *Service) SkipShutdownSync() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.skipShutdownSync = true
+	s.mu.Unlock()
+}
+
+func (s *Service) HasUnsyncedVocabulary(ctx context.Context) (bool, error) {
+	s.mu.RLock()
+	runner := s.syncRunner
+	s.mu.RUnlock()
+	if runner == nil || !runner.Status().Configured {
+		return false, nil
+	}
+	return runner.HasUploadablePending(ctx)
 }
 
 func (s *Service) SyncNow(ctx context.Context) error {

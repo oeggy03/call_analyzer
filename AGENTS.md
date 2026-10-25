@@ -45,7 +45,8 @@ These instructions authorize the orchestrator to delegate implementation work wi
   It waits ten minutes after the newest eligible vocabulary outbox row and
   uploads the current confirmed or manually saved SQLite row. A merged candidate
   is not uploaded; when its target is confirmed, that target is uploaded with
-  the moved senses, examples, and tags. Study review events stay pending.
+  the moved senses, examples, and tags. Closing asks before uploading pending
+  rows; declining leaves them in the outbox. Study review events stay pending.
 - `SUPABASE_SECRET_KEY` is read from the environment first on every OS. On
   macOS only, the fallback is this machine's Keychain item under service
   `github.com/oeggy03.call_analyzer` and account `SUPABASE_SECRET_KEY`.

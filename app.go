@@ -80,6 +80,39 @@ func (a *App) startup(ctx context.Context) {
 	a.emit("backend.ready", a.service.Config(ctx))
 }
 
+func (a *App) beforeClose(ctx context.Context) bool {
+	needsSync, err := a.service.HasUnsyncedVocabulary(ctx)
+	if err != nil || !needsSync {
+		return false
+	}
+	choice, dialogErr := runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
+		Type:          runtime.QuestionDialog,
+		Title:         "Unsynced vocabulary",
+		Message:       "You still have unsynced items. Sync now?",
+		Buttons:       []string{"Sync now", "Not now"},
+		DefaultButton: "Sync now",
+		CancelButton:  "Not now",
+	})
+	if dialogErr != nil {
+		return true
+	}
+	if choice != "Sync now" {
+		a.service.SkipShutdownSync()
+		return false
+	}
+	syncCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := a.service.SyncNow(syncCtx); err != nil {
+		_, _ = runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
+			Type:    runtime.ErrorDialog,
+			Title:   "Sync failed",
+			Message: "The vocabulary sync did not finish. The app will stay open.",
+		})
+		return true
+	}
+	return false
+}
+
 func (a *App) shutdown(ctx context.Context) {
 	_ = a.service.StopCapture(ctx)
 	flushCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

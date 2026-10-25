@@ -355,6 +355,25 @@ func TestRunnerReviewDoesNotBlockVocabularyTimer(t *testing.T) {
 	}
 }
 
+func TestRunnerReportsUploadablePendingVocabulary(t *testing.T) {
+	store, ctx := newVocabularyStore(t)
+	runner := NewRunner(store, nil, RunnerOptions{})
+	pending, err := runner.HasUploadablePending(ctx)
+	if err != nil || pending {
+		t.Fatalf("empty outbox reported pending work: %v %v", pending, err)
+	}
+	candidateEntry(t, ctx, store)
+	pending, err = runner.HasUploadablePending(ctx)
+	if err != nil || pending {
+		t.Fatalf("candidate outbox reported an upload: %v %v", pending, err)
+	}
+	confirmedEntry(t, ctx, store)
+	pending, err = runner.HasUploadablePending(ctx)
+	if err != nil || !pending {
+		t.Fatalf("confirmed outbox did not report an upload: %v %v", pending, err)
+	}
+}
+
 func TestRunnerMergeRepublishesConfirmedTargetOnly(t *testing.T) {
 	store, ctx := newVocabularyStore(t)
 	target := confirmedEntry(t, ctx, store)

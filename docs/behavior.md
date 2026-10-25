@@ -44,7 +44,7 @@ These rules are enforced in code, but they are easy to miss because the UI, the 
 - `loadSettings` sets `syncEnabled` to false on every load.
 - Vocabulary outbox rows are delivered by a cross-platform background runner
   after a ten-minute quiet period from the newest undelivered eligible row.
-  `SyncNow` and shutdown flush immediately.
+  `SyncNow` flushes immediately. Closing the window asks "You still have unsynced items. Sync now?" when a flush would upload a row. Sync now sends those rows and then closes. Not now closes and leaves them in the outbox.
 - The runner collapses events by vocabulary id and reads the current SQLite
   row. Confirmed and manually saved rows are uploaded. A merged candidate is
   not uploaded; a confirmed merge target is uploaded with its moved senses,

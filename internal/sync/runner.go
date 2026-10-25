@@ -127,6 +127,19 @@ func (r *Runner) Start(ctx context.Context) {
 }
 
 func (r *Runner) Stop(ctx context.Context) error {
+	if err := r.stopLoop(ctx); err != nil {
+		return err
+	}
+	return r.SyncNow(ctx)
+}
+
+// StopWithoutFlush stops the background loop and leaves pending outbox rows
+// for the next launch.
+func (r *Runner) StopWithoutFlush(ctx context.Context) error {
+	return r.stopLoop(ctx)
+}
+
+func (r *Runner) stopLoop(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
@@ -147,7 +160,32 @@ func (r *Runner) Stop(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
-	return r.SyncNow(ctx)
+	return nil
+}
+
+// HasUploadablePending reports whether a flush would send at least one row.
+// Candidate, rejected, and study-review rows do not count.
+func (r *Runner) HasUploadablePending(ctx context.Context) (bool, error) {
+	if r == nil || r.store == nil {
+		return false, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	events, err := r.pendingEvents(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, group := range collapseEvents(eligibleEvents(events)) {
+		needed, err := r.groupNeedsUpload(ctx, group)
+		if err != nil {
+			return false, err
+		}
+		if needed {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (r *Runner) SyncNow(ctx context.Context) error {
@@ -296,6 +334,38 @@ func (r *Runner) processGroup(
 		return client.PublishVocabularyEntry(ctx, entry)
 	default:
 		return errors.New("sync: unknown vocabulary status")
+	}
+}
+
+func (r *Runner) groupNeedsUpload(ctx context.Context, group aggregateEvents) (bool, error) {
+	if group.latest.EventType == "vocabulary.entry.deleted" {
+		return true, nil
+	}
+	entry, err := r.store.Vocabulary().Get(ctx, group.id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	switch entry.Status {
+	case domain.VocabularyStatusConfirmed:
+		return true, nil
+	case domain.VocabularyStatusMerged:
+		targetID := strings.TrimSpace(entry.MergedIntoID)
+		if targetID == "" {
+			return false, nil
+		}
+		target, err := r.store.Vocabulary().Get(ctx, targetID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return target.Status == domain.VocabularyStatusConfirmed || target.Manual, nil
+	default:
+		return false, nil
 	}
 }
 
