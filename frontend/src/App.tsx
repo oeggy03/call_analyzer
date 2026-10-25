@@ -49,6 +49,9 @@ const EMPTY_SNAPSHOT: AppSnapshot = {
   },
   settings: {
     openRouterKeyConfigured: false,
+    supabaseSyncConfigured: false,
+    syncPendingCount: 0,
+    syncStatus: 'not_configured',
     sttModel: 'qwen/qwen3-asr-1.7b',
     analyzerModel: 'qwen/qwen3-32b',
     visionModel: 'qwen/qwen3.7-flash',
@@ -433,6 +436,11 @@ export function App({ apiClient = defaultApi }: AppProps) {
       ? 'API key cleared. Settings saved securely.'
       : 'Settings saved securely.'
     void runAction('save-settings', () => apiClient.saveSettings(patch), successMessage)
+  }
+
+  const syncNow = () => {
+    if (!current.settings.supabaseSyncConfigured || busyAction === 'sync-now') return
+    void runAction('sync-now', () => apiClient.syncNow(), 'Cloud vocabulary sync requested.')
   }
 
   const setManualFormValue = (nextForm: ManualVocabularyForm) => {
@@ -870,6 +878,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
                   apiMode={apiClient.mode}
                   busyAction={busyAction}
                   onSave={saveSettings}
+                  onSyncNow={syncNow}
                   onDeleteLastLesson={handleDeleteLastLesson}
                 />
               )}
@@ -2344,12 +2353,14 @@ function SettingsView({
   apiMode,
   busyAction,
   onSave,
+  onSyncNow,
   onDeleteLastLesson,
 }: {
   snapshot: AppSnapshot
   apiMode: AppApi['mode']
   busyAction?: string
   onSave: (patch: SettingsPatch) => void
+  onSyncNow: () => void
   onDeleteLastLesson: () => void
 }) {
   const [keyDraft, setKeyDraft] = useState('')
@@ -2479,6 +2490,53 @@ function SettingsView({
                 <p>ZDR controls provider-side retention. Local audio follows the selected retention policy; confirmed vocabulary remains in your local collection.</p>
               </div>
               <span className="status-pill status-mastered">Enabled</span>
+            </div>
+          </section>
+          <section className="panel settings-panel">
+            <PanelHeading
+              eyebrow="Cloud sync"
+              title="Cloud vocabulary"
+              description="Confirmed words sync about 10 minutes after the latest change. This computer uses its own Supabase key."
+            />
+            <div className="budget-row">
+              <div>
+                <strong>Sync status</strong>
+                {snapshot.settings.syncStatus === 'not_configured' && (
+                  <p>No Supabase key is configured on this computer.</p>
+                )}
+                {snapshot.settings.syncStatus === 'waiting' && (
+                  <>
+                    <p>
+                      {snapshot.settings.syncWaitingUntil
+                        ? `Waiting until ${formatLessonDate(snapshot.settings.syncWaitingUntil)}.`
+                        : 'Waiting for the next sync window.'}
+                    </p>
+                    <p>
+                      {snapshot.settings.syncPendingCount} pending {snapshot.settings.syncPendingCount === 1 ? 'word' : 'words'}.
+                    </p>
+                  </>
+                )}
+                {snapshot.settings.syncStatus === 'syncing' && <p>Syncing.</p>}
+                {snapshot.settings.syncStatus === 'idle' && (
+                  <p>
+                    {snapshot.settings.lastSyncAt
+                      ? `Last synced ${formatLessonDate(snapshot.settings.lastSyncAt)}.`
+                      : 'No sync completed yet.'}
+                  </p>
+                )}
+                {snapshot.settings.syncStatus === 'error' && (
+                  <p>{snapshot.settings.lastSyncError || 'Sync failed.'}</p>
+                )}
+              </div>
+              <button
+                className="button button-secondary button-small"
+                type="button"
+                onClick={onSyncNow}
+                disabled={!snapshot.settings.supabaseSyncConfigured || busyAction === 'sync-now'}
+              >
+                <Icon name="refresh" />
+                {busyAction === 'sync-now' ? 'Syncing…' : 'Sync now'}
+              </button>
             </div>
           </section>
           <section className="panel settings-panel danger-zone">

@@ -65,6 +65,7 @@ export const BACKEND_METHODS = {
   rejectCandidate: 'RejectCandidate',
   mergeCandidates: 'MergeCandidates',
   saveSettings: 'SaveSettings',
+  syncNow: 'SyncNow',
   deleteLastLesson: 'DeleteLastLesson',
   refresh: 'Refresh',
 } as const
@@ -94,6 +95,7 @@ export interface AppApi {
   rejectCandidate(candidateId: string): Promise<AppSnapshot>
   mergeCandidates(sourceId: string, targetId: string): Promise<AppSnapshot>
   saveSettings(patch: SettingsPatch): Promise<AppSnapshot>
+  syncNow(): Promise<AppSnapshot>
   deleteLastLesson(): Promise<AppSnapshot>
   refresh(): Promise<AppSnapshot>
   subscribe(listener: (snapshot: AppSnapshot) => void): () => void
@@ -374,6 +376,10 @@ function createDemoSnapshot(): AppSnapshot {
     },
     settings: {
       openRouterKeyConfigured: true,
+      supabaseSyncConfigured: true,
+      syncPendingCount: 0,
+      syncStatus: 'idle',
+      lastSyncAt: DEMO_TIMESTAMP,
       sttModel: 'qwen/qwen3-asr-1.7b',
       analyzerModel: 'qwen/qwen3-32b',
       visionModel: 'qwen/qwen3.7-flash',
@@ -1049,6 +1055,10 @@ class DemoApi implements AppApi {
     return this.getSnapshot()
   }
 
+  async syncNow(): Promise<AppSnapshot> {
+    return this.getSnapshot()
+  }
+
   async deleteLastLesson(): Promise<AppSnapshot> {
     if (this.snapshot.lesson.status === 'live') {
       throw new ApiValidationError('Stop the live lesson before deleting its data.')
@@ -1178,6 +1188,10 @@ class RuntimeApi implements AppApi {
 
   async saveSettings(patch: SettingsPatch): Promise<AppSnapshot> {
     return this.callMutation(BACKEND_METHODS.saveSettings, patch)
+  }
+
+  async syncNow(): Promise<AppSnapshot> {
+    return this.callMutation(BACKEND_METHODS.syncNow)
   }
 
   async deleteLastLesson(): Promise<AppSnapshot> {
@@ -1321,6 +1335,10 @@ class UnavailableApi implements AppApi {
   }
 
   saveSettings(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  syncNow(): Promise<AppSnapshot> {
     return this.fail()
   }
 

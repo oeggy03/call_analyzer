@@ -233,6 +233,18 @@ describe('Call Analyzer frontend', () => {
     expect(await screen.findByText(/API key cleared/i)).toBeInTheDocument()
   })
 
+  it('opens Settings and clicks Sync now', async () => {
+    const api = createDemoApi()
+    const syncNow = vi.spyOn(api, 'syncNow')
+    render(<App apiClient={api} />)
+    await openView('Settings')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sync now' }))
+
+    await waitFor(() => expect(syncNow).toHaveBeenCalledWith())
+    expect(await screen.findByText(/Cloud vocabulary sync requested/i)).toBeInTheDocument()
+  })
+
   it('deletes the last lesson only after confirmation', async () => {
     const api = createDemoApi()
     const deleteLastLesson = vi.spyOn(api, 'deleteLastLesson')
@@ -608,6 +620,7 @@ describe('Call Analyzer frontend', () => {
       RejectCandidate: vi.fn().mockResolvedValue(snapshot),
       MergeCandidates: vi.fn().mockResolvedValue(snapshot),
       SaveSettings: vi.fn().mockResolvedValue(snapshot),
+      SyncNow: vi.fn().mockResolvedValue(snapshot),
       DeleteLastLesson: vi.fn().mockResolvedValue(snapshot),
       Refresh: vi.fn().mockResolvedValue(snapshot),
     }
@@ -657,6 +670,7 @@ describe('Call Analyzer frontend', () => {
     await runtimeApi.rejectCandidate('candidate-1')
     await runtimeApi.mergeCandidates('candidate-1', 'candidate-2')
     await runtimeApi.saveSettings(settingsPatch)
+    await runtimeApi.syncNow()
     await runtimeApi.deleteLastLesson()
     await runtimeApi.refresh()
 
@@ -671,6 +685,7 @@ describe('Call Analyzer frontend', () => {
     expect(fakeApp.RejectCandidate).toHaveBeenCalledWith('candidate-1')
     expect(fakeApp.MergeCandidates).toHaveBeenCalledWith('candidate-1', 'candidate-2')
     expect(fakeApp.SaveSettings).toHaveBeenCalledWith(settingsPatch)
+    expect(fakeApp.SyncNow).toHaveBeenCalledWith()
     expect(fakeApp.DeleteLastLesson).toHaveBeenCalledWith()
     expect(BACKEND_EVENTS.snapshotChanged).toBe('call_analyzer:snapshot_changed')
   })
