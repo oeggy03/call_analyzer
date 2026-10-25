@@ -1,6 +1,6 @@
-// Package sync contains an opt-in outbox dispatcher. The default syncer is
-// disabled, so local SQLite remains the source of truth until a hosted API is
-// deliberately configured.
+// Package sync contains the hosted vocabulary runner and the legacy generic
+// outbox dispatcher. The runner keeps SQLite as the source of truth and only
+// publishes explicitly eligible vocabulary rows to the configured API.
 package sync
 
 import (
