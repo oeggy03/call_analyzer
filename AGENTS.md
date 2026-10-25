@@ -2,6 +2,12 @@
 
 Mandarin Lesson Analyzer is a local-first macOS desktop app. Its window title is `Call Analyzer`, its bundle display name is `Mandarin Lesson Analyzer`, and its Go module is `github.com/oeggy03/call_analyzer`.
 
+## Ecosystem
+
+Three repositories sit next to each other. This one owns the desktop app, its SQLite file, and the vocabulary sync goroutine. `../call-analyzer-lesson-db` owns the shared Postgres migrations. `../call-analyzer-active-recall` is the live Cloud Run service that reads confirmed vocabulary and sends ten words to Telegram at 9:00 `Asia/Singapore`. It does not write reviews yet.
+
+Do not edit either sibling unless the user opened that workspace. A shared column starts as a new migration in `call-analyzer-lesson-db`, then this app's sync mapping, then the recall service if it reads the column. The recall service uses its own Supabase secret in Google Secret Manager. Never copy this Mac's `SUPABASE_SECRET_KEY` into that service or onto a Windows machine.
+
 ## Source of truth
 
 Current executable code defines behavior. Use exported Go methods and request types, frontend types and clients, and embedded migrations for exact contracts. Generated files are outputs; inspect their source instead. Documentation explains those sources and gives workflow context. If a claim conflicts with current code, trace the call path and correct the relevant documentation when the task includes that behavior; do not repeat the stale claim as fact. A test can also encode an outdated expectation, so compare it with the implementation.
@@ -21,6 +27,7 @@ The budget fields are a legacy settings and display contract. `internal/openrout
 | Verified unfinished behavior or mismatch | `docs/limitations.md` |
 | React boundary | `frontend/README.md` |
 | Capture helper process | `internal/capture/macos/README.md` |
+| Desktop vocabulary sync | `.agents/skills/supabase-sync/SKILL.md` |
 | Delegation and role map | `docs/agents.md` |
 | Multi-session handoff | `docs/work/README.md` |
 
