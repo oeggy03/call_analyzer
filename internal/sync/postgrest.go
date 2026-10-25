@@ -119,6 +119,150 @@ func (c *PostgRESTClient) PublishVocabularyEntry(
 	return nil
 }
 
+func (c *PostgRESTClient) ListConfirmedVocabulary(ctx context.Context) ([]domain.VocabularyEntry, error) {
+	if c == nil {
+		return nil, errors.New("sync: PostgREST client is not configured")
+	}
+	const pageSize = 1000
+	entries := make([]domain.VocabularyEntry, 0)
+	for offset := 0; ; offset += pageSize {
+		var page []remoteVocabularyEntry
+		if err := c.requestJSON(
+			ctx,
+			http.MethodGet,
+			"vocabulary_entries",
+			url.Values{
+				"select": []string{"id,simplified,traditional,reading,marked_pinyin,status,provenance,confidence,teaching_cue,manual,priority,merged_into_id,created_at,updated_at,senses(id,gloss,part_of_speech,classifier,sort_order),examples(id,simplified,traditional,reading,translation,provenance,generated),entry_tags(tags(id,name))"},
+				"status": []string{"eq.confirmed"},
+				"order":  []string{"updated_at.asc,id.asc"},
+				"limit":  []string{fmt.Sprintf("%d", pageSize)},
+				"offset": []string{fmt.Sprintf("%d", offset)},
+			},
+			nil,
+			"",
+			&page,
+		); err != nil {
+			return nil, fmt.Errorf("sync: list vocabulary: %w", err)
+		}
+		for _, row := range page {
+			entries = append(entries, row.toDomain())
+		}
+		if len(page) < pageSize {
+			return entries, nil
+		}
+		if offset >= pageSize*19 {
+			return nil, errors.New("sync: vocabulary pull exceeded 20000 rows")
+		}
+	}
+}
+
+type remoteVocabularyEntry struct {
+	ID           string          `json:"id"`
+	Simplified   string          `json:"simplified"`
+	Traditional  string          `json:"traditional"`
+	Reading      string          `json:"reading"`
+	MarkedPinyin string          `json:"marked_pinyin"`
+	Status       string          `json:"status"`
+	Provenance   string          `json:"provenance"`
+	Confidence   float64         `json:"confidence"`
+	TeachingCue  float64         `json:"teaching_cue"`
+	Manual       bool            `json:"manual"`
+	Priority     string          `json:"priority"`
+	MergedIntoID *string         `json:"merged_into_id"`
+	CreatedAt    string          `json:"created_at"`
+	UpdatedAt    string          `json:"updated_at"`
+	Senses       []remoteSense   `json:"senses"`
+	Examples     []remoteExample `json:"examples"`
+	EntryTags    []remoteEdge    `json:"entry_tags"`
+}
+
+type remoteSense struct {
+	ID           string `json:"id"`
+	Gloss        string `json:"gloss"`
+	PartOfSpeech string `json:"part_of_speech"`
+	Classifier   string `json:"classifier"`
+	SortOrder    int    `json:"sort_order"`
+}
+
+type remoteExample struct {
+	ID          string `json:"id"`
+	Simplified  string `json:"simplified"`
+	Traditional string `json:"traditional"`
+	Reading     string `json:"reading"`
+	Translation string `json:"translation"`
+	Provenance  string `json:"provenance"`
+	Generated   bool   `json:"generated"`
+}
+
+type remoteEdge struct {
+	Tags *remoteTag `json:"tags"`
+}
+
+func (row remoteVocabularyEntry) toDomain() domain.VocabularyEntry {
+	entry := domain.VocabularyEntry{
+		ID:           row.ID,
+		Simplified:   row.Simplified,
+		Traditional:  row.Traditional,
+		Reading:      row.Reading,
+		MarkedPinyin: row.MarkedPinyin,
+		Status:       domain.VocabularyStatus(row.Status),
+		Provenance:   domain.Provenance(row.Provenance),
+		Confidence:   row.Confidence,
+		TeachingCue:  row.TeachingCue,
+		Manual:       row.Manual,
+		Priority:     row.Priority,
+		CreatedAt:    parseRemoteTime(row.CreatedAt),
+		UpdatedAt:    parseRemoteTime(row.UpdatedAt),
+	}
+	if row.MergedIntoID != nil {
+		entry.MergedIntoID = strings.TrimSpace(*row.MergedIntoID)
+	}
+	for _, sense := range row.Senses {
+		entry.Senses = append(entry.Senses, domain.Sense{
+			ID:           sense.ID,
+			EntryID:      row.ID,
+			Gloss:        sense.Gloss,
+			PartOfSpeech: sense.PartOfSpeech,
+			Classifier:   sense.Classifier,
+			SortOrder:    sense.SortOrder,
+		})
+	}
+	for _, example := range row.Examples {
+		entry.Examples = append(entry.Examples, domain.Example{
+			ID:          example.ID,
+			EntryID:     row.ID,
+			Simplified:  example.Simplified,
+			Traditional: example.Traditional,
+			Reading:     example.Reading,
+			Translation: example.Translation,
+			Provenance:  domain.Provenance(example.Provenance),
+			Generated:   example.Generated,
+		})
+	}
+	for _, edge := range row.EntryTags {
+		if edge.Tags == nil || strings.TrimSpace(edge.Tags.Name) == "" {
+			continue
+		}
+		entry.Tags = append(entry.Tags, domain.Tag{
+			ID:   edge.Tags.ID,
+			Name: edge.Tags.Name,
+		})
+	}
+	return entry
+}
+
+func parseRemoteTime(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed.UTC()
+}
+
 func (c *PostgRESTClient) DeleteVocabularyEntry(ctx context.Context, entryID string) error {
 	entryID = strings.TrimSpace(entryID)
 	if c == nil {

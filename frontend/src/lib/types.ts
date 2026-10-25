@@ -88,6 +88,7 @@ export interface PrivacyState {
 }
 
 export type SyncStatus = 'not_configured' | 'waiting' | 'syncing' | 'idle' | 'error'
+export type PullStatus = 'pulling' | 'idle' | 'error'
 
 export interface Settings {
   openRouterKeyConfigured: boolean
@@ -97,6 +98,10 @@ export interface Settings {
   syncWaitingUntil?: string
   lastSyncAt?: string
   lastSyncError?: string
+  pullStatus?: PullStatus
+  pullChangeCount?: number
+  lastPullAt?: string
+  pullError?: string
   sttModel: string
   analyzerModel: string
   visionModel: string

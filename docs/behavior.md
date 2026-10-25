@@ -44,7 +44,12 @@ These rules are enforced in code, but they are easy to miss because the UI, the 
 - `loadSettings` sets `syncEnabled` to false on every load.
 - Vocabulary outbox rows are delivered by a cross-platform background runner
   after a ten-minute quiet period from the newest undelivered eligible row.
-  `SyncNow` flushes immediately. Closing the window asks "You still have unsynced items. Sync now?" when a flush would upload a row. Sync now sends those rows and then closes. Not now closes and leaves them in the outbox.
+  On launch the runner reads confirmed cloud vocabulary in one paged request
+  and applies it locally. A newer local `updated_at` is kept. The same
+  simplified, traditional, and reading under a different id keeps the local
+  id. A confirmed local word with no pending outbox row is removed when that
+  id is gone from the cloud. `SyncNow` uploads only and does not pull.
+  Closing the window asks "You still have unsynced items. Sync now?" when a flush would upload a row. Sync now sends those rows and then closes. Not now closes and leaves them in the outbox.
 - The runner collapses events by vocabulary id and reads the current SQLite
   row. Confirmed and manually saved rows are uploaded. A merged candidate is
   not uploaded; a confirmed merge target is uploaded with its moved senses,

@@ -8,6 +8,10 @@ export namespace main {
 	    syncWaitingUntil?: string;
 	    lastSyncAt?: string;
 	    lastSyncError?: string;
+	    pullStatus?: string;
+	    pullChangeCount?: number;
+	    lastPullAt?: string;
+	    pullError?: string;
 	    sttModel: string;
 	    analyzerModel: string;
 	    visionModel: string;
@@ -29,6 +33,10 @@ export namespace main {
 	        this.syncWaitingUntil = source["syncWaitingUntil"];
 	        this.lastSyncAt = source["lastSyncAt"];
 	        this.lastSyncError = source["lastSyncError"];
+	        this.pullStatus = source["pullStatus"];
+	        this.pullChangeCount = source["pullChangeCount"];
+	        this.lastPullAt = source["lastPullAt"];
+	        this.pullError = source["pullError"];
 	        this.sttModel = source["sttModel"];
 	        this.analyzerModel = source["analyzerModel"];
 	        this.visionModel = source["visionModel"];

@@ -16,7 +16,8 @@ token, service key, or password in source, tests, logs, or docs.
   remains unused.
 - The runner waits ten minutes from the newest undelivered eligible
   `vocabulary_entry` outbox row. It checks about every five seconds.
-  `SyncNow` bypasses the quiet period. Closing with rows that would be uploaded
+  Launch pulls confirmed vocabulary before that upload loop. `SyncNow`
+  bypasses the quiet period and does not pull. Closing with rows that would be uploaded
   asks first; declining leaves those rows in the outbox. Tests inject the clock and
   quiet period.
 - Confirmed and manually saved entries are eligible. A merged candidate is

@@ -14,9 +14,9 @@ Verified against the current tree. Product boundaries also listed in `README.md`
 - Vocabulary outbox delivery requires a configured per-machine Supabase
   secret. Without it, rows remain local. The runner does not sync lessons,
   transcripts, observations, study-state changes, or review events.
-- The hosted vocabulary sync is intentionally last-write-from-current-SQLite
-  state per aggregate; it has no multi-device conflict UI or pull/reconcile
-  flow.
+- Launch pulls confirmed vocabulary and keeps the row with the newer
+  `updated_at`. There is no field-by-field conflict screen. `SyncNow` uploads
+  the current SQLite row and can replace an older cloud copy.
 - macOS stores the Supabase secret in this Mac's Keychain when the environment
   variable is absent. Windows and other non-Darwin builds have no Keychain and
   must use their own `SUPABASE_SECRET_KEY`; the Mac value is not portable.

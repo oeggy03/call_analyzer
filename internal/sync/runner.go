@@ -22,6 +22,10 @@ const (
 	SyncStatusSyncing       = "syncing"
 	SyncStatusIdle          = "idle"
 	SyncStatusError         = "error"
+
+	PullStatusPulling = "pulling"
+	PullStatusIdle    = "idle"
+	PullStatusError   = "error"
 )
 
 type SecretStore interface {
@@ -29,12 +33,16 @@ type SecretStore interface {
 }
 
 type Status struct {
-	Configured    bool
-	PendingCount  int
-	Status        string
-	WaitingUntil  *time.Time
-	LastSyncAt    *time.Time
-	LastSyncError string
+	Configured      bool
+	PendingCount    int
+	Status          string
+	WaitingUntil    *time.Time
+	LastSyncAt      *time.Time
+	LastSyncError   string
+	PullStatus      string
+	PullChangeCount int
+	LastPullAt      *time.Time
+	PullError       string
 }
 
 type RunnerOptions struct {
@@ -209,6 +217,7 @@ func (r *Runner) Status() Status {
 
 func (r *Runner) loop(ctx context.Context, done chan struct{}) {
 	defer close(done)
+	r.pullWithTimeout(ctx)
 	r.runWithTimeout(ctx, false)
 	ticker := time.NewTicker(r.options.PollInterval)
 	defer ticker.Stop()
@@ -220,6 +229,54 @@ func (r *Runner) loop(ctx context.Context, done chan struct{}) {
 			r.runWithTimeout(ctx, false)
 		}
 	}
+}
+
+func (r *Runner) pullWithTimeout(ctx context.Context) {
+	runContext, cancel := context.WithTimeout(ctx, r.options.RequestTimeout)
+	defer cancel()
+	_ = r.Pull(runContext)
+}
+
+// Pull reads confirmed vocabulary from Supabase into SQLite. SyncNow does not
+// call it.
+func (r *Runner) Pull(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	r.processMu.Lock()
+	defer r.processMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	client, err := r.clientFor(ctx)
+	if err != nil {
+		r.setPullError(err)
+		return err
+	}
+	if client == nil {
+		return nil
+	}
+	if r.store == nil {
+		err := errors.New("sync: storage is not configured")
+		r.setPullError(err)
+		return err
+	}
+	r.setPulling()
+	entries, err := client.ListConfirmedVocabulary(ctx)
+	if err != nil {
+		r.setPullError(err)
+		return err
+	}
+	result, err := r.store.Vocabulary().ApplyCloudVocabulary(ctx, entries)
+	if err != nil {
+		r.setPullError(err)
+		return err
+	}
+	r.setPullIdle(result.Changes(), r.options.Now().UTC())
+	return nil
 }
 
 func (r *Runner) runWithTimeout(ctx context.Context, force bool) {
@@ -567,6 +624,35 @@ func (r *Runner) setLastSync(at time.Time) {
 	})
 }
 
+func (r *Runner) setPulling() {
+	r.updateStatus(func(status *Status) {
+		status.Configured = true
+		status.PullStatus = PullStatusPulling
+		status.PullError = ""
+	})
+}
+
+func (r *Runner) setPullIdle(changes int, at time.Time) {
+	r.updateStatus(func(status *Status) {
+		status.Configured = true
+		status.PullStatus = PullStatusIdle
+		status.PullChangeCount = changes
+		status.LastPullAt = timePtr(at)
+		status.PullError = ""
+	})
+}
+
+func (r *Runner) setPullError(err error) {
+	r.updateStatus(func(status *Status) {
+		status.PullStatus = PullStatusError
+		status.PullChangeCount = 0
+		status.LastPullAt = timePtr(r.options.Now().UTC())
+		if err != nil {
+			status.PullError = err.Error()
+		}
+	})
+}
+
 func (r *Runner) setError(err error) {
 	r.setErrorWithPending(err, r.Status().PendingCount)
 }
@@ -603,12 +689,16 @@ func (r *Runner) updateStatus(update func(*Status)) {
 
 func cloneStatus(status Status) Status {
 	return Status{
-		Configured:    status.Configured,
-		PendingCount:  status.PendingCount,
-		Status:        status.Status,
-		WaitingUntil:  cloneTime(status.WaitingUntil),
-		LastSyncAt:    cloneTime(status.LastSyncAt),
-		LastSyncError: status.LastSyncError,
+		Configured:      status.Configured,
+		PendingCount:    status.PendingCount,
+		Status:          status.Status,
+		WaitingUntil:    cloneTime(status.WaitingUntil),
+		LastSyncAt:      cloneTime(status.LastSyncAt),
+		LastSyncError:   status.LastSyncError,
+		PullStatus:      status.PullStatus,
+		PullChangeCount: status.PullChangeCount,
+		LastPullAt:      cloneTime(status.LastPullAt),
+		PullError:       status.PullError,
 	}
 }
 
@@ -618,7 +708,11 @@ func sameStatus(left, right Status) bool {
 		left.Status == right.Status &&
 		sameTime(left.WaitingUntil, right.WaitingUntil) &&
 		sameTime(left.LastSyncAt, right.LastSyncAt) &&
-		left.LastSyncError == right.LastSyncError
+		left.LastSyncError == right.LastSyncError &&
+		left.PullStatus == right.PullStatus &&
+		left.PullChangeCount == right.PullChangeCount &&
+		sameTime(left.LastPullAt, right.LastPullAt) &&
+		left.PullError == right.PullError
 }
 
 func cloneTime(value *time.Time) *time.Time {

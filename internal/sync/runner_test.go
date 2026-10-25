@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"net/http"
@@ -403,5 +404,229 @@ func TestRunnerMergeRepublishesConfirmedTargetOnly(t *testing.T) {
 	}
 	if !sawTarget {
 		t.Fatal("confirmed merge target was not uploaded")
+	}
+}
+
+func TestStartPullsConfirmedVocabulary(t *testing.T) {
+	store, ctx := newVocabularyStore(t)
+	entryID := uuid.NewString()
+	senseID := uuid.NewString()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet && req.URL.Path == "/rest/v1/vocabulary_entries" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `[{
+				"id":"`+entryID+`",
+				"simplified":"电脑",
+				"traditional":"電腦",
+				"reading":"dian4 nao3",
+				"marked_pinyin":"diàn nǎo",
+				"status":"confirmed",
+				"provenance":"user",
+				"confidence":1,
+				"teaching_cue":0,
+				"manual":true,
+				"priority":"manual",
+				"merged_into_id":null,
+				"created_at":"2026-10-20T00:00:00Z",
+				"updated_at":"2026-10-20T00:00:00Z",
+				"senses":[{"id":"`+senseID+`","gloss":"computer","part_of_speech":"noun","classifier":"台","sort_order":0}],
+				"examples":[],
+				"entry_tags":[{"tags":{"id":"`+uuid.NewString()+`","name":"tech"}}]
+			}]`)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	runner, _ := newConfiguredRunner(t, store, ctx, server.URL, time.Now)
+	runner.Start(ctx)
+	t.Cleanup(func() { _ = runner.StopWithoutFlush(context.Background()) })
+
+	deadline := time.Now().Add(2 * time.Second)
+	for runner.Status().PullStatus != PullStatusIdle {
+		if runner.Status().PullStatus == PullStatusError {
+			t.Fatal(runner.Status().PullError)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("launch pull did not finish: %#v", runner.Status())
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if runner.Status().PullChangeCount != 1 {
+		t.Fatalf("pull change count = %d", runner.Status().PullChangeCount)
+	}
+	entry, err := store.Vocabulary().Get(ctx, entryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entry.Senses) != 1 || entry.Senses[0].Gloss != "computer" {
+		t.Fatalf("pulled senses = %#v", entry.Senses)
+	}
+	if len(entry.Tags) != 1 || entry.Tags[0].Name != "tech" {
+		t.Fatalf("pulled tags = %#v", entry.Tags)
+	}
+}
+
+func TestPullKeepsNewerLocalWordAndPendingUpload(t *testing.T) {
+	store, ctx := newVocabularyStore(t)
+	local := confirmedEntry(t, ctx, store)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet && req.URL.Path == "/rest/v1/vocabulary_entries" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `[{
+				"id":"`+local.ID+`",
+				"simplified":"`+local.Simplified+`",
+				"traditional":"`+local.Traditional+`",
+				"reading":"`+local.Reading+`",
+				"marked_pinyin":"`+local.MarkedPinyin+`",
+				"status":"confirmed",
+				"provenance":"user",
+				"confidence":1,
+				"teaching_cue":0,
+				"manual":true,
+				"priority":"manual",
+				"created_at":"2020-01-01T00:00:00Z",
+				"updated_at":"2020-01-01T00:00:00Z",
+				"senses":[{"id":"`+uuid.NewString()+`","gloss":"replaced","part_of_speech":"","classifier":"","sort_order":0}],
+				"examples":[],
+				"entry_tags":[]
+			}]`)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	runner, _ := newConfiguredRunner(t, store, ctx, server.URL, time.Now)
+	if err := runner.Pull(ctx); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := store.Vocabulary().Get(ctx, local.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entry.Senses) == 0 || entry.Senses[0].Gloss != "to study" {
+		t.Fatalf("newer local sense was replaced: %#v", entry.Senses)
+	}
+	pending, err := store.Outbox().ListPendingVocabulary(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) == 0 {
+		t.Fatal("pending local upload was acknowledged")
+	}
+}
+
+func TestPullAppliesNewerRemoteWord(t *testing.T) {
+	store, ctx := newVocabularyStore(t)
+	local := confirmedEntry(t, ctx, store)
+	if _, err := store.DB().ExecContext(ctx, `
+		UPDATE vocabulary_entries SET updated_at = ? WHERE id = ?`,
+		time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli(), local.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet && req.URL.Path == "/rest/v1/vocabulary_entries" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `[{
+				"id":"`+local.ID+`",
+				"simplified":"`+local.Simplified+`",
+				"traditional":"`+local.Traditional+`",
+				"reading":"`+local.Reading+`",
+				"marked_pinyin":"`+local.MarkedPinyin+`",
+				"status":"confirmed",
+				"provenance":"user",
+				"confidence":1,
+				"teaching_cue":0,
+				"manual":true,
+				"priority":"manual",
+				"created_at":"2020-01-01T00:00:00Z",
+				"updated_at":"2026-10-20T00:00:00Z",
+				"senses":[{"id":"`+uuid.NewString()+`","gloss":"replaced","part_of_speech":"","classifier":"","sort_order":0}],
+				"examples":[],
+				"entry_tags":[]
+			}]`)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	runner, _ := newConfiguredRunner(t, store, ctx, server.URL, time.Now)
+	if err := runner.Pull(ctx); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := store.Vocabulary().Get(ctx, local.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entry.Senses) != 1 || entry.Senses[0].Gloss != "replaced" {
+		t.Fatalf("newer remote sense was not applied: %#v", entry.Senses)
+	}
+	pending, err := store.Outbox().ListPendingVocabulary(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range pending {
+		if event.AggregateID == local.ID {
+			t.Fatal("replaced local word still has a pending upload")
+		}
+	}
+}
+
+func TestPullRemovesDeliveredWordMissingUpstream(t *testing.T) {
+	store, ctx := newVocabularyStore(t)
+	local := confirmedEntry(t, ctx, store)
+	candidate := candidateEntry(t, ctx, store)
+	pending, err := store.Outbox().ListPendingVocabulary(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range pending {
+		if event.AggregateID != local.ID {
+			continue
+		}
+		if err := store.Outbox().MarkDelivered(ctx, event.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `[]`)
+	}))
+	defer server.Close()
+	runner, _ := newConfiguredRunner(t, store, ctx, server.URL, time.Now)
+	if err := runner.Pull(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Vocabulary().Get(ctx, local.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("delivered word missing upstream remains: %v", err)
+	}
+	if _, err := store.Vocabulary().Get(ctx, candidate.ID); err != nil {
+		t.Fatal(err)
+	}
+	if runner.Status().PullChangeCount != 1 {
+		t.Fatalf("removed count = %d", runner.Status().PullChangeCount)
+	}
+}
+
+func TestSyncNowDoesNotPull(t *testing.T) {
+	store, ctx := newVocabularyStore(t)
+	confirmedEntry(t, ctx, store)
+	recorder := &requestRecorder{}
+	server := newTestServer(recorder)
+	defer server.Close()
+	runner, _ := newConfiguredRunner(t, store, ctx, server.URL, func() time.Time {
+		return time.Now().UTC().Add(11 * time.Minute)
+	})
+	if err := runner.SyncNow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range recorder.snapshot() {
+		if request.Method == http.MethodGet && strings.Contains(request.Path, "vocabulary_entries") {
+			t.Fatalf("sync now pulled vocabulary: %s", request.Path)
+		}
+	}
+	if runner.Status().PullStatus != "" {
+		t.Fatalf("sync now set pull status %q", runner.Status().PullStatus)
 	}
 }

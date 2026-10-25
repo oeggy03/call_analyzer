@@ -36,8 +36,9 @@ The helper's plist is `native/macos-capture/Sources/call-analyzer-capture/Info.p
 The selected audio-retention label is stored on lesson metadata, but the helper currently removes audio at the end of capture regardless of that setting.
 
 Do not copy the SQLite file to another machine as a sync mechanism. The
-desktop vocabulary runner consumes its outbox and sends current eligible
-vocabulary rows to Supabase through PostgREST; it never sends lessons,
+desktop vocabulary runner pulls confirmed vocabulary on launch, then consumes
+its outbox and sends current eligible vocabulary rows to Supabase through
+PostgREST. Sync now uploads only. It never sends lessons,
 transcripts, observations, or study-state updates. The legacy `SyncEnabled`
 flag remains false.
 

@@ -766,6 +766,8 @@ export function App({ apiClient = defaultApi }: AppProps) {
     )
   }
 
+  const pullBanner = cloudPullBanner(current.settings)
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -789,6 +791,11 @@ export function App({ apiClient = defaultApi }: AppProps) {
             <>
               {(backendUnavailable || apiClient.mode === 'demo') && (
                 <BackendUnavailable mode={apiClient.mode} onRetry={handleRefresh} />
+              )}
+              {pullBanner && (
+                <InlineAlert tone={pullBanner.tone}>
+                  {pullBanner.text}
+                </InlineAlert>
               )}
               {actionError && (
                 <InlineAlert tone="error" onDismiss={() => setActionError(undefined)}>
@@ -1812,13 +1819,9 @@ function ManualVocabularyView({
           </div>
 
           {lessonActive && (
-            <div className="manual-key-alert" role="status">
-              <div className="manual-key-alert-icon"><Icon name="waveform" /></div>
-              <div>
-                <strong>Generation pauses during live lessons</strong>
-                <p>Finish the lesson before generating missing details; photo reading remains available during capture.</p>
-              </div>
-            </div>
+            <KeyBanner icon="waveform" title="Generation pauses during live lessons">
+              Finish the lesson before generating missing details; photo reading remains available during capture.
+            </KeyBanner>
           )}
 
           {generatedDraft && (
@@ -2062,16 +2065,18 @@ function PhotoDropZone({
       {isPreparing && <p className="photo-reader-status" role="status">Preparing photo previews…</p>}
       {photoInputError && <div className="photo-reader-error" role="alert">{photoInputError}</div>}
       {!hasApiKey && (
-        <div className="manual-key-alert photo-key-alert" role="status">
-          <div className="manual-key-alert-icon"><Icon name="spark" /></div>
-          <div>
-            <strong>AI generation needs an API key</strong>
-            <p>Add an OpenRouter key in Settings to find words in photos. A complete manual form can still be saved.</p>
-          </div>
-          <button className="button button-secondary button-small" type="button" onClick={onOpenSettings} disabled={isReading}>
-            Open Settings
-          </button>
-        </div>
+        <KeyBanner
+          className="photo-key-alert"
+          icon="spark"
+          title="AI generation needs an API key"
+          action={(
+            <button className="button button-secondary button-small" type="button" onClick={onOpenSettings} disabled={isReading}>
+              Open Settings
+            </button>
+          )}
+        >
+          Add an OpenRouter key in Settings to find words in photos. A complete manual form can still be saved.
+        </KeyBanner>
       )}
       <div className="photo-reader-action-row">
         <div>
@@ -2528,7 +2533,7 @@ function SettingsView({
             <PanelHeading
               eyebrow="Cloud sync"
               title="Cloud vocabulary"
-              description="Confirmed words sync about 10 minutes after the latest change. This computer uses its own Supabase key."
+              description="Confirmed words are downloaded when the app opens. Uploads wait about 10 minutes after the latest change. Sync now uploads only."
             />
             <div className="budget-row">
               <div>
@@ -2857,6 +2862,8 @@ function PrivacyBadge() {
 }
 
 function CostStatusAlert({ cost }: { cost: AppSnapshot['cost'] }) {
+  const [dismissed, setDismissed] = useState(false)
+  if (dismissed) return null
   const hardExceeded = Boolean(cost.hardExceeded)
   return (
     <div className={`cost-alert ${hardExceeded ? 'cost-alert-hard' : 'cost-alert-warning'}`} role="alert">
@@ -2866,6 +2873,7 @@ function CostStatusAlert({ cost }: { cost: AppSnapshot['cost'] }) {
         <p>Capture and analysis continue. There is no automatic cost stop.</p>
         <span>Current {formatUsd(cost.currentUsd)} · Projected {formatUsd(cost.projectedUsd)}</span>
       </div>
+      <DismissButton onClick={() => setDismissed(true)} />
     </div>
   )
 }
@@ -2888,17 +2896,60 @@ function SetupCheck({
   )
 }
 
-function InlineAlert({ tone, children, onDismiss }: { tone: 'error' | 'success'; children: string; onDismiss?: () => void }) {
+function InlineAlert({ tone, children, onDismiss }: { tone: 'error' | 'success' | 'info'; children: string; onDismiss?: () => void }) {
+  const [dismissedText, setDismissedText] = useState<string>()
+  if (dismissedText === children) return null
   return (
     <div className={`inline-alert alert-${tone}`} role={tone === 'error' ? 'alert' : 'status'}>
-      <Icon name={tone === 'error' ? 'warning' : 'check'} />
+      <Icon name={tone === 'error' ? 'warning' : tone === 'info' ? 'refresh' : 'check'} />
       <span>{children}</span>
-      {onDismiss && <button className="alert-dismiss" type="button" aria-label="Dismiss message" onClick={onDismiss}><Icon name="close" /></button>}
+      <DismissButton onClick={() => {
+        setDismissedText(children)
+        onDismiss?.()
+      }} />
     </div>
   )
 }
 
+function KeyBanner({
+  icon,
+  title,
+  children,
+  action,
+  className,
+}: {
+  icon: IconName
+  title: string
+  children: string
+  action?: ReactNode
+  className?: string
+}) {
+  const [dismissed, setDismissed] = useState(false)
+  if (dismissed) return null
+  return (
+    <div className={`manual-key-alert ${className ?? ''}`.trim()} role="status">
+      <div className="manual-key-alert-icon"><Icon name={icon} /></div>
+      <div>
+        <strong>{title}</strong>
+        <p>{children}</p>
+      </div>
+      {action}
+      <DismissButton onClick={() => setDismissed(true)} />
+    </div>
+  )
+}
+
+function DismissButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button className="alert-dismiss" type="button" aria-label="Dismiss message" onClick={onClick}>
+      <Icon name="close" />
+    </button>
+  )
+}
+
 function BackendUnavailable({ mode, onRetry }: { mode: AppApi['mode']; onRetry: () => void }) {
+  const [dismissed, setDismissed] = useState(false)
+  if (dismissed) return null
   return (
     <div className="backend-alert" role="status">
       <div className="backend-alert-icon"><Icon name="plug" /></div>
@@ -2913,6 +2964,7 @@ function BackendUnavailable({ mode, onRetry }: { mode: AppApi['mode']; onRetry: 
       {mode !== 'demo' && (
         <button className="button button-secondary button-small" type="button" onClick={onRetry}>Retry connection</button>
       )}
+      <DismissButton onClick={() => setDismissed(true)} />
     </div>
   )
 }
@@ -2935,6 +2987,22 @@ function EmptyState({ icon, title, description }: { icon: IconName; title: strin
       <p>{description}</p>
     </div>
   )
+}
+
+function cloudPullBanner(settings: AppSnapshot['settings']): { tone: 'info' | 'success' | 'error'; text: string } | undefined {
+  if (settings.pullStatus === 'pulling') {
+    return { tone: 'info', text: 'Checking cloud vocabulary…' }
+  }
+  if (settings.pullStatus === 'error') {
+    return { tone: 'error', text: settings.pullError || 'Cloud vocabulary could not be checked.' }
+  }
+  if (settings.pullStatus === 'idle' && settings.lastPullAt) {
+    const count = settings.pullChangeCount ?? 0
+    if (count === 0) return { tone: 'info', text: 'Cloud vocabulary is up to date.' }
+    const noun = count === 1 ? 'change' : 'changes'
+    return { tone: 'success', text: `Brought in ${count} vocabulary ${noun} from the cloud.` }
+  }
+  return undefined
 }
 
 function getConnectionStatus(connection: AppSnapshot['connection'], mode: AppApi['mode']) {

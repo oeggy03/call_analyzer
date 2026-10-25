@@ -290,7 +290,26 @@ describe('Call Analyzer frontend', () => {
     vi.spyOn(api, 'getSnapshot').mockResolvedValue(snapshot)
     render(<App apiClient={api} />)
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/no automatic cost stop/i)
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/no automatic cost stop/i)
+    fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss message' }))
+    expect(screen.queryByText(/no automatic cost stop/i)).not.toBeInTheDocument()
+  })
+
+  it('shows the cloud pull in a banner that can be closed', async () => {
+    const api = createDemoApi()
+    const snapshot = await api.getSnapshot()
+    vi.spyOn(api, 'getSnapshot').mockResolvedValue({
+      ...snapshot,
+      settings: { ...snapshot.settings, pullStatus: 'pulling' },
+    })
+    render(<App apiClient={api} />)
+
+    expect(await screen.findByText('Checking cloud vocabulary…')).toBeInTheDocument()
+    const banner = screen.getByText('Checking cloud vocabulary…').closest('.inline-alert')
+    if (!banner) throw new Error('pull banner missing')
+    fireEvent.click(within(banner as HTMLElement).getByRole('button', { name: 'Dismiss message' }))
+    expect(screen.queryByText('Checking cloud vocabulary…')).not.toBeInTheDocument()
   })
 
   it('filters vocabulary by search text', async () => {

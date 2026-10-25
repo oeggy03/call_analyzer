@@ -203,6 +203,10 @@ type SettingsSnapshot struct {
 	SyncWaitingUntil        string  `json:"syncWaitingUntil,omitempty"`
 	LastSyncAt              string  `json:"lastSyncAt,omitempty"`
 	LastSyncError           string  `json:"lastSyncError,omitempty"`
+	PullStatus              string  `json:"pullStatus,omitempty"`
+	PullChangeCount         int     `json:"pullChangeCount,omitempty"`
+	LastPullAt              string  `json:"lastPullAt,omitempty"`
+	PullError               string  `json:"pullError,omitempty"`
 	STTModel                string  `json:"sttModel"`
 	AnalyzerModel           string  `json:"analyzerModel"`
 	VisionModel             string  `json:"visionModel"`
