@@ -77,6 +77,7 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 			}
 		}
 	}
+	syncStatus := a.service.SyncStatus(ctx)
 	target := a.service.Target()
 	if target == "" || target == "zoom" || target == "us.zoom.xos" || target == "googleMeet" || target == "teams" {
 		target = "system"
@@ -126,6 +127,12 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 		},
 		Settings: SettingsSnapshot{
 			OpenRouterKeyConfigured: a.service.HasAPIKey(ctx),
+			SupabaseSyncConfigured:  syncStatus.Configured,
+			SyncPendingCount:        syncStatus.PendingCount,
+			SyncStatus:              syncStatus.Status,
+			SyncWaitingUntil:        timestampFromPointer(syncStatus.WaitingUntil),
+			LastSyncAt:              timestampFromPointer(syncStatus.LastSyncAt),
+			LastSyncError:           syncStatus.LastSyncError,
 			STTModel:                settings.STTModel,
 			AnalyzerModel:           settings.AnalyzerModel,
 			VisionModel:             settings.VisionModel,

@@ -14,6 +14,7 @@ import (
 	"github.com/oeggy03/call_analyzer/internal/domain"
 	"github.com/oeggy03/call_analyzer/internal/openrouter"
 	"github.com/oeggy03/call_analyzer/internal/storage"
+	syncer "github.com/oeggy03/call_analyzer/internal/sync"
 	"github.com/oeggy03/call_analyzer/internal/vocabulary"
 )
 
@@ -25,10 +26,12 @@ const (
 type EventHook func(string, any)
 
 type Service struct {
-	store   *storage.Store
-	source  capture.Source
-	secrets SecretStore
-	router  *openrouter.Client
+	store       *storage.Store
+	source      capture.Source
+	secrets     SecretStore
+	router      *openrouter.Client
+	syncSecrets SecretStore
+	syncRunner  *syncer.Runner
 
 	mu              sync.RWMutex
 	capturing       bool
@@ -53,8 +56,26 @@ type Service struct {
 }
 
 func New(store *storage.Store, source capture.Source, secrets SecretStore, router *openrouter.Client) *Service {
+	return NewWithSyncSecretStore(store, source, secrets, router, nil)
+}
+
+func NewWithSyncSecretStore(
+	store *storage.Store,
+	source capture.Source,
+	secrets SecretStore,
+	router *openrouter.Client,
+	syncSecrets SecretStore,
+) *Service {
+	usedDefaultSecrets := secrets == nil
 	if secrets == nil {
 		secrets = NewDefaultSecretStore()
+	}
+	if syncSecrets == nil {
+		if usedDefaultSecrets {
+			syncSecrets = NewSupabaseSecretStore()
+		} else {
+			syncSecrets = secrets
+		}
 	}
 	databasePath := ""
 	if store != nil {
@@ -64,6 +85,7 @@ func New(store *storage.Store, source capture.Source, secrets SecretStore, route
 		store:        store,
 		source:       source,
 		secrets:      secrets,
+		syncSecrets:  syncSecrets,
 		router:       router,
 		databasePath: databasePath,
 		settings:     defaultRuntimeSettings(),
@@ -109,7 +131,54 @@ func (s *Service) Initialize(ctx context.Context) error {
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("service: load latest lesson: %w", err)
 	}
+	s.startSync(ctx)
 	return nil
+}
+
+func (s *Service) startSync(ctx context.Context) {
+	s.mu.Lock()
+	if s.syncRunner != nil {
+		s.mu.Unlock()
+		return
+	}
+	runner := syncer.NewRunner(s.store, s.syncSecrets, syncer.RunnerOptions{
+		OnStatusChange: func(status syncer.Status) {
+			s.emit("sync.changed", status)
+		},
+	})
+	s.syncRunner = runner
+	s.mu.Unlock()
+	runner.Start(ctx)
+}
+
+func (s *Service) Shutdown(ctx context.Context) error {
+	s.mu.RLock()
+	runner := s.syncRunner
+	s.mu.RUnlock()
+	if runner == nil {
+		return nil
+	}
+	return runner.Stop(ctx)
+}
+
+func (s *Service) SyncNow(ctx context.Context) error {
+	s.mu.RLock()
+	runner := s.syncRunner
+	s.mu.RUnlock()
+	if runner == nil {
+		return nil
+	}
+	return runner.SyncNow(ctx)
+}
+
+func (s *Service) SyncStatus(context.Context) syncer.Status {
+	s.mu.RLock()
+	runner := s.syncRunner
+	s.mu.RUnlock()
+	if runner == nil {
+		return syncer.Status{Status: syncer.SyncStatusNotConfigured}
+	}
+	return runner.Status()
 }
 
 func (s *Service) Health(ctx context.Context) domain.Health {

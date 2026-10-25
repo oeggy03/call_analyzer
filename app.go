@@ -41,7 +41,13 @@ func NewApp() (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewAppWithDependencies(store, newPlatformSource(), service.NewDefaultSecretStore(), nil), nil
+	return NewAppWithDependencies(
+		store,
+		newPlatformSource(),
+		service.NewDefaultSecretStore(),
+		nil,
+		service.NewSupabaseSecretStore(),
+	), nil
 }
 
 func NewAppWithDependencies(
@@ -49,10 +55,15 @@ func NewAppWithDependencies(
 	source capture.Source,
 	secrets service.SecretStore,
 	router *openrouter.Client,
+	syncSecrets ...service.SecretStore,
 ) *App {
+	var syncSecretStore service.SecretStore
+	if len(syncSecrets) > 0 {
+		syncSecretStore = syncSecrets[0]
+	}
 	app := &App{
 		store:   store,
-		service: service.New(store, source, secrets, router),
+		service: service.NewWithSyncSecretStore(store, source, secrets, router, syncSecretStore),
 	}
 	app.service.SetEventHook(app.onServiceEvent)
 	return app
@@ -71,6 +82,9 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) shutdown(ctx context.Context) {
 	_ = a.service.StopCapture(ctx)
+	flushCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	_ = a.service.Shutdown(flushCtx)
+	cancel()
 	if a.store != nil {
 		_ = a.store.Close()
 	}
@@ -393,6 +407,18 @@ func (a *App) SaveSettings(patch SettingsPatch) (AppSnapshot, error) {
 
 func (a *App) Refresh() (AppSnapshot, error) {
 	return a.GetAppSnapshot()
+}
+
+func (a *App) SyncNow() (AppSnapshot, error) {
+	err := a.service.SyncNow(a.context())
+	snapshot, snapshotErr := a.GetAppSnapshot()
+	if snapshotErr != nil {
+		return AppSnapshot{}, snapshotErr
+	}
+	if err != nil {
+		return snapshot, err
+	}
+	return snapshot, nil
 }
 
 func (a *App) ListLessonTranscripts(limit int) ([]LessonTranscriptSummary, error) {
