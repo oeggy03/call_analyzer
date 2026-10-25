@@ -233,6 +233,29 @@ describe('Call Analyzer frontend', () => {
     expect(await screen.findByText(/API key cleared/i)).toBeInTheDocument()
   })
 
+  it('shows nine vocabulary words per page', async () => {
+    const api = createDemoApi()
+    const snapshot = await api.getSnapshot()
+    const base = snapshot.vocabulary[0]
+    const vocabulary = Array.from({ length: 10 }, (_, index) => ({
+      ...base,
+      id: `page-${index}`,
+      simplified: `词${index}`,
+    }))
+    vi.spyOn(api, 'getSnapshot').mockResolvedValue({ ...snapshot, vocabulary })
+    render(<App apiClient={api} />)
+    await openView('Vocabulary')
+
+    expect(screen.getByText('词0')).toBeInTheDocument()
+    expect(screen.queryByText('词9')).not.toBeInTheDocument()
+    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(await screen.findByText('词9')).toBeInTheDocument()
+    expect(screen.queryByText('词0')).not.toBeInTheDocument()
+    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument()
+  })
+
   it('opens Settings and clicks Sync now', async () => {
     const api = createDemoApi()
     const syncNow = vi.spyOn(api, 'syncNow')

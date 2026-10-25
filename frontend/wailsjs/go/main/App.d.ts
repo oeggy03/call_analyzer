@@ -35,3 +35,5 @@ export function SaveSettings(arg1:main.SettingsPatch):Promise<main.AppSnapshot>;
 export function StartLesson(arg1:main.StartLessonInput):Promise<main.AppSnapshot>;
 
 export function StopLesson():Promise<main.AppSnapshot>;
+
+export function SyncNow():Promise<main.AppSnapshot>;

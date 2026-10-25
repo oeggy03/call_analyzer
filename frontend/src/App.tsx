@@ -2245,6 +2245,7 @@ function VocabularyView({
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<VocabularyStatus | 'all'>('all')
   const [tag, setTag] = useState('all')
+  const [page, setPage] = useState(1)
   const tags = useMemo(() => Array.from(new Set(entries.flatMap((entry) => entry.tags))).sort(), [entries])
   const filteredEntries = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -2259,6 +2260,14 @@ function VocabularyView({
       return matchesQuery && matchesStatus && matchesTag
     })
   }, [entries, query, status, tag])
+  const pageSize = 9
+  const pageCount = Math.max(1, Math.ceil(filteredEntries.length / pageSize))
+  const currentPage = Math.min(page, pageCount)
+  const pageEntries = filteredEntries.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+
+  useEffect(() => {
+    setPage(1)
+  }, [query, status, tag])
 
   return (
     <div className="view-stack">
@@ -2308,9 +2317,32 @@ function VocabularyView({
           />
         </section>
       ) : (
-        <section className="vocabulary-grid" aria-live="polite">
-          {filteredEntries.map((entry) => <VocabularyCard entry={entry} key={entry.id} />)}
-        </section>
+        <>
+          <section className="vocabulary-grid" aria-live="polite">
+            {pageEntries.map((entry) => <VocabularyCard entry={entry} key={entry.id} />)}
+          </section>
+          {pageCount > 1 && (
+            <nav className="vocabulary-pager" aria-label="Vocabulary pages">
+              <button
+                className="button button-secondary button-small"
+                type="button"
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+                disabled={currentPage === 1}
+              >
+                Previous page
+              </button>
+              <span>Page {currentPage} of {pageCount}</span>
+              <button
+                className="button button-secondary button-small"
+                type="button"
+                onClick={() => setPage((current) => Math.min(pageCount, current + 1))}
+                disabled={currentPage === pageCount}
+              >
+                Next page
+              </button>
+            </nav>
+          )}
+        </>
       )}
     </div>
   )

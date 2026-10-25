@@ -69,3 +69,7 @@ export function StartLesson(arg1) {
 export function StopLesson() {
   return window['go']['main']['App']['StopLesson']();
 }
+
+export function SyncNow() {
+  return window['go']['main']['App']['SyncNow']();
+}

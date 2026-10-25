@@ -1803,6 +1803,13 @@ kbd {
   gap: 13px;
 }
 
+.vocabulary-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
 .vocabulary-card {
   border: 1px solid var(--line);
   border-radius: 10px;
