@@ -701,6 +701,254 @@ func TestCandidateEditRejectAndMerge(t *testing.T) {
 	}
 }
 
+func TestDeleteConfirmedVocabularyWritesOutbox(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	lesson, err := store.Lessons().Start(ctx, "notes", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	segment, err := store.Transcripts().Insert(ctx, domain.TranscriptSegment{
+		LessonID: lesson.ID, EndMS: 1_000, Text: "学习",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := store.Vocabulary().UpsertCandidate(ctx, domain.VocabularyEntry{
+		Simplified:  "学习",
+		Traditional: "學習",
+		Reading:     "xue2 xi2",
+		Evidence: []domain.Evidence{{
+			LessonID: lesson.ID, SegmentID: segment.ID, Text: "学习",
+		}},
+		Senses:   []domain.Sense{{Gloss: "to study"}},
+		Examples: []domain.Example{{Simplified: "我学习中文。", Reading: "wo3 xue2 xi2 zhong1 wen2", Translation: "I study Chinese."}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Vocabulary().AddTags(ctx, entry.ID, []string{"study"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Vocabulary().Confirm(ctx, entry.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Study().RecordReview(ctx, entry.ID, 4, timeAt(3_000), "good"); err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.Vocabulary().UpsertCandidate(ctx, domain.VocabularyEntry{
+		Simplified: "學", Traditional: "學", Reading: "xue2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Vocabulary().Merge(ctx, source.ID, entry.ID); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := store.Vocabulary().UpsertCandidate(ctx, domain.VocabularyEntry{
+		Simplified: "方案", Traditional: "方案", Reading: "fang1 an4",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Vocabulary().Confirm(ctx, kept.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Vocabulary().Delete(ctx, entry.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Vocabulary().Get(ctx, entry.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("deleted word still readable: %v", err)
+	}
+	for _, table := range []string{"senses", "examples", "entry_tags", "study_state", "review_events", "observations"} {
+		var count int
+		query := "SELECT COUNT(*) FROM " + table + " WHERE entry_id = ?"
+		if err := store.DB().QueryRowContext(ctx, query, entry.ID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("%s retained %d rows for the deleted word", table, count)
+		}
+	}
+	merged, err := store.Vocabulary().Get(ctx, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if merged.Status != domain.VocabularyStatusMerged || merged.MergedIntoID != "" {
+		t.Fatalf("merge source after target delete: %#v", merged)
+	}
+	if _, err := store.Vocabulary().Get(ctx, kept.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := store.Outbox().ListPending(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deleteEvent domain.OutboxEvent
+	var foundDelete bool
+	for _, event := range pending {
+		if event.AggregateID != entry.ID {
+			continue
+		}
+		if event.EventType != "vocabulary.entry.deleted" {
+			t.Fatalf("pending event survived delete: %s", event.EventType)
+		}
+		if foundDelete {
+			t.Fatal("delete wrote more than one outbox row")
+		}
+		deleteEvent = event
+		foundDelete = true
+	}
+	if !foundDelete {
+		t.Fatal("delete did not write vocabulary.entry.deleted")
+	}
+	for _, fragment := range []string{entry.ID, "学习", "學習", "xue2 xi2"} {
+		if !strings.Contains(deleteEvent.PayloadJSON, fragment) {
+			t.Fatalf("delete payload %s missing %s", deleteEvent.PayloadJSON, fragment)
+		}
+	}
+	for _, event := range pending {
+		if event.AggregateID == kept.ID && event.EventType == "vocabulary.candidate.confirmed" {
+			return
+		}
+	}
+	t.Fatal("deleting one word cleared the other word's outbox")
+}
+
+func TestDeleteVocabularyRefusesUnsavedWord(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Vocabulary().Delete(ctx, "  "); err == nil || !strings.Contains(err.Error(), "id is required") {
+		t.Fatalf("blank id error = %v", err)
+	}
+	if err := store.Vocabulary().Delete(ctx, "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing word error = %v", err)
+	}
+	candidate, err := store.Vocabulary().UpsertCandidate(ctx, domain.VocabularyEntry{
+		Simplified: "秘密", Traditional: "秘密", Reading: "mi4 mi4",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Vocabulary().Delete(ctx, candidate.ID); err == nil || !strings.Contains(err.Error(), "saved word") {
+		t.Fatalf("candidate delete error = %v", err)
+	}
+	if _, err := store.Vocabulary().Get(ctx, candidate.ID); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.Outbox().ListPending(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range pending {
+		if event.EventType == "vocabulary.entry.deleted" {
+			t.Fatalf("refused delete wrote an outbox row: %#v", event)
+		}
+	}
+}
+
+func TestPendingVocabularyDeleteBlocksCloudRestore(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	entry, err := store.Vocabulary().UpsertCandidate(ctx, domain.VocabularyEntry{
+		Simplified: "学习", Traditional: "學習", Reading: "xue2 xi2",
+		Senses: []domain.Sense{{Gloss: "to study"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err = store.Vocabulary().Confirm(ctx, entry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Vocabulary().Delete(ctx, entry.ID); err != nil {
+		t.Fatal(err)
+	}
+	otherID := newID()
+	freshID := newID()
+	cloud := []domain.VocabularyEntry{
+		{
+			ID: entry.ID, Simplified: entry.Simplified, Traditional: entry.Traditional,
+			Reading: entry.Reading, Status: domain.VocabularyStatusConfirmed,
+			UpdatedAt: time.Now().UTC().Add(time.Hour),
+			Senses:    []domain.Sense{{Gloss: "restored"}},
+		},
+		{
+			ID: otherID, Simplified: entry.Simplified, Traditional: entry.Traditional,
+			Reading: entry.Reading, Status: domain.VocabularyStatusConfirmed,
+			UpdatedAt: time.Now().UTC().Add(time.Hour),
+			Senses:    []domain.Sense{{Gloss: "other id"}},
+		},
+		{
+			ID: freshID, Simplified: "电脑", Traditional: "電腦", Reading: "dian4 nao3",
+			Status: domain.VocabularyStatusConfirmed, UpdatedAt: time.Now().UTC(),
+			Senses: []domain.Sense{{Gloss: "computer"}},
+		},
+	}
+	result, err := store.Vocabulary().ApplyCloudVocabulary(ctx, cloud)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Inserted != 1 || result.Updated != 0 {
+		t.Fatalf("cloud apply while delete is pending: %#v", result)
+	}
+	if _, err := store.Vocabulary().Get(ctx, entry.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("pending delete was restored by id: %v", err)
+	}
+	if _, err := store.Vocabulary().Get(ctx, otherID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("pending delete was restored by key: %v", err)
+	}
+	if _, err := store.Vocabulary().Get(ctx, freshID); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.Outbox().ListPending(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var delivered bool
+	for _, event := range pending {
+		if event.EventType != "vocabulary.entry.deleted" || event.AggregateID != entry.ID {
+			continue
+		}
+		if err := store.Outbox().MarkDelivered(ctx, event.ID); err != nil {
+			t.Fatal(err)
+		}
+		delivered = true
+	}
+	if !delivered {
+		t.Fatal("pending delete was missing before the second pull")
+	}
+	result, err = store.Vocabulary().ApplyCloudVocabulary(ctx, cloud[:1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Inserted != 1 {
+		t.Fatalf("delivered delete still blocked pull: %#v", result)
+	}
+	restored, err := store.Vocabulary().Get(ctx, entry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.Senses) != 1 || restored.Senses[0].Gloss != "restored" {
+		t.Fatalf("restored word = %#v", restored)
+	}
+}
+
 func timeAt(milliseconds int64) (value time.Time) {
 	return time.UnixMilli(milliseconds).UTC()
 }

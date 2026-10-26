@@ -32,7 +32,7 @@ The UI warns at US$0.35 and labels the session as uncapped. The legacy `hardBudg
 
 ## Vocabulary sync consumes the outbox
 
-Storage writes vocabulary outbox rows in the same transaction as the
+Storage writes vocabulary outbox rows, including a saved-word delete, in the same transaction as the
 mutation. `Service.Initialize` starts the cross-platform vocabulary runner,
 which waits ten minutes, reads current SQLite rows, and sends eligible
 confirmed and manually saved entries through PostgREST. A merged candidate stays local unless its target is confirmed, in which case that target is republished. `study.review.recorded`

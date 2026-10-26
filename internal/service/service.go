@@ -1118,6 +1118,20 @@ func (s *Service) MergeCandidates(ctx context.Context, sourceID, targetID string
 	return entry, err
 }
 
+func (s *Service) DeleteVocabulary(ctx context.Context, id string) error {
+	if s.store == nil {
+		return errors.New("service: storage is not configured")
+	}
+	if err := s.store.Vocabulary().Delete(ctx, id); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("service: vocabulary word not found")
+		}
+		return err
+	}
+	s.emit("vocabulary.deleted", id)
+	return nil
+}
+
 type RefreshResult struct {
 	Candidates []domain.VocabularyEntry `json:"candidates"`
 	Vocabulary []domain.VocabularyEntry `json:"vocabulary"`
