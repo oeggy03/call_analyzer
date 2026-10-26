@@ -283,6 +283,41 @@ describe('Call Analyzer frontend', () => {
     expect(await screen.findByText(/Last lesson data deleted/i)).toBeInTheDocument()
   })
 
+  it('deletes a vocabulary word only after confirmation', async () => {
+    const api = createDemoApi()
+    const deleteVocabulary = vi.spyOn(api, 'deleteVocabulary')
+    render(<App apiClient={api} />)
+    await openView('Vocabulary')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 重点' }))
+    const dialog = await screen.findByRole('dialog', { name: /delete 重点/i })
+    expect(dialog).toHaveTextContent(/queues that delete for cloud vocabulary sync/i)
+    expect(deleteVocabulary).not.toHaveBeenCalled()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete word' }))
+
+    await waitFor(() => expect(deleteVocabulary).toHaveBeenCalledWith('vocab-1'))
+    expect(await screen.findByText(/重点 deleted/i)).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Delete 重点' })).not.toBeInTheDocument()
+    expect(screen.getByText('方案')).toBeInTheDocument()
+  })
+
+  it('keeps a vocabulary word when deletion is cancelled', async () => {
+    const api = createDemoApi()
+    const deleteVocabulary = vi.spyOn(api, 'deleteVocabulary')
+    render(<App apiClient={api} />)
+    await openView('Vocabulary')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 重点' }))
+    expect(await screen.findByRole('dialog', { name: /delete 重点/i })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(deleteVocabulary).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByText('重点')).toBeInTheDocument()
+  })
+
   it('shows cost warning states prominently in Live Lesson', async () => {
     const api = createDemoApi()
     const snapshot = await api.getSnapshot()
@@ -690,6 +725,7 @@ describe('Call Analyzer frontend', () => {
       EditCandidate: vi.fn().mockResolvedValue(snapshot),
       RejectCandidate: vi.fn().mockResolvedValue(snapshot),
       MergeCandidates: vi.fn().mockResolvedValue(snapshot),
+      DeleteVocabulary: vi.fn().mockResolvedValue(snapshot),
       SaveSettings: vi.fn().mockResolvedValue(snapshot),
       SyncNow: vi.fn().mockResolvedValue(snapshot),
       DeleteLastLesson: vi.fn().mockResolvedValue(snapshot),
@@ -740,6 +776,7 @@ describe('Call Analyzer frontend', () => {
     await runtimeApi.editCandidate('candidate-1', editPatch)
     await runtimeApi.rejectCandidate('candidate-1')
     await runtimeApi.mergeCandidates('candidate-1', 'candidate-2')
+    await runtimeApi.deleteVocabulary('vocab-1')
     await runtimeApi.saveSettings(settingsPatch)
     await runtimeApi.syncNow()
     await runtimeApi.deleteLastLesson()
@@ -755,6 +792,7 @@ describe('Call Analyzer frontend', () => {
     expect(fakeApp.EditCandidate).toHaveBeenCalledWith('candidate-1', editPatch)
     expect(fakeApp.RejectCandidate).toHaveBeenCalledWith('candidate-1')
     expect(fakeApp.MergeCandidates).toHaveBeenCalledWith('candidate-1', 'candidate-2')
+    expect(fakeApp.DeleteVocabulary).toHaveBeenCalledWith('vocab-1')
     expect(fakeApp.SaveSettings).toHaveBeenCalledWith(settingsPatch)
     expect(fakeApp.SyncNow).toHaveBeenCalledWith()
     expect(fakeApp.DeleteLastLesson).toHaveBeenCalledWith()
