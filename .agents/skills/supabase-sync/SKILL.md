@@ -27,8 +27,12 @@ token, service key, or password in source, tests, logs, or docs.
   rejected rows are acknowledged locally without HTTP. The runner reads the
   current SQLite row, collapses events by aggregate id, replaces senses,
   examples, and entry tags, and upserts tags by name.
-- A missing local row or `vocabulary.entry.deleted` event deletes the hosted
-  vocabulary row. `study.review.recorded` remains pending, does not block the
+- Deleting a saved word removes the local row and writes
+  `vocabulary.entry.deleted` with its id, simplified form, traditional form,
+  and reading. The runner deletes the hosted row by id and, when those key
+  fields are present, by that key. Launch pull leaves that word out while the
+  delete is still pending. A missing local row also deletes the hosted row by
+  id. `study.review.recorded` remains pending, does not block the
   vocabulary timer, and is never uploaded. Lessons, transcripts,
   observations, and study-state updates are outside this sync.
 - A first confirmed/manual publish initializes `study_state` with

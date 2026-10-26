@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -273,6 +274,92 @@ func TestRunnerDeletesWhenLocalEntryIsGone(t *testing.T) {
 	}
 	if !deleted {
 		t.Fatalf("missing upstream delete after %d requests", len(recorder.snapshot()))
+	}
+}
+
+func TestRunnerUploadsSavedWordDelete(t *testing.T) {
+	store, ctx := newVocabularyStore(t)
+	entry := confirmedEntry(t, ctx, store)
+	if err := store.Vocabulary().Delete(ctx, entry.ID); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &requestRecorder{}
+	server := newTestServer(recorder)
+	defer server.Close()
+	runner, _ := newConfiguredRunner(t, store, ctx, server.URL, time.Now)
+	pending, err := runner.HasUploadablePending(ctx)
+	if err != nil || !pending {
+		t.Fatalf("saved-word delete was not uploadable: %v %v", pending, err)
+	}
+	if err := runner.SyncNow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var byID, byKey bool
+	for _, request := range recorder.snapshot() {
+		if request.Method != http.MethodDelete || request.Path != "/rest/v1/vocabulary_entries" {
+			if request.Path == "/rest/v1/vocabulary_entries" {
+				t.Fatalf("delete sync sent %s %s", request.Method, request.Query)
+			}
+			continue
+		}
+		values, err := url.ParseQuery(request.Query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if values.Get("id") == "eq."+entry.ID {
+			byID = true
+		}
+		if values.Get("simplified") == "eq."+entry.Simplified &&
+			values.Get("traditional") == "eq."+entry.Traditional &&
+			values.Get("reading") == "eq."+entry.Reading {
+			byKey = true
+		}
+	}
+	if !byID || !byKey {
+		t.Fatalf("id delete=%v key delete=%v after %d requests", byID, byKey, len(recorder.snapshot()))
+	}
+	pending, err = runner.HasUploadablePending(ctx)
+	if err != nil || pending {
+		t.Fatalf("delete remained uploadable: %v %v", pending, err)
+	}
+}
+
+func TestRunnerDeleteWithoutKeyUsesIDOnly(t *testing.T) {
+	store, ctx := newVocabularyStore(t)
+	entry := confirmedEntry(t, ctx, store)
+	if _, err := store.Outbox().Enqueue(ctx, domain.OutboxEvent{
+		EventType:      "vocabulary.entry.deleted",
+		AggregateType:  "vocabulary_entry",
+		AggregateID:    entry.ID,
+		PayloadJSON:    `{"id":"` + entry.ID + `"}`,
+		IdempotencyKey: "vocabulary:deleted:" + entry.ID,
+		CreatedAt:      time.Now().UTC().Add(time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &requestRecorder{}
+	server := newTestServer(recorder)
+	defer server.Close()
+	runner, _ := newConfiguredRunner(t, store, ctx, server.URL, time.Now)
+	if err := runner.SyncNow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deletes := 0
+	for _, request := range recorder.snapshot() {
+		if request.Method != http.MethodDelete || request.Path != "/rest/v1/vocabulary_entries" {
+			continue
+		}
+		deletes++
+		values, err := url.ParseQuery(request.Query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if values.Get("simplified") != "" || values.Get("id") != "eq."+entry.ID {
+			t.Fatalf("id-only delete query = %s", request.Query)
+		}
+	}
+	if deletes != 1 {
+		t.Fatalf("id-only delete count = %d", deletes)
 	}
 }
 

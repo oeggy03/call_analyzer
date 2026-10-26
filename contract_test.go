@@ -62,7 +62,8 @@ func TestWailsMethodsMatchFrontendContract(t *testing.T) {
 	}
 	if !seen["GenerateManualVocabulary"] || !seen["RecognizeVocabularyPhoto"] ||
 		!seen["ListLessonTranscripts"] || !seen["GetLessonTranscript"] ||
-		!seen["SaveManualVocabulary"] || !seen["DeleteLastLesson"] {
+		!seen["SaveManualVocabulary"] || !seen["DeleteLastLesson"] ||
+		!seen["DeleteVocabulary"] {
 		t.Fatalf("backend contract is missing a current App method: %#v", seen)
 	}
 }

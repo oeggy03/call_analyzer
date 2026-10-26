@@ -64,6 +64,7 @@ export const BACKEND_METHODS = {
   editCandidate: 'EditCandidate',
   rejectCandidate: 'RejectCandidate',
   mergeCandidates: 'MergeCandidates',
+  deleteVocabulary: 'DeleteVocabulary',
   saveSettings: 'SaveSettings',
   syncNow: 'SyncNow',
   saveSupabaseKey: 'SaveSupabaseKey',
@@ -95,6 +96,7 @@ export interface AppApi {
   editCandidate(candidateId: string, patch: CandidateEditPatch): Promise<AppSnapshot>
   rejectCandidate(candidateId: string): Promise<AppSnapshot>
   mergeCandidates(sourceId: string, targetId: string): Promise<AppSnapshot>
+  deleteVocabulary(entryId: string): Promise<AppSnapshot>
   saveSettings(patch: SettingsPatch): Promise<AppSnapshot>
   syncNow(): Promise<AppSnapshot>
   saveSupabaseKey(key: string): Promise<AppSnapshot>
@@ -1040,6 +1042,15 @@ class DemoApi implements AppApi {
     return this.getSnapshot()
   }
 
+  async deleteVocabulary(entryId: string): Promise<AppSnapshot> {
+    if (!this.snapshot.vocabulary.some((entry) => entry.id === entryId)) {
+      throw new ApiValidationError('That word is no longer in Vocabulary.')
+    }
+    this.snapshot.vocabulary = this.snapshot.vocabulary.filter((entry) => entry.id !== entryId)
+    this.publish()
+    return this.getSnapshot()
+  }
+
   async saveSettings(patch: SettingsPatch): Promise<AppSnapshot> {
     const next = { ...this.snapshot.settings }
     if (patch.openRouterKey !== undefined) {
@@ -1202,6 +1213,10 @@ class RuntimeApi implements AppApi {
     return this.callMutation(BACKEND_METHODS.mergeCandidates, sourceId, targetId)
   }
 
+  async deleteVocabulary(entryId: string): Promise<AppSnapshot> {
+    return this.callMutation(BACKEND_METHODS.deleteVocabulary, entryId)
+  }
+
   async saveSettings(patch: SettingsPatch): Promise<AppSnapshot> {
     return this.callMutation(BACKEND_METHODS.saveSettings, patch)
   }
@@ -1351,6 +1366,10 @@ class UnavailableApi implements AppApi {
   }
 
   mergeCandidates(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  deleteVocabulary(): Promise<AppSnapshot> {
     return this.fail()
   }
 

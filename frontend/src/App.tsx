@@ -197,6 +197,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
   const lessonTagTouched = useRef(false)
   const [editingCandidate, setEditingCandidate] = useState<Candidate>()
   const [mergeCandidate, setMergeCandidate] = useState<Candidate>()
+  const [wordPendingDelete, setWordPendingDelete] = useState<AppSnapshot['vocabulary'][number]>()
   const [editDraft, setEditDraft] = useState<CandidateEditDraft>({
     simplified: '',
     traditional: '',
@@ -290,16 +291,17 @@ export function App({ apiClient = defaultApi }: AppProps) {
   }, [apiClient, busyAction, current.lesson.status, runAction])
 
   useEffect(() => {
-    if (!editingCandidate && !mergeCandidate) return
+    if (!editingCandidate && !mergeCandidate && !wordPendingDelete) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || busyAction) return
       event.preventDefault()
       setEditingCandidate(undefined)
       setMergeCandidate(undefined)
+      setWordPendingDelete(undefined)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [busyAction, editingCandidate, mergeCandidate])
+  }, [busyAction, editingCandidate, mergeCandidate, wordPendingDelete])
 
   useEffect(() => {
     if (current.lesson.status === 'live' || current.lesson.status === 'error') return
@@ -435,6 +437,21 @@ export function App({ apiClient = defaultApi }: AppProps) {
       () => apiClient.rejectCandidate(candidate.id),
       `${candidate.simplified} rejected.`,
     )
+  }
+
+  const handleDeleteVocabulary = (entry: AppSnapshot['vocabulary'][number]) => {
+    if (busyAction) return
+    setWordPendingDelete(entry)
+  }
+
+  const confirmDeleteVocabulary = () => {
+    if (!wordPendingDelete) return
+    const entry = wordPendingDelete
+    void runAction(
+      `delete-vocabulary-${entry.id}`,
+      () => apiClient.deleteVocabulary(entry.id),
+      `${entry.simplified} deleted. Cloud vocabulary updates on the next sync.`,
+    ).finally(() => setWordPendingDelete(undefined))
   }
 
   const mergeCandidates = () => {
@@ -899,6 +916,12 @@ export function App({ apiClient = defaultApi }: AppProps) {
                   entries={current.vocabulary}
                   onRefresh={handleRefresh}
                   isRefreshing={busyAction === 'refresh'}
+                  deletingEntryId={
+                    busyAction?.startsWith('delete-vocabulary-')
+                      ? busyAction.slice('delete-vocabulary-'.length)
+                      : undefined
+                  }
+                  onDelete={handleDeleteVocabulary}
                 />
               )}
               {activeView === 'settings' && (
@@ -936,6 +959,14 @@ export function App({ apiClient = defaultApi }: AppProps) {
           isMerging={busyAction === `merge-${mergeCandidate.id}`}
           onCancel={() => setMergeCandidate(undefined)}
           onConfirm={mergeCandidates}
+        />
+      )}
+      {wordPendingDelete && (
+        <DeleteVocabularyDialog
+          entry={wordPendingDelete}
+          isDeleting={busyAction === `delete-vocabulary-${wordPendingDelete.id}`}
+          onCancel={() => setWordPendingDelete(undefined)}
+          onConfirm={confirmDeleteVocabulary}
         />
       )}
     </div>
@@ -2307,10 +2338,14 @@ function VocabularyView({
   entries,
   onRefresh,
   isRefreshing,
+  deletingEntryId,
+  onDelete,
 }: {
   entries: AppSnapshot['vocabulary']
   onRefresh: () => void
   isRefreshing: boolean
+  deletingEntryId?: string
+  onDelete: (entry: AppSnapshot['vocabulary'][number]) => void
 }) {
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<VocabularyStatus | 'all'>('all')
@@ -2389,7 +2424,14 @@ function VocabularyView({
       ) : (
         <>
           <section className="vocabulary-grid" aria-live="polite">
-            {pageEntries.map((entry) => <VocabularyCard entry={entry} key={entry.id} />)}
+            {pageEntries.map((entry) => (
+              <VocabularyCard
+                entry={entry}
+                key={entry.id}
+                isDeleting={deletingEntryId === entry.id}
+                onDelete={onDelete}
+              />
+            ))}
           </section>
           {pageCount > 1 && (
             <nav className="vocabulary-pager" aria-label="Vocabulary pages">
@@ -2418,7 +2460,15 @@ function VocabularyView({
   )
 }
 
-function VocabularyCard({ entry }: { entry: AppSnapshot['vocabulary'][number] }) {
+function VocabularyCard({
+  entry,
+  isDeleting,
+  onDelete,
+}: {
+  entry: AppSnapshot['vocabulary'][number]
+  isDeleting: boolean
+  onDelete: (entry: AppSnapshot['vocabulary'][number]) => void
+}) {
   return (
     <article className="vocabulary-card">
       <div className="vocabulary-card-top">
@@ -2445,6 +2495,17 @@ function VocabularyCard({ entry }: { entry: AppSnapshot['vocabulary'][number] })
       </div>
       <div className="tag-row">
         {entry.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}
+      </div>
+      <div className="vocabulary-card-actions">
+        <button
+          className="button button-danger-outline button-small"
+          type="button"
+          aria-label={`Delete ${entry.simplified}`}
+          onClick={() => onDelete(entry)}
+          disabled={isDeleting}
+        >
+          {isDeleting ? 'Deleting…' : 'Delete'}
+        </button>
       </div>
     </article>
   )
@@ -2871,6 +2932,41 @@ function MergeDialog({
         <div className="dialog-actions">
           <button className="button button-ghost" type="button" onClick={onCancel}>Keep separate</button>
           <button className="button button-primary" type="button" onClick={onConfirm} disabled={!target || isMerging}>{isMerging ? 'Merging…' : 'Confirm merge'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DeleteVocabularyDialog({
+  entry,
+  isDeleting,
+  onCancel,
+  onConfirm,
+}: {
+  entry: AppSnapshot['vocabulary'][number]
+  isDeleting: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <div className="dialog-card" role="dialog" aria-modal="true" aria-labelledby="delete-vocabulary-title">
+        <div className="dialog-heading">
+          <div>
+            <p className="eyebrow">Saved word</p>
+            <h2 id="delete-vocabulary-title">Delete {entry.simplified}?</h2>
+          </div>
+          <button className="icon-button" type="button" aria-label="Close delete dialog" onClick={onCancel} disabled={isDeleting} autoFocus><Icon name="close" /></button>
+        </div>
+        <p className="dialog-copy">
+          This removes <strong>{entry.simplified}</strong> from this computer and queues that delete for cloud vocabulary sync.
+        </p>
+        <div className="dialog-actions">
+          <button className="button button-ghost" type="button" onClick={onCancel} disabled={isDeleting}>Cancel</button>
+          <button className="button button-danger" type="button" onClick={onConfirm} disabled={isDeleting}>
+            {isDeleting ? 'Deleting…' : 'Delete word'}
+          </button>
         </div>
       </div>
     </div>

@@ -1881,6 +1881,12 @@ kbd {
   margin-top: 10px;
 }
 
+.vocabulary-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
 .settings-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;

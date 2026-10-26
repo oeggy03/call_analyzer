@@ -413,6 +413,13 @@ func (a *App) MergeCandidates(sourceID, targetID string) (AppSnapshot, error) {
 	return a.GetAppSnapshot()
 }
 
+func (a *App) DeleteVocabulary(entryID string) (AppSnapshot, error) {
+	if err := a.service.DeleteVocabulary(a.context(), entryID); err != nil {
+		return AppSnapshot{}, err
+	}
+	return a.GetAppSnapshot()
+}
+
 func (a *App) SaveSettings(patch SettingsPatch) (AppSnapshot, error) {
 	if a.service.HasActiveLesson() {
 		return AppSnapshot{}, errors.New("finish the active lesson before changing settings")

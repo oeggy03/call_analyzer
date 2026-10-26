@@ -641,6 +641,65 @@ func (r *VocabularyRepository) setStatus(ctx context.Context, id string, status 
 	return r.Get(ctx, id)
 }
 
+// Delete removes a confirmed word and queues vocabulary.entry.deleted.
+// Pending outbox rows for that word are replaced so sync sends the delete.
+func (r *VocabularyRepository) Delete(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("vocabulary: id is required")
+	}
+	now := time.Now().UTC()
+	return r.store.withTx(ctx, func(tx *sql.Tx) error {
+		var status, simplified, traditional, reading string
+		err := tx.QueryRowContext(ctx, `
+			SELECT status, simplified, traditional, reading
+			FROM vocabulary_entries WHERE id = ?`, id,
+		).Scan(&status, &simplified, &traditional, &reading)
+		if err != nil {
+			return err
+		}
+		if status != string(domain.VocabularyStatusConfirmed) {
+			return errors.New("vocabulary: only a saved word can be deleted")
+		}
+		result, err := tx.ExecContext(ctx, `DELETE FROM vocabulary_entries WHERE id = ?`, id)
+		if err != nil {
+			return fmt.Errorf("vocabulary: delete entry: %w", err)
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("vocabulary: delete entry rows: %w", err)
+		}
+		if count == 0 {
+			return sql.ErrNoRows
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM outbox
+			WHERE delivered_at IS NULL
+				AND aggregate_type = 'vocabulary_entry'
+				AND aggregate_id = ?`, id,
+		); err != nil {
+			return fmt.Errorf("vocabulary: clear pending outbox: %w", err)
+		}
+		payload, err := json.Marshal(map[string]string{
+			"id":          id,
+			"simplified":  simplified,
+			"traditional": traditional,
+			"reading":     reading,
+		})
+		if err != nil {
+			return fmt.Errorf("vocabulary: marshal delete event: %w", err)
+		}
+		return enqueueOutboxTx(ctx, tx, domain.OutboxEvent{
+			EventType:      "vocabulary.entry.deleted",
+			AggregateType:  "vocabulary_entry",
+			AggregateID:    id,
+			PayloadJSON:    string(payload),
+			IdempotencyKey: "vocabulary:deleted:" + id + ":" + fmt.Sprint(timeValue(now)),
+			CreatedAt:      now,
+		})
+	})
+}
+
 func (r *VocabularyRepository) Edit(ctx context.Context, id string, edit domain.CandidateEdit) (domain.VocabularyEntry, error) {
 	if id == "" {
 		return domain.VocabularyEntry{}, errors.New("vocabulary: id is required")

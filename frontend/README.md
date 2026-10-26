@@ -40,7 +40,7 @@ Most methods return `AppSnapshot`. Four methods return dedicated result types:
 `GetLessonTranscript` returns `LessonTranscript`. Argument shapes are the
 structs in `app_contract.go` and `src/lib/types.ts`. `StartLesson` and
 `SaveSettings` receive one object.
-Confirm, reject, and merge receive positional IDs. `EditCandidate` receives
+Confirm, reject, merge, and vocabulary delete receive positional IDs. `EditCandidate` receives
 `(candidateID, patch)`; `app.go` maps patch `pinyin` onto `reading`.
 
 The runtime event `call_analyzer:snapshot_changed` is subscribed to when

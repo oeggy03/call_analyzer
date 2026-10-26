@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
@@ -382,7 +383,14 @@ func (r *Runner) processGroup(
 	group aggregateEvents,
 ) error {
 	if group.latest.EventType == "vocabulary.entry.deleted" {
-		return client.DeleteVocabularyEntry(ctx, group.id)
+		if err := client.DeleteVocabularyEntry(ctx, group.id); err != nil {
+			return err
+		}
+		simplified, traditional, reading, ok := deletedVocabularyKey(group.latest.PayloadJSON)
+		if !ok {
+			return nil
+		}
+		return client.DeleteVocabularyByKey(ctx, simplified, traditional, reading)
 	}
 	entry, err := r.store.Vocabulary().Get(ctx, group.id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -494,6 +502,24 @@ func (r *Runner) pendingEvents(ctx context.Context) ([]domain.OutboxEvent, error
 		return nil, errors.New("sync: storage is not configured")
 	}
 	return r.store.Outbox().ListPendingVocabulary(ctx, 1_000_000)
+}
+
+func deletedVocabularyKey(payload string) (string, string, string, bool) {
+	var body struct {
+		Simplified  string `json:"simplified"`
+		Traditional string `json:"traditional"`
+		Reading     string `json:"reading"`
+	}
+	if err := json.Unmarshal([]byte(payload), &body); err != nil {
+		return "", "", "", false
+	}
+	simplified := strings.TrimSpace(body.Simplified)
+	traditional := strings.TrimSpace(body.Traditional)
+	reading := strings.TrimSpace(body.Reading)
+	if simplified == "" || traditional == "" || reading == "" {
+		return "", "", "", false
+	}
+	return simplified, traditional, reading, true
 }
 
 func eligibleEvents(events []domain.OutboxEvent) []domain.OutboxEvent {

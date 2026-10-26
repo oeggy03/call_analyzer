@@ -94,7 +94,7 @@ The helper can be overridden with
    capture is enabled by default and can be turned off in Settings.
 4. Press `M` or click **Mark Moment** for important words.
 5. Confirm, edit, merge, or reject suggestions in Candidate Inbox.
-6. Confirmed entries appear in Vocabulary immediately.
+6. Confirmed entries appear in Vocabulary immediately. Deleting a saved word removes it locally and queues that delete for cloud sync.
 
 You can also open **Add Word** and enter only the simplified Chinese word.
 **Generate missing details** uses the configured analyzer (Qwen 3 32B by

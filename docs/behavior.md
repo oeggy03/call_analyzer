@@ -18,6 +18,7 @@ These rules are enforced in code, but they are easy to miss because the UI, the 
 - Saving a complete manual entry writes `confirmed` without a model request and remains available during capture.
 - Photo recognition returns a draft and records usage under `photo-vocabulary`. Reading and saving are available during capture. The UI queues up to eight photos, scales them to at most 1280 pixels on the longest edge, and encodes them as JPEG. The backend accepts JPEGs up to 1.5 MiB and at most 12 suggestions per image.
 - Inbox lists status `candidate`. Vocabulary lists status `confirmed`. See `ListCandidates` and `ListVocabulary`.
+- `App.DeleteVocabulary` removes a confirmed word and its senses, examples, evidence, tags, and study rows. The same transaction drops that word's pending outbox rows and writes `vocabulary.entry.deleted`.
 - The unique key is simplified form + traditional form + reading (`idx_vocabulary_dedup`).
 - Evidence text must appear inside the transcript after Chinese normalization (`NormalizeCandidate`).
 - If the model supplies no senses, lookup uses the five-entry map in `NewEmbeddedDictionary`. There is no CC-CEDICT import.
@@ -48,7 +49,9 @@ These rules are enforced in code, but they are easy to miss because the UI, the 
   and applies it locally. A newer local `updated_at` is kept. The same
   simplified, traditional, and reading under a different id keeps the local
   id. A confirmed local word with no pending outbox row is removed when that
-  id is gone from the cloud. `SyncNow` uploads only and does not pull.
+  id is gone from the cloud. A pending `vocabulary.entry.deleted` row keeps
+  that word out of the launch pull, including a cloud row that uses another
+  id for the same simplified, traditional, and reading. `SyncNow` uploads only and does not pull.
   Startup checks probe that the saved Supabase secret can read vocabulary and
   write a tag, then delete that tag. A missing or rejected key asks for a
   replacement. On macOS the replacement is stored in the Keychain. An
@@ -58,8 +61,10 @@ These rules are enforced in code, but they are easy to miss because the UI, the 
   row. Confirmed and manually saved rows are uploaded. A merged candidate is
   not uploaded; a confirmed merge target is uploaded with its moved senses,
   examples, and tags. Candidate and rejected
-  rows are acknowledged locally without HTTP. A missing local row or
-  `vocabulary.entry.deleted` event sends an upstream DELETE.
+  rows are acknowledged locally without HTTP. A missing local row sends an
+  upstream DELETE by id. A `vocabulary.entry.deleted` event sends that DELETE
+  and, when the payload includes simplified, traditional, and reading, a
+  second DELETE for that key.
 - Child senses, examples, and entry tags are replaced from SQLite, while tags
   are upserted by name. The first confirmed/manual publish initializes
   `study_state` with ignore-duplicates resolution.

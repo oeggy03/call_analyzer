@@ -10,6 +10,10 @@ export function DeleteLastLesson() {
   return window['go']['main']['App']['DeleteLastLesson']();
 }
 
+export function DeleteVocabulary(arg1) {
+  return window['go']['main']['App']['DeleteVocabulary'](arg1);
+}
+
 export function EditCandidate(arg1, arg2) {
   return window['go']['main']['App']['EditCandidate'](arg1, arg2);
 }

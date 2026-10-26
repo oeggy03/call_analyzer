@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -34,7 +35,8 @@ const (
 // ApplyCloudVocabulary copies confirmed cloud rows into SQLite without writing
 // outbox events. A newer local updated_at is left in place. A confirmed local
 // row that is absent from the cloud is removed only when it has no pending
-// vocabulary outbox row.
+// vocabulary outbox row. A pending vocabulary.entry.deleted row keeps that
+// word from being copied back, including when the cloud id differs.
 func (r *VocabularyRepository) ApplyCloudVocabulary(
 	ctx context.Context,
 	entries []domain.VocabularyEntry,
@@ -42,6 +44,10 @@ func (r *VocabularyRepository) ApplyCloudVocabulary(
 	var result CloudVocabularyApplyResult
 	if r == nil || r.store == nil {
 		return result, errors.New("vocabulary: storage is not configured")
+	}
+	deletions, err := r.pendingVocabularyDeletions(ctx)
+	if err != nil {
+		return result, err
 	}
 	kept := make(map[string]struct{}, len(entries))
 	remoteIDs := make(map[string]struct{}, len(entries))
@@ -56,6 +62,9 @@ func (r *VocabularyRepository) ApplyCloudVocabulary(
 		}
 		if strings.TrimSpace(entry.Traditional) == "" {
 			entry.Traditional = entry.Simplified
+		}
+		if deletions.blocks(entry) {
+			continue
 		}
 		remoteIDs[entry.ID] = struct{}{}
 		outcome, localID, err := r.applyOneCloudEntry(ctx, entry)
@@ -354,6 +363,73 @@ func vocabularyOutboxPending(ctx context.Context, tx *sql.Tx, entryID string) (b
 		return false, fmt.Errorf("vocabulary: check pending outbox: %w", err)
 	}
 	return count > 0, nil
+}
+
+type vocabularyDeletionGuard struct {
+	ids  map[string]struct{}
+	keys map[string]struct{}
+}
+
+func (g vocabularyDeletionGuard) blocks(entry domain.VocabularyEntry) bool {
+	if _, ok := g.ids[strings.TrimSpace(entry.ID)]; ok {
+		return true
+	}
+	_, ok := g.keys[vocabularyIdentityKey(entry.Simplified, entry.Traditional, entry.Reading)]
+	return ok
+}
+
+func vocabularyIdentityKey(simplified, traditional, reading string) string {
+	return strings.TrimSpace(simplified) + "\x1f" + strings.TrimSpace(traditional) + "\x1f" + strings.TrimSpace(reading)
+}
+
+func (r *VocabularyRepository) pendingVocabularyDeletions(
+	ctx context.Context,
+) (vocabularyDeletionGuard, error) {
+	guard := vocabularyDeletionGuard{
+		ids:  map[string]struct{}{},
+		keys: map[string]struct{}{},
+	}
+	rows, err := r.store.db.QueryContext(ctx, `
+		SELECT aggregate_id, payload_json FROM outbox
+		WHERE delivered_at IS NULL
+			AND aggregate_type = 'vocabulary_entry'
+			AND event_type = 'vocabulary.entry.deleted'`)
+	if err != nil {
+		return guard, fmt.Errorf("vocabulary: list pending deletes: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var aggregateID, payload string
+		if err := rows.Scan(&aggregateID, &payload); err != nil {
+			return guard, fmt.Errorf("vocabulary: scan pending delete: %w", err)
+		}
+		if id := strings.TrimSpace(aggregateID); id != "" {
+			guard.ids[id] = struct{}{}
+		}
+		var body struct {
+			ID          string `json:"id"`
+			Simplified  string `json:"simplified"`
+			Traditional string `json:"traditional"`
+			Reading     string `json:"reading"`
+		}
+		if err := json.Unmarshal([]byte(payload), &body); err != nil {
+			continue
+		}
+		if id := strings.TrimSpace(body.ID); id != "" {
+			guard.ids[id] = struct{}{}
+		}
+		simplified := strings.TrimSpace(body.Simplified)
+		traditional := strings.TrimSpace(body.Traditional)
+		reading := strings.TrimSpace(body.Reading)
+		if simplified == "" || traditional == "" || reading == "" {
+			continue
+		}
+		guard.keys[vocabularyIdentityKey(simplified, traditional, reading)] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return guard, fmt.Errorf("vocabulary: read pending deletes: %w", err)
+	}
+	return guard, nil
 }
 
 func ackPendingVocabulary(ctx context.Context, tx *sql.Tx, entryID string) error {

@@ -339,6 +339,37 @@ func (c *PostgRESTClient) DeleteVocabularyEntry(ctx context.Context, entryID str
 	return nil
 }
 
+func (c *PostgRESTClient) DeleteVocabularyByKey(
+	ctx context.Context,
+	simplified, traditional, reading string,
+) error {
+	simplified = strings.TrimSpace(simplified)
+	traditional = strings.TrimSpace(traditional)
+	reading = strings.TrimSpace(reading)
+	if c == nil {
+		return errors.New("sync: PostgREST client is not configured")
+	}
+	if simplified == "" || traditional == "" || reading == "" {
+		return errors.New("sync: vocabulary key is required")
+	}
+	if err := c.requestJSON(
+		ctx,
+		http.MethodDelete,
+		"vocabulary_entries",
+		url.Values{
+			"simplified":  []string{"eq." + simplified},
+			"traditional": []string{"eq." + traditional},
+			"reading":     []string{"eq." + reading},
+		},
+		nil,
+		"",
+		nil,
+	); err != nil {
+		return fmt.Errorf("sync: delete vocabulary key: %w", err)
+	}
+	return nil
+}
+
 func (c *PostgRESTClient) upsertTags(
 	ctx context.Context,
 	tags []domain.Tag,
