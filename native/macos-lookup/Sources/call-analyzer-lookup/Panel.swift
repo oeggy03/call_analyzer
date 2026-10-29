@@ -27,8 +27,31 @@ private final class PaddedButton: NSButton {
         return NSSize(width: size.width + 24, height: size.height)
     }
 
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .pointingHand)
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas {
+            removeTrackingArea(area)
+        }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect, .cursorUpdate],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.pointingHand.set()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        NSCursor.pointingHand.set()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        NSCursor.arrow.set()
     }
 }
 
@@ -228,6 +251,7 @@ final class PanelController: NSObject {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
+        panel.acceptsMouseMovedEvents = true
         panel.hasShadow = true
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -497,28 +521,57 @@ final class PanelController: NSObject {
             font: chineseFont(size: 11, weight: .medium),
             color: .lookupSecondary
         )
+        let box = NSView()
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 6
+        box.layer?.borderWidth = 1
+        box.layer?.borderColor = NSColor.lookupLine.cgColor
+        box.layer?.backgroundColor = NSColor.white.cgColor
+        box.translatesAutoresizingMaskIntoConstraints = false
+        box.widthAnchor.constraint(equalToConstant: 312).isActive = true
+        box.heightAnchor.constraint(equalToConstant: multiline ? 52 : 30).isActive = true
+
         let input = NSTextField(string: value)
         input.font = chineseFont(size: 12, weight: .regular)
         input.textColor = .lookupInk
         input.isEditable = editable
         input.isSelectable = true
-        input.isBezeled = editable
-        input.isBordered = editable
-        input.bezelStyle = .roundedBezel
-        input.drawsBackground = editable
-        input.backgroundColor = editable ? .white : NSColor(calibratedWhite: 0.97, alpha: 1)
+        input.isBezeled = false
+        input.isBordered = false
+        input.drawsBackground = false
+        input.focusRingType = .none
         input.lineBreakMode = .byWordWrapping
         input.maximumNumberOfLines = multiline ? 3 : 1
         input.cell?.wraps = multiline
         input.cell?.isScrollable = !multiline
         input.translatesAutoresizingMaskIntoConstraints = false
-        input.widthAnchor.constraint(equalToConstant: 312).isActive = true
-        input.heightAnchor.constraint(equalToConstant: multiline ? 44 : 22).isActive = true
+        box.addSubview(input)
+        var fieldConstraints = [
+            input.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 8),
+            input.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -8),
+        ]
+        if multiline {
+            fieldConstraints.append(input.topAnchor.constraint(equalTo: box.topAnchor, constant: 6))
+            fieldConstraints.append(input.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -6))
+        } else {
+            fieldConstraints.append(input.centerYAnchor.constraint(equalTo: box.centerYAnchor))
+        }
+        NSLayoutConstraint.activate(fieldConstraints)
         fieldInputs[key] = input
-        let stack = NSStackView(views: [label, input])
+
+        let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 2
+        stack.addArrangedSubview(label)
+        if key == "tags" {
+            stack.addArrangedSubview(makeLabel(
+                "Separate tags with commas",
+                font: chineseFont(size: 11, weight: .regular),
+                color: .lookupSecondary
+            ))
+        }
+        stack.addArrangedSubview(box)
         return stack
     }
 
