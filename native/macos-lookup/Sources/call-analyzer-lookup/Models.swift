@@ -13,6 +13,12 @@ struct GlossLine: Codable, Equatable, Sendable {
     let traditional: String?
     let pinyin: String
     let meaning: String
+    let partOfSpeech: String?
+    let classifier: String?
+    let example: String?
+    let examplePinyin: String?
+    let exampleTranslation: String?
+    let tags: [String]?
     let vocabularyId: String?
     let action: String
     let destination: String
@@ -23,6 +29,12 @@ struct GlossLine: Codable, Equatable, Sendable {
         case traditional
         case pinyin
         case meaning
+        case partOfSpeech
+        case classifier
+        case example
+        case examplePinyin
+        case exampleTranslation
+        case tags
         case vocabularyId
         case action
         case destination
@@ -34,6 +46,12 @@ struct GlossLine: Codable, Equatable, Sendable {
         traditional: String?,
         pinyin: String,
         meaning: String,
+        partOfSpeech: String? = nil,
+        classifier: String? = nil,
+        example: String? = nil,
+        examplePinyin: String? = nil,
+        exampleTranslation: String? = nil,
+        tags: [String]? = nil,
         vocabularyId: String?,
         action: String,
         destination: String
@@ -43,6 +61,12 @@ struct GlossLine: Codable, Equatable, Sendable {
         self.traditional = traditional
         self.pinyin = pinyin
         self.meaning = meaning
+        self.partOfSpeech = partOfSpeech
+        self.classifier = classifier
+        self.example = example
+        self.examplePinyin = examplePinyin
+        self.exampleTranslation = exampleTranslation
+        self.tags = tags
         self.vocabularyId = vocabularyId
         self.action = action
         self.destination = destination
@@ -55,6 +79,12 @@ struct GlossLine: Codable, Equatable, Sendable {
         traditional = try container.decodeIfPresent(String.self, forKey: .traditional)
         pinyin = try container.decode(String.self, forKey: .pinyin)
         meaning = try container.decode(String.self, forKey: .meaning)
+        partOfSpeech = try container.decodeIfPresent(String.self, forKey: .partOfSpeech)
+        classifier = try container.decodeIfPresent(String.self, forKey: .classifier)
+        example = try container.decodeIfPresent(String.self, forKey: .example)
+        examplePinyin = try container.decodeIfPresent(String.self, forKey: .examplePinyin)
+        exampleTranslation = try container.decodeIfPresent(String.self, forKey: .exampleTranslation)
+        tags = try container.decodeIfPresent([String].self, forKey: .tags)
         vocabularyId = try container.decodeIfPresent(String.self, forKey: .vocabularyId)
         action = try container.decode(String.self, forKey: .action)
         destination = try container.decode(String.self, forKey: .destination)
@@ -67,6 +97,12 @@ struct GlossLine: Codable, Equatable, Sendable {
         try container.encodeIfPresent(traditional, forKey: .traditional)
         try container.encode(pinyin, forKey: .pinyin)
         try container.encode(meaning, forKey: .meaning)
+        try container.encodeIfPresent(partOfSpeech, forKey: .partOfSpeech)
+        try container.encodeIfPresent(classifier, forKey: .classifier)
+        try container.encodeIfPresent(example, forKey: .example)
+        try container.encodeIfPresent(examplePinyin, forKey: .examplePinyin)
+        try container.encodeIfPresent(exampleTranslation, forKey: .exampleTranslation)
+        try container.encodeIfPresent(tags, forKey: .tags)
         try container.encodeIfPresent(vocabularyId, forKey: .vocabularyId)
         try container.encode(action, forKey: .action)
         try container.encode(destination, forKey: .destination)
@@ -126,6 +162,44 @@ struct AddRequest: Encodable, Sendable {
     let line: GlossLine
 }
 
+struct CardFields: Codable, Equatable, Sendable {
+    var simplified: String
+    var traditional: String?
+    var pinyin: String
+    var meaning: String
+    var partOfSpeech: String?
+    var classifier: String?
+    var example: String?
+    var examplePinyin: String?
+    var exampleTranslation: String?
+    var tags: [String]?
+    var aiGenerated: Bool?
+}
+
+struct CardVariant: Codable, Equatable, Sendable {
+    let traditional: String?
+    let pinyin: String
+    let meaning: String
+    let partOfSpeech: String?
+    let classifier: String?
+    let example: String?
+    let examplePinyin: String?
+    let exampleTranslation: String?
+}
+
+struct CardDraft: Codable, Equatable, Sendable {
+    let fields: CardFields
+    let needsChoice: Bool
+    let readOnly: Bool
+    let variants: [CardVariant]?
+}
+
+struct SaveRequest: Encodable, Sendable {
+    let type = "save"
+    let id: String
+    let fields: CardFields
+}
+
 struct ParentMessage: Decodable, Sendable {
     let type: String
     let id: String
@@ -133,4 +207,5 @@ struct ParentMessage: Decodable, Sendable {
     let lines: [GlossLine]?
     let notice: String?
     let message: String?
+    let draft: CardDraft?
 }

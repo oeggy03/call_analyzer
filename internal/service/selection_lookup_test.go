@@ -210,17 +210,8 @@ func TestAddSelectionDoesNotTreatMissingGlossAsTypedMeaning(t *testing.T) {
 		t.Fatalf("missing gloss was not shown on the lookup line: %#v", lookup)
 	}
 
-	var event SelectionAddWord
-	svc.SetEventHook(func(name string, payload any) {
-		if name == "selection.add-word" {
-			event, _ = payload.(SelectionAddWord)
-		}
-	})
-	if err := svc.AddSelection(ctx, lookup.Lines[0]); err != nil {
+	if _, err := svc.AddSelection(ctx, lookup.Lines[0]); err != nil {
 		t.Fatal(err)
-	}
-	if event.Meaning != "" {
-		t.Fatalf("placeholder was copied to the event: %#v", event)
 	}
 	if strings.Contains(requestContent, selectionNoGloss) {
 		t.Fatalf("placeholder was sent as typed meaning: %q", requestContent)
@@ -236,7 +227,7 @@ func TestLookupSelectionCallsLookupModelOnceAndCachesResult(t *testing.T) {
 			t.Errorf("decode lookup request: %v", err)
 		}
 		if payload["model"] != openrouter.DefaultLookupModel ||
-			payload["max_tokens"] != float64(200) ||
+			payload["max_tokens"] != float64(selectionLookupMaxTokens) ||
 			payload["zdr"] != true {
 			t.Errorf("unexpected lookup request: %#v", payload)
 		}
@@ -327,8 +318,6 @@ func TestLookupSelectionValidationNoticesAvoidNetwork(t *testing.T) {
 		want    string
 	}{
 		{name: "empty", surface: " 「」 ", want: selectionEmptyNotice},
-		{name: "too many Han", surface: strings.Repeat("学", 13), want: selectionShortNotice},
-		{name: "internal punctuation", surface: "你好，世界", want: selectionShortNotice},
 		{name: "latin", surface: "hello", want: selectionNotChineseNotice},
 	}
 	for _, test := range tests {
@@ -347,11 +336,12 @@ func TestLookupSelectionValidationNoticesAvoidNetwork(t *testing.T) {
 	}
 }
 
-func TestAddSelectionBlocksGenerationDuringActiveLesson(t *testing.T) {
+func TestAddSelectionGeneratesDuringActiveLesson(t *testing.T) {
+	const manualResponse = `{"resolution":"selected","entry":{"simplified":"学习","traditional":"學習","pinyin":"xué xí","meaning":"to study","partOfSpeech":"verb","classifier":"","example":"我学习中文。","examplePinyin":"wǒ xué xí zhōng wén","exampleTranslation":"I study Chinese.","tags":[]},"variants":[{"traditional":"學習","pinyin":"xué xí","meaning":"to study","partOfSpeech":"verb","classifier":"","example":"我学习中文。","examplePinyin":"wǒ xué xí zhōng wén","exampleTranslation":"I study Chinese."}]}`
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
-		http.Error(w, "unexpected model request", http.StatusInternalServerError)
+		writeSelectionChatResponse(w, manualResponse)
 	}))
 	defer server.Close()
 
@@ -361,16 +351,8 @@ func TestAddSelectionBlocksGenerationDuringActiveLesson(t *testing.T) {
 	svc.mu.Lock()
 	svc.currentLesson = "active-lesson"
 	svc.mu.Unlock()
-	var event SelectionAddWord
-	var eventCount int
-	svc.SetEventHook(func(name string, payload any) {
-		if name == "selection.add-word" {
-			eventCount++
-			event, _ = payload.(SelectionAddWord)
-		}
-	})
 
-	err := svc.AddSelection(ctx, selection.GlossLine{
+	draft, err := svc.AddSelection(ctx, selection.GlossLine{
 		Surface:     "学习",
 		Simplified:  "学习",
 		Traditional: "學習",
@@ -382,12 +364,8 @@ func TestAddSelectionBlocksGenerationDuringActiveLesson(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requests.Load() != 0 || eventCount != 1 {
-		t.Fatalf("active lesson triggered unexpected work: requests=%d events=%d", requests.Load(), eventCount)
-	}
-	if !event.LessonBlocked || event.Destination != "add-word" || event.Draft != nil ||
-		event.Simplified != "学习" || event.Traditional != "學習" {
-		t.Fatalf("unexpected blocked selection event: %#v", event)
+	if requests.Load() != 1 || draft.ReadOnly || draft.Fields.Example != "我学习中文。" {
+		t.Fatalf("active lesson did not generate a tooltip card: requests=%d draft=%#v", requests.Load(), draft)
 	}
 }
 
@@ -410,14 +388,7 @@ func TestAddSelectionUsesDefaultManualModelAndEmitsDraft(t *testing.T) {
 	ctx := context.Background()
 	store, svc := newSelectionTestService(t, server.URL)
 	defer store.Close()
-	var event SelectionAddWord
-	svc.SetEventHook(func(name string, payload any) {
-		if name == "selection.add-word" {
-			event, _ = payload.(SelectionAddWord)
-		}
-	})
-
-	err := svc.AddSelection(ctx, selection.GlossLine{
+	draft, err := svc.AddSelection(ctx, selection.GlossLine{
 		Surface:     "学习",
 		Simplified:  "学习",
 		Traditional: "學習",
@@ -429,10 +400,9 @@ func TestAddSelectionUsesDefaultManualModelAndEmitsDraft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requests.Load() != 1 || event.Draft == nil || event.LessonBlocked ||
-		event.Destination != "add-word" ||
-		event.Draft.Model != openrouter.DefaultChatModel {
-		t.Fatalf("unexpected generated selection event: requests=%d event=%#v", requests.Load(), event)
+	if requests.Load() != 1 || draft.ReadOnly || draft.Fields.Example != "我学习中文。" ||
+		!draft.Fields.AIGenerated {
+		t.Fatalf("unexpected generated tooltip card: requests=%d draft=%#v", requests.Load(), draft)
 	}
 }
 
@@ -447,14 +417,7 @@ func TestAddSelectionOpenEmitsEventWithoutHTTP(t *testing.T) {
 	ctx := context.Background()
 	store, svc := newSelectionTestService(t, server.URL)
 	defer store.Close()
-	var event SelectionAddWord
-	svc.SetEventHook(func(name string, payload any) {
-		if name == "selection.add-word" {
-			event, _ = payload.(SelectionAddWord)
-		}
-	})
-
-	err := svc.AddSelection(ctx, selection.GlossLine{
+	draft, err := svc.AddSelection(ctx, selection.GlossLine{
 		Surface:      "学习",
 		Simplified:   "学习",
 		Traditional:  "學習",
@@ -467,12 +430,8 @@ func TestAddSelectionOpenEmitsEventWithoutHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requests.Load() != 0 ||
-		event.Destination != "vocabulary" ||
-		event.VocabularyID != "saved-id" ||
-		event.Draft != nil ||
-		event.LessonBlocked {
-		t.Fatalf("unexpected open selection event: requests=%d event=%#v", requests.Load(), event)
+	if requests.Load() != 0 || !draft.ReadOnly || draft.Fields.Pinyin != "xué xí" {
+		t.Fatalf("unexpected saved tooltip card: requests=%d draft=%#v", requests.Load(), draft)
 	}
 }
 

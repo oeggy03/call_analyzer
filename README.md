@@ -101,10 +101,10 @@ The lookup helper can be overridden with
 4. Press `M` or click **Mark Moment** for important words.
 5. Confirm, edit, merge, or reject suggestions in Candidate Inbox.
 6. Confirmed entries appear in Vocabulary immediately. Deleting a saved word removes it locally and queues that delete for cloud sync.
-7. While Call Analyzer is running, highlight a Chinese word and press
-   `Command-Option-5` to review its pinyin and gloss, then choose **Add word**
-   to review it in Add Word or **Open** the matching Vocabulary or Candidate
-   Inbox entry.
+7. While Call Analyzer is running, highlight Chinese text and press
+   `Command-Option-5` to review its pinyin and gloss. **Add word** fills the
+   rest of the card in the tooltip, and **Save** stores it there. **Details**
+   shows a word that is already saved.
 
 You can also open **Add Word** and enter only the simplified Chinese word.
 **Generate missing details** uses the configured analyzer (Qwen 3 32B by

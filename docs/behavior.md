@@ -41,17 +41,8 @@ These rules are enforced in code, but they are easy to miss because the UI, the 
   cached in memory for the app session, up to 64 entries, and usage is stored
   under `selection-lookup`. The surrounding sentence is not shown in the
   panel. The selected text is not logged or added to `AppSnapshot`.
-- The panel shows pinyin and a short English gloss, not an example sentence. It stays open until Close is pressed.
-  A complete confirmed entry opens Vocabulary; a candidate with an example
-  opens Candidate Inbox. Otherwise the action is **Add word**. Highlights
-  without Han text, with internal punctuation, or with more than 12 Han
-  characters show a notice without calling the model.
-- **Add word** uses the existing `GenerateManualVocabulary` path (default
-  model `qwen/qwen3-32b`) and opens Add Word for review; it does not save the
-  entry. During an active lesson, generation is skipped, the form is
-  prefilled with the characters, pinyin, and gloss, and the existing lesson
-  message remains. The `No English gloss saved` placeholder is left blank in
-  the form.
+- The panel shows pinyin and a short English gloss. It stays open until Close is pressed. A saved entry's **Details** button expands that card in the panel. **Add word** generates the example and the other card fields in the panel, including during a live lesson, and **Save** writes the confirmed entry from there. The main window is not brought forward. Highlights without Han text show a notice and do not call the model. A phrase or sentence is allowed.
+- Tooltip generation uses the same manual-vocabulary model and parser as Add Word (`qwen/qwen3-32b` by default). The placeholder `No English gloss saved` is left blank on the card.
 
 ## Budget and privacy
 

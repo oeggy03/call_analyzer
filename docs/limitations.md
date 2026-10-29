@@ -14,12 +14,7 @@ Verified against the current tree. Product boundaries also listed in `README.md`
 - Highlighted-word lookup needs the Call Analyzer process running; closing the
   app window quits it and stops the `Command-Option-5` helper. There is no
   menu-bar-only mode.
-- Lookup reads selected text through Accessibility, not screen pixels. It
-  refuses words with more than 12 Han characters (and also rejects selections
-  without Han text or with internal punctuation).
-- Add Word generation from lookup remains blocked during a live lesson; the
-  selection can open a prefilled form, but missing details are not generated
-  until the lesson finishes.
+- Lookup reads selected text through Accessibility, not screen pixels. A selection without Han text is refused. There is no character-count cap on the highlight.
 - Vocabulary outbox delivery requires a configured per-machine Supabase
   secret. Without it, rows remain local. The runner does not sync lessons,
   transcripts, observations, study-state changes, or review events.

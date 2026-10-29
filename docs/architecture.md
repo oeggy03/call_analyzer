@@ -44,11 +44,9 @@ Domain structs in `internal/domain/domain.go` are the storage and service shapes
    selection model only when the local query returns no rows and the cache
    misses. The helper renders at most three pinyin/gloss rows.
 3. Choosing **Add word** sends a JSON-line add request. `Service.AddSelection`
-   either generates a non-persistent manual-vocabulary draft or, during a
-   lesson, emits the prefilled lesson-blocked event without generating.
-4. `App.onServiceEvent` brings the Wails window forward and emits
-   `call_analyzer:selection.add-word`; React opens Add Word for review or
-   focuses Vocabulary/Candidate Inbox. The add action never saves the entry.
+   generates a manual-vocabulary draft, including during a live lesson, and
+   the helper shows that card. **Save** calls `Service.SaveSelection`.
+   **Details** expands a saved card in the panel. The main window stays where it is.
 
 ## Live audio to a candidate
 

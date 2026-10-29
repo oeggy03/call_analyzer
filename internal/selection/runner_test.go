@@ -18,6 +18,8 @@ type runnerTestHandler struct {
 	lookupSurface string
 	lookupContext string
 	addedLine     GlossLine
+	savedFields   CardFields
+	draft         CardDraft
 }
 
 func (h *runnerTestHandler) LookupSelection(
@@ -32,8 +34,26 @@ func (h *runnerTestHandler) LookupSelection(
 	return h.lookupResult, nil
 }
 
-func (h *runnerTestHandler) AddSelection(_ context.Context, line GlossLine) error {
+func (h *runnerTestHandler) AddSelection(_ context.Context, line GlossLine) (CardDraft, error) {
 	h.addedLine = line
+	if h.addErr != nil {
+		return CardDraft{}, h.addErr
+	}
+	if h.draft.Fields.Simplified == "" && h.draft.Fields.Pinyin == "" {
+		h.draft = CardDraft{
+			Fields: CardFields{
+				Simplified: line.Simplified,
+				Pinyin:     line.Pinyin,
+				Meaning:    line.Meaning,
+				Example:    "我在走路。",
+			},
+		}
+	}
+	return h.draft, nil
+}
+
+func (h *runnerTestHandler) SaveSelection(_ context.Context, fields CardFields) error {
+	h.savedFields = fields
 	return h.addErr
 }
 
@@ -142,7 +162,7 @@ func TestServeLookupErrorWritesFriendlyMessage(t *testing.T) {
 	}
 }
 
-func TestServeAddSuccessWritesDismiss(t *testing.T) {
+func TestServeAddSuccessWritesDraft(t *testing.T) {
 	handler := &runnerTestHandler{}
 	var output bytes.Buffer
 	input := `{"type":"add","id":"add-1","line":{"surface":"行","simplified":"行","pinyin":"xíng","meaning":"to walk","action":"add","destination":"add-word"}}` + "\n"
@@ -154,11 +174,31 @@ func TestServeAddSuccessWritesDismiss(t *testing.T) {
 		t.Fatalf("unexpected added line: %#v", handler.addedLine)
 	}
 
-	var response dismissMessage
+	var response draftMessage
 	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.Type != "dismiss" || response.ID != "add-1" {
+	if response.Type != "draft" || response.ID != "add-1" || response.Draft.Fields.Pinyin != "xíng" {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+}
+
+func TestServeSaveWritesSaved(t *testing.T) {
+	handler := &runnerTestHandler{}
+	var output bytes.Buffer
+	input := `{"type":"save","id":"save-1","fields":{"simplified":"行","pinyin":"xíng","meaning":"to walk","example":"我在走路。","examplePinyin":"wǒ zài zǒu lù","exampleTranslation":"I am walking."}}` + "\n"
+	err := Serve(context.Background(), strings.NewReader(input), &output, handler)
+	if err != nil {
+		t.Fatalf("Serve returned error: %v", err)
+	}
+	if handler.savedFields.Simplified != "行" || handler.savedFields.Example != "我在走路。" {
+		t.Fatalf("unexpected saved fields: %#v", handler.savedFields)
+	}
+	var response savedMessage
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Type != "saved" || response.ID != "save-1" {
 		t.Fatalf("unexpected response: %#v", response)
 	}
 }
@@ -239,6 +279,10 @@ func (h *deadlineHandler) LookupSelection(ctx context.Context, _, _ string) (Loo
 	return LookupResult{Surface: "行"}, nil
 }
 
-func (*deadlineHandler) AddSelection(context.Context, GlossLine) error {
+func (*deadlineHandler) AddSelection(context.Context, GlossLine) (CardDraft, error) {
+	return CardDraft{}, nil
+}
+
+func (*deadlineHandler) SaveSelection(context.Context, CardFields) error {
 	return nil
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/oeggy03/call_analyzer/internal/domain"
 	"github.com/oeggy03/call_analyzer/internal/openrouter"
 	"github.com/oeggy03/call_analyzer/internal/selection"
+	"github.com/oeggy03/call_analyzer/internal/vocabulary"
 )
 
 const (
@@ -22,13 +23,12 @@ const (
 
 	selectionLookupTimeout       = 12 * time.Second
 	selectionLookupCacheCapacity = 64
-	selectionLookupMaxHan        = 12
 	selectionLookupMaxLines      = 3
-	selectionLookupMaxMeaning    = 160
+	selectionLookupMaxMeaning    = 500
+	selectionLookupMaxTokens     = 400
 
-	selectionEmptyNotice      = "Highlight a Chinese word, then press ⌘⌥5."
-	selectionNotChineseNotice = "Select a Chinese word."
-	selectionShortNotice      = "Select one short word."
+	selectionEmptyNotice      = "Highlight Chinese text, then press ⌘⌥5."
+	selectionNotChineseNotice = "Select Chinese text."
 	selectionFailedNotice     = "Couldn't look this up. Try again."
 	selectionNoGloss          = "No English gloss saved"
 )
@@ -151,7 +151,7 @@ func (s *Service) LookupSelection(
 		SchemaName:       "selection_lookup",
 		Schema:           selectionLookupSchema(),
 		Model:            openrouter.DefaultLookupModel,
-		MaxTokens:        200,
+		MaxTokens:        selectionLookupMaxTokens,
 		Temperature:      floatPointer(0),
 		DisableReasoning: true,
 	})
@@ -211,23 +211,21 @@ func (s *Service) LookupSelection(
 	return result, nil
 }
 
-func (s *Service) AddSelection(ctx context.Context, line selection.GlossLine) error {
+func (s *Service) AddSelection(
+	ctx context.Context,
+	line selection.GlossLine,
+) (selection.CardDraft, error) {
 	if s == nil {
-		return errors.New("selection lookup: service is not configured")
+		return selection.CardDraft{}, errors.New("selection lookup: service is not configured")
 	}
 	if line.Action == "open" {
-		s.emit("selection.add-word", SelectionAddWord{
-			Simplified:   line.Simplified,
-			Traditional:  line.Traditional,
-			Pinyin:       line.Pinyin,
-			Meaning:      line.Meaning,
-			VocabularyID: line.VocabularyID,
-			Destination:  line.Destination,
-		})
-		return nil
+		return selection.CardDraft{
+			Fields:   cardFieldsFromLine(line),
+			ReadOnly: true,
+		}, nil
 	}
 	if line.Action != "add" {
-		return fmt.Errorf("selection lookup: unsupported action %q", line.Action)
+		return selection.CardDraft{}, fmt.Errorf("selection lookup: unsupported action %q", line.Action)
 	}
 
 	simplified := line.Simplified
@@ -238,32 +236,89 @@ func (s *Service) AddSelection(ctx context.Context, line selection.GlossLine) er
 	if strings.TrimSpace(meaning) == selectionNoGloss {
 		meaning = ""
 	}
-	payload := SelectionAddWord{
-		Simplified:   simplified,
-		Traditional:  line.Traditional,
-		Pinyin:       line.Pinyin,
-		Meaning:      meaning,
-		VocabularyID: line.VocabularyID,
-		Destination:  "add-word",
-	}
-	if s.HasActiveLesson() {
-		payload.LessonBlocked = true
-		s.emit("selection.add-word", payload)
-		return nil
-	}
-
-	draft, err := s.GenerateManualVocabulary(ctx, ManualVocabularyInput{
+	draft, err := s.generateManualVocabulary(ctx, ManualVocabularyInput{
 		Simplified:  simplified,
 		Traditional: line.Traditional,
 		Pinyin:      line.Pinyin,
 		Meaning:     meaning,
-	})
+	}, false)
 	if err != nil {
-		return err
+		return selection.CardDraft{}, err
 	}
-	payload.Draft = &draft
-	s.emit("selection.add-word", payload)
-	return nil
+	return cardDraftFromManual(draft), nil
+}
+
+func (s *Service) SaveSelection(ctx context.Context, fields selection.CardFields) error {
+	if s == nil {
+		return errors.New("selection lookup: service is not configured")
+	}
+	_, err := s.SaveManualVocabulary(ctx, ManualVocabularyInput{
+		Simplified:         fields.Simplified,
+		Traditional:        fields.Traditional,
+		Pinyin:             fields.Pinyin,
+		Meaning:            fields.Meaning,
+		PartOfSpeech:       fields.PartOfSpeech,
+		Classifier:         fields.Classifier,
+		Example:            fields.Example,
+		ExamplePinyin:      fields.ExamplePinyin,
+		ExampleTranslation: fields.ExampleTranslation,
+		Tags:               fields.Tags,
+		AiGenerated:        fields.AIGenerated,
+	})
+	return err
+}
+
+func cardFieldsFromLine(line selection.GlossLine) selection.CardFields {
+	meaning := line.Meaning
+	if strings.TrimSpace(meaning) == selectionNoGloss {
+		meaning = ""
+	}
+	return selection.CardFields{
+		Simplified:         line.Simplified,
+		Traditional:        line.Traditional,
+		Pinyin:             line.Pinyin,
+		Meaning:            meaning,
+		PartOfSpeech:       line.PartOfSpeech,
+		Classifier:         line.Classifier,
+		Example:            line.Example,
+		ExamplePinyin:      line.ExamplePinyin,
+		ExampleTranslation: line.ExampleTranslation,
+		Tags:               line.Tags,
+	}
+}
+
+func cardDraftFromManual(draft ManualVocabularyDraft) selection.CardDraft {
+	fields := selection.CardFields{
+		Simplified:         draft.Simplified,
+		Traditional:        draft.Traditional,
+		Pinyin:             draft.Pinyin,
+		Meaning:            draft.Meaning,
+		PartOfSpeech:       draft.PartOfSpeech,
+		Classifier:         draft.Classifier,
+		Example:            draft.Example,
+		ExamplePinyin:      draft.ExamplePinyin,
+		ExampleTranslation: draft.ExampleTranslation,
+		Tags:               draft.Tags,
+		AIGenerated:        strings.TrimSpace(draft.Example) != "",
+	}
+	variants := make([]selection.CardVariant, 0, len(draft.Variants))
+	for _, variant := range draft.Variants {
+		variants = append(variants, selection.CardVariant{
+			Traditional:        variant.Traditional,
+			Pinyin:             variant.Pinyin,
+			Meaning:            variant.Meaning,
+			PartOfSpeech:       variant.PartOfSpeech,
+			Classifier:         variant.Classifier,
+			Example:            variant.Example,
+			ExamplePinyin:      variant.ExamplePinyin,
+			ExampleTranslation: variant.ExampleTranslation,
+		})
+	}
+	return selection.CardDraft{
+		Fields:      fields,
+		NeedsChoice: draft.NeedsChoice,
+		Variants:    variants,
+	}
 }
 
 func (s *Service) selectionLookupRouter() (*openrouter.Client, error) {
@@ -292,19 +347,6 @@ func normalizeSelectionSurface(surface string) (string, string) {
 	}
 	if !chinese.ContainsHan(normalized) {
 		return normalized, selectionNotChineseNotice
-	}
-	hanCount := 0
-	for _, r := range normalized {
-		if unicode.Is(unicode.Han, r) {
-			hanCount++
-		}
-		if r == ' ' || unicode.IsSpace(r) ||
-			(unicode.IsPunct(r) || unicode.IsSymbol(r)) && r != '·' {
-			return normalized, selectionShortNotice
-		}
-	}
-	if hanCount > selectionLookupMaxHan {
-		return normalized, selectionShortNotice
 	}
 	return normalized, ""
 }
@@ -360,21 +402,63 @@ func selectionGlossLines(
 		if pinyin == "" {
 			pinyin = strings.TrimSpace(entry.Reading)
 		}
+		example, examplePinyin, exampleTranslation := selectionExample(entry)
+		partOfSpeech := ""
+		classifier := ""
+		if len(entry.Senses) > 0 {
+			partOfSpeech = strings.TrimSpace(entry.Senses[0].PartOfSpeech)
+			classifier = strings.TrimSpace(entry.Senses[0].Classifier)
+		}
 		lines = append(lines, selection.GlossLine{
-			Surface:      normalizedSurface,
-			Simplified:   entry.Simplified,
-			Traditional:  entry.Traditional,
-			Pinyin:       pinyin,
-			Meaning:      selectionMeaning(entry),
-			VocabularyID: entry.ID,
-			Action:       action,
-			Destination:  destination,
+			Surface:            normalizedSurface,
+			Simplified:         entry.Simplified,
+			Traditional:        entry.Traditional,
+			Pinyin:             pinyin,
+			Meaning:            selectionMeaning(entry),
+			PartOfSpeech:       partOfSpeech,
+			Classifier:         classifier,
+			Example:            example,
+			ExamplePinyin:      examplePinyin,
+			ExampleTranslation: exampleTranslation,
+			Tags:               selectionTagNames(entry),
+			VocabularyID:       entry.ID,
+			Action:             action,
+			Destination:        destination,
 		})
 		if len(lines) == selectionLookupMaxLines {
 			break
 		}
 	}
 	return lines
+}
+
+func selectionExample(entry domain.VocabularyEntry) (string, string, string) {
+	if len(entry.Examples) == 0 {
+		return "", "", ""
+	}
+	example := entry.Examples[0]
+	reading := strings.TrimSpace(example.Reading)
+	if _, marked, err := vocabulary.CanonicalPinyin(reading); err == nil && strings.TrimSpace(marked) != "" {
+		reading = marked
+	}
+	return strings.TrimSpace(example.Simplified), reading, strings.TrimSpace(example.Translation)
+}
+
+func selectionTagNames(entry domain.VocabularyEntry) []string {
+	if len(entry.Tags) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(entry.Tags))
+	for _, tag := range entry.Tags {
+		name := strings.TrimSpace(tag.Name)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return names
 }
 
 func selectionMeaning(entry domain.VocabularyEntry) string {
@@ -403,7 +487,7 @@ func selectionLookupPrompt(normalizedSurface, contextText string) string {
 	return "Word: " + normalizedSurface + "\nContext: " + contextText
 }
 
-const selectionLookupSystemPrompt = `You are a concise Mandarin dictionary. Return tone-marked Hanyu Pinyin and a short English gloss. Return one entry when the sentence context selects a reading. When it does not, return up to three common readings. Do not include examples, notes, or character forms.`
+const selectionLookupSystemPrompt = `You are a concise Mandarin dictionary. The selection may be one word or a longer phrase. Return tone-marked Hanyu Pinyin for the whole selection and a short English gloss of the whole selection. Return one entry when the meaning is clear. When a short selection has several common readings, return up to three. Do not include examples, notes, or character forms.`
 
 func selectionLookupSchema() map[string]any {
 	entrySchema := map[string]any{

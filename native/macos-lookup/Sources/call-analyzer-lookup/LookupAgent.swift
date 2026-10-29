@@ -42,6 +42,9 @@ final class LookupAgent: NSObject, NSApplicationDelegate {
         panel.onAdd = { [weak self] line in
             self?.add(line)
         }
+        panel.onSave = { [weak self] fields in
+            self?.save(fields)
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -123,8 +126,18 @@ final class LookupAgent: NSObject, NSApplicationDelegate {
                 notice: message.notice ?? "",
                 anchor: anchor
             )
+        case "draft":
+            if let draft = message.draft {
+                panel.showCard(draft, anchor: anchor)
+            }
+        case "saved":
+            panel.showSaved(anchor: anchor)
         case "error":
-            panel.showError(message.message ?? "", anchor: anchor)
+            if panel.shouldKeepForm() {
+                panel.showFormStatus(message.message ?? "Couldn't save this word. Try again.")
+            } else {
+                panel.showError(message.message ?? "", anchor: anchor)
+            }
         case "dismiss":
             dismiss()
         default:
@@ -133,11 +146,47 @@ final class LookupAgent: NSObject, NSApplicationDelegate {
     }
 
     private func add(_ line: GlossLine) {
-        guard let id = currentRequestID, let anchor = currentAnchor else {
+        guard let anchor = currentAnchor else {
+            return
+        }
+        if line.action == "open" {
+            panel.showCard(savedCard(from: line), anchor: anchor)
+            return
+        }
+        guard let id = currentRequestID else {
             return
         }
         panel.showAdding(action: line.action, anchor: anchor)
         writer.write(AddRequest(id: id, line: line))
+    }
+
+    private func save(_ fields: CardFields) {
+        guard let id = currentRequestID else {
+            return
+        }
+        panel.showFormStatus("Saving…")
+        writer.write(SaveRequest(id: id, fields: fields))
+    }
+
+    private func savedCard(from line: GlossLine) -> CardDraft {
+        CardDraft(
+            fields: CardFields(
+                simplified: line.simplified,
+                traditional: line.traditional,
+                pinyin: line.pinyin,
+                meaning: line.meaning == "No English gloss saved" ? "" : line.meaning,
+                partOfSpeech: line.partOfSpeech,
+                classifier: line.classifier,
+                example: line.example,
+                examplePinyin: line.examplePinyin,
+                exampleTranslation: line.exampleTranslation,
+                tags: line.tags,
+                aiGenerated: false
+            ),
+            needsChoice: false,
+            readOnly: true,
+            variants: nil
+        )
     }
 
     private func dismiss() {

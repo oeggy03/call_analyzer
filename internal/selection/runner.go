@@ -18,7 +18,9 @@ var ErrAlreadyRunning = errors.New("selection helper is already running")
 const (
 	lookupFailureMessage = "Couldn't look this up. Try again."
 	addFailureMessage    = "Couldn't add this word. Try again."
+	saveFailureMessage   = "Couldn't save this word. Try again."
 	lookupTimeout        = 20 * time.Second
+	addTimeout           = 60 * time.Second
 )
 
 // Handler contains the service operations used by the selection helper.
@@ -27,7 +29,8 @@ type Handler interface {
 		ctx context.Context,
 		surface, sentenceContext string,
 	) (LookupResult, error)
-	AddSelection(ctx context.Context, line GlossLine) error
+	AddSelection(ctx context.Context, line GlossLine) (CardDraft, error)
+	SaveSelection(ctx context.Context, fields CardFields) error
 }
 
 // Config controls how the native selection helper is located.
@@ -68,12 +71,23 @@ func helperEnvironment() []string {
 }
 
 type helperRequest struct {
-	Type    string     `json:"type"`
-	ID      string     `json:"id"`
-	Surface string     `json:"surface"`
-	Context *string    `json:"context"`
-	Bounds  *Bounds    `json:"bounds"`
-	Line    *GlossLine `json:"line"`
+	Type    string      `json:"type"`
+	ID      string      `json:"id"`
+	Surface string      `json:"surface"`
+	Context *string     `json:"context"`
+	Bounds  *Bounds     `json:"bounds"`
+	Line    *GlossLine  `json:"line"`
+	Fields  *CardFields `json:"fields"`
+}
+
+func saveFailureText(err error) string {
+	text := err.Error()
+	if strings.Contains(text, "required") || strings.Contains(text, "must contain") {
+		if index := strings.LastIndex(text, ": "); index >= 0 && index+2 < len(text) {
+			return text[index+2:]
+		}
+	}
+	return saveFailureMessage
 }
 
 func (r helperRequest) sentenceContext() string {
@@ -98,6 +112,17 @@ type errorMessage struct {
 }
 
 type dismissMessage struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+type draftMessage struct {
+	Type  string    `json:"type"`
+	ID    string    `json:"id"`
+	Draft CardDraft `json:"draft"`
+}
+
+type savedMessage struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
 }
@@ -218,10 +243,11 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, handler Handler) er
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				callCtx, callCancel := context.WithTimeout(serveCtx, lookupTimeout)
+				callCtx, callCancel := context.WithTimeout(serveCtx, addTimeout)
 				defer callCancel()
 
-				if err := handler.AddSelection(callCtx, *request.Line); err != nil {
+				draft, err := handler.AddSelection(callCtx, *request.Line)
+				if err != nil {
 					recordWriteError(write(errorMessage{
 						Type:    "error",
 						ID:      request.ID,
@@ -229,8 +255,33 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, handler Handler) er
 					}))
 					return
 				}
-				recordWriteError(write(dismissMessage{
-					Type: "dismiss",
+				recordWriteError(write(draftMessage{
+					Type:  "draft",
+					ID:    request.ID,
+					Draft: draft,
+				}))
+			}()
+		case "save":
+			if request.Fields == nil {
+				continue
+			}
+			request := request
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				callCtx, callCancel := context.WithTimeout(serveCtx, addTimeout)
+				defer callCancel()
+
+				if err := handler.SaveSelection(callCtx, *request.Fields); err != nil {
+					recordWriteError(write(errorMessage{
+						Type:    "error",
+						ID:      request.ID,
+						Message: saveFailureText(err),
+					}))
+					return
+				}
+				recordWriteError(write(savedMessage{
+					Type: "saved",
 					ID:   request.ID,
 				}))
 			}()
