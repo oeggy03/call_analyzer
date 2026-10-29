@@ -42,8 +42,6 @@ final class PanelController: NSObject {
     private let bodyStack = NSStackView()
     private let closeButton: NSButton
     private var currentLines: [GlossLine] = []
-    private var localMonitor: Any?
-    private var globalMonitor: Any?
 
     override init() {
         panel = LookupPanel(
@@ -55,7 +53,6 @@ final class PanelController: NSObject {
         closeButton = NSButton(title: "Close", target: nil, action: nil)
         super.init()
         configurePanel()
-        installMonitors()
     }
 
     func showLoading(surface: String, anchor: PanelAnchor) {
@@ -148,7 +145,7 @@ final class PanelController: NSObject {
     private func configurePanel() {
         panel.isFloatingPanel = true
         panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.hasShadow = true
@@ -199,47 +196,6 @@ final class PanelController: NSObject {
         bodyStack.alignment = .width
         bodyStack.spacing = 8
         mainStack.addArrangedSubview(bodyStack)
-    }
-
-    private func installMonitors() {
-        localMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]
-        ) { [weak self] event in
-            guard let self else {
-                return event
-            }
-            if event.type == .keyDown, event.keyCode == 53 {
-                self.onDismiss?()
-                return nil
-            }
-            if isMouseDown(event.type),
-               self.panel.isVisible,
-               !self.panel.frame.contains(NSEvent.mouseLocation) {
-                self.onDismiss?()
-                return nil
-            }
-            return event
-        }
-
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [
-            .keyDown,
-            .leftMouseDown,
-            .rightMouseDown,
-            .otherMouseDown,
-        ]) { [weak self] event in
-            guard let self else {
-                return
-            }
-            if event.type == .keyDown, event.keyCode == 53 {
-                self.onDismiss?()
-                return
-            }
-            if isMouseDown(event.type),
-               self.panel.isVisible,
-               !self.panel.frame.contains(NSEvent.mouseLocation) {
-                self.onDismiss?()
-            }
-        }
     }
 
     private func replaceBody(with views: [NSView]) {
@@ -437,14 +393,5 @@ final class PanelController: NSObject {
             return
         }
         onAdd?(currentLines[sender.tag])
-    }
-
-    private func isMouseDown(_ type: NSEvent.EventType) -> Bool {
-        switch type {
-        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            return true
-        default:
-            return false
-        }
     }
 }

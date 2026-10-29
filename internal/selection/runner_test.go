@@ -87,6 +87,38 @@ func TestServeLookupWritesResult(t *testing.T) {
 	}
 }
 
+func TestServeLookupAcceptsNullContextAndBounds(t *testing.T) {
+	handler := &runnerTestHandler{
+		lookupResult: LookupResult{
+			Surface: "学习",
+			Lines: []GlossLine{{
+				Surface:     "学习",
+				Simplified:  "学习",
+				Pinyin:      "xué xí",
+				Meaning:     "to study",
+				Action:      "add",
+				Destination: "add-word",
+			}},
+		},
+	}
+	var output bytes.Buffer
+	input := `{"type":"lookup","id":"7","surface":"学习","context":null,"bounds":null}` + "\n"
+	err := Serve(context.Background(), strings.NewReader(input), &output, handler)
+	if err != nil {
+		t.Fatalf("Serve returned error: %v", err)
+	}
+	if handler.lookupSurface != "学习" || handler.lookupContext != "" {
+		t.Fatalf("null context was not accepted: surface=%q context=%q", handler.lookupSurface, handler.lookupContext)
+	}
+	var response resultMessage
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &response); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, output.String())
+	}
+	if response.Type != "result" || response.ID != "7" || len(response.Lines) != 1 {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+}
+
 func TestServeLookupErrorWritesFriendlyMessage(t *testing.T) {
 	handler := &runnerTestHandler{lookupErr: errors.New("provider failed")}
 	var output bytes.Buffer

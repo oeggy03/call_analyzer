@@ -71,8 +71,16 @@ type helperRequest struct {
 	Type    string     `json:"type"`
 	ID      string     `json:"id"`
 	Surface string     `json:"surface"`
-	Context string     `json:"context"`
+	Context *string    `json:"context"`
+	Bounds  *Bounds    `json:"bounds"`
 	Line    *GlossLine `json:"line"`
+}
+
+func (r helperRequest) sentenceContext() string {
+	if r.Context == nil {
+		return ""
+	}
+	return *r.Context
 }
 
 type resultMessage struct {
@@ -177,7 +185,7 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, handler Handler) er
 				result, err := handler.LookupSelection(
 					callCtx,
 					request.Surface,
-					request.Context,
+					request.sentenceContext(),
 				)
 				if err != nil {
 					recordWriteError(write(errorMessage{

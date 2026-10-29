@@ -41,7 +41,7 @@ These rules are enforced in code, but they are easy to miss because the UI, the 
   cached in memory for the app session, up to 64 entries, and usage is stored
   under `selection-lookup`. The surrounding sentence is not shown in the
   panel. The selected text is not logged or added to `AppSnapshot`.
-- The panel shows pinyin and a short English gloss, not an example sentence.
+- The panel shows pinyin and a short English gloss, not an example sentence. It stays open until Close is pressed.
   A complete confirmed entry opens Vocabulary; a candidate with an example
   opens Candidate Inbox. Otherwise the action is **Add word**. Highlights
   without Han text, with internal punctuation, or with more than 12 Han

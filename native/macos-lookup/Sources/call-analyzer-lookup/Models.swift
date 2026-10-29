@@ -109,6 +109,15 @@ struct LookupRequest: Codable, Sendable {
         context = try container.decodeIfPresent(String.self, forKey: .context)
         bounds = try container.decodeIfPresent(SelectionBounds.self, forKey: .bounds)
     }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(type, forKey: .type)
+        try container.encode(id, forKey: .id)
+        try container.encode(surface, forKey: .surface)
+        try container.encodeIfPresent(context, forKey: .context)
+        try container.encodeIfPresent(bounds, forKey: .bounds)
+    }
 }
 
 struct AddRequest: Encodable, Sendable {

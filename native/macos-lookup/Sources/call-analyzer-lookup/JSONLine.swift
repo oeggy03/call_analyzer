@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 final class JSONLineWriter: @unchecked Sendable {
@@ -33,15 +34,28 @@ final class JSONLineReader: @unchecked Sendable {
         let onLine = self.onLine
         let onClose = self.onClose
         DispatchQueue.global(qos: .utility).async {
-            let input = FileHandle.standardInput
+            // FileHandle.readData(ofLength:) treats a not-yet-ready pipe as
+            // end of input, so a lookup reply never reaches the panel.
+            let fd = STDIN_FILENO
+            let flags = fcntl(fd, F_GETFL)
+            if flags >= 0 {
+                _ = fcntl(fd, F_SETFL, flags & ~O_NONBLOCK)
+            }
             var buffer = Data()
 
             while true {
-                let chunk = input.readData(ofLength: 4096)
-                if chunk.isEmpty {
+                var chunk = [UInt8](repeating: 0, count: 4096)
+                let count = Darwin.read(fd, &chunk, chunk.count)
+                if count == 0 {
                     break
                 }
-                buffer.append(chunk)
+                if count < 0 {
+                    if errno == EINTR {
+                        continue
+                    }
+                    break
+                }
+                buffer.append(contentsOf: chunk[0..<count])
 
                 while let newline = buffer.firstIndex(of: 0x0A) {
                     var line = Data(buffer[..<newline])
