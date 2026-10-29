@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { App } from '../App'
 import { BACKEND_EVENTS, createApi, createDemoApi, createUnavailableApi } from '../lib/api'
 
@@ -414,6 +414,129 @@ describe('Call Analyzer frontend', () => {
     expect(await screen.findByText('学习')).toBeInTheDocument()
     expect(await screen.findByText('to learn carefully')).toBeInTheDocument()
     expect(await screen.findByText(/学习 saved to Vocabulary/i)).toBeInTheDocument()
+  })
+
+  it('opens a generated selection draft in Add Word for review', async () => {
+    const api = createDemoApi()
+    render(<App apiClient={api} />)
+    await screen.findByText('Demo mode is active')
+
+    act(() => {
+      api.emitSelectionAddWord({
+        simplified: '学习',
+        traditional: '學習',
+        pinyin: 'xué xí',
+        meaning: 'to study; to learn',
+        destination: 'add-word',
+        lessonBlocked: false,
+        draft: {
+          simplified: '学习',
+          traditional: '學習',
+          pinyin: 'xué xí',
+          meaning: 'to study; to learn',
+          partOfSpeech: 'verb',
+          example: '我每天学习中文。',
+          examplePinyin: 'Wǒ měi tiān xué xí Zhōng wén.',
+          exampleTranslation: 'I study Chinese every day.',
+          tags: ['study'],
+          aiGenerated: true,
+          model: 'qwen/qwen3-32b',
+          cost: 0.0002,
+          needsChoice: false,
+          matchedContext: false,
+          appliedVariant: 0,
+        },
+      })
+    })
+
+    expect(await screen.findByRole('heading', { name: 'Add Word' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Chinese sample sentence')).toHaveValue('我每天学习中文。')
+    expect(await screen.findByText('Missing details generated. Review every field before saving.')).toBeInTheDocument()
+  })
+
+  it('opens a lesson-blocked selection in Add Word without generating details', async () => {
+    const api = createDemoApi()
+    render(<App apiClient={api} />)
+    await screen.findByText('Demo mode is active')
+
+    act(() => {
+      api.emitSelectionAddWord({
+        simplified: '重点',
+        traditional: '重點',
+        pinyin: 'zhòngdiǎn',
+        meaning: 'No English gloss saved',
+        destination: 'add-word',
+        lessonBlocked: true,
+      })
+    })
+
+    expect(await screen.findByRole('heading', { name: 'Add Word' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Pinyin')).toHaveValue('zhòngdiǎn')
+    expect(screen.getByLabelText('English meaning')).toHaveValue('')
+    expect(screen.getByLabelText('Chinese sample sentence')).toHaveValue('')
+    expect(await screen.findByText('Missing-detail generation is available again after the active lesson finishes.')).toBeInTheDocument()
+  })
+
+  it('refocuses Vocabulary search for repeated selections and clears prior messages', async () => {
+    const api = createDemoApi()
+    render(<App apiClient={api} />)
+    await screen.findByText('Demo mode is active')
+
+    act(() => {
+      api.emitSelectionAddWord({
+        simplified: '重点',
+        traditional: '重點',
+        pinyin: 'zhòngdiǎn',
+        meaning: 'key point; main focus',
+        destination: 'inbox',
+        lessonBlocked: false,
+      })
+    })
+    expect(await screen.findByText('Opened the candidate for 重点.')).toBeInTheDocument()
+
+    const vocabularySelection = {
+      simplified: '方案',
+      traditional: '方案',
+      pinyin: 'fāng’àn',
+      meaning: 'plan; proposal; solution',
+      destination: 'vocabulary' as const,
+      lessonBlocked: false,
+    }
+    act(() => {
+      api.emitSelectionAddWord(vocabularySelection)
+    })
+
+    expect(await screen.findByRole('heading', { name: 'Vocabulary' })).toBeInTheDocument()
+    expect(screen.queryByText('Opened the candidate for 重点.')).not.toBeInTheDocument()
+    const search = screen.getByRole('searchbox', { name: /search vocabulary/i })
+    await waitFor(() => expect(search).toHaveValue('方案'))
+
+    fireEvent.change(search, { target: { value: '重点' } })
+    expect(search).toHaveValue('重点')
+    act(() => {
+      api.emitSelectionAddWord(vocabularySelection)
+    })
+    await waitFor(() => expect(search).toHaveValue('方案'))
+  })
+
+  it('shows the opened candidate message for an inbox selection', async () => {
+    const api = createDemoApi()
+    render(<App apiClient={api} />)
+    await screen.findByText('Demo mode is active')
+
+    act(() => {
+      api.emitSelectionAddWord({
+        simplified: '重点',
+        traditional: '重點',
+        pinyin: 'zhòngdiǎn',
+        meaning: 'key point; main focus',
+        destination: 'inbox',
+        lessonBlocked: false,
+      })
+    })
+
+    expect(await screen.findByRole('heading', { name: 'Candidate Inbox' })).toBeInTheDocument()
+    expect(await screen.findByText('Opened the candidate for 重点.')).toBeInTheDocument()
   })
 
   it('lets the user choose between demo meanings before filling an Add Word form', async () => {

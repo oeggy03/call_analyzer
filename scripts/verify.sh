@@ -10,6 +10,7 @@ unformatted="$(
   find . -name '*.go' \
     -not -path './frontend/node_modules/*' \
     -not -path './native/macos-capture/.build/*' \
+    -not -path './native/macos-lookup/.build/*' \
     -not -path './build/*' \
     -exec gofmt -l {} +
 )"
@@ -54,8 +55,10 @@ else
     exit 1
   fi
   swift build -c release --package-path native/macos-capture
+  swift build -c release --package-path native/macos-lookup
   if xcrun --find xctest >/dev/null 2>&1; then
     (cd native/macos-capture && swift test)
+    (cd native/macos-lookup && swift test)
   else
     printf 'verify: skipped swift test (XCTest is not installed; full Xcode is required)\n'
   fi

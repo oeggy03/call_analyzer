@@ -12,6 +12,7 @@ import type {
   ManualVocabularyDraft,
   ManualVocabularyInput,
   ManualVocabularyVariant,
+  SelectionAddWordEvent,
   SettingsPatch,
   TargetApp,
   TranscriptSource,
@@ -170,6 +171,11 @@ type ManualVariantPrompt = {
   appliedIndex: number
 }
 
+type VocabularyFocusQuery = {
+  query: string
+  token: number
+}
+
 const EMPTY_MANUAL_VOCABULARY_FORM: ManualVocabularyForm = {
   simplified: '',
   traditional: '',
@@ -214,6 +220,10 @@ export function App({ apiClient = defaultApi }: AppProps) {
   const [manualForm, setManualForm] = useState<ManualVocabularyForm>(EMPTY_MANUAL_VOCABULARY_FORM)
   const [manualGeneration, setManualGeneration] = useState<ManualVocabularyDraft>()
   const [manualVariantPrompt, setManualVariantPrompt] = useState<ManualVariantPrompt>()
+  const [vocabularyFocusQuery, setVocabularyFocusQuery] = useState<VocabularyFocusQuery>({
+    query: '',
+    token: 0,
+  })
   const [photoQueue, setPhotoQueue] = useState<PhotoQueueItem[]>([])
   const [photoSuggestions, setPhotoSuggestions] = useState<PhotoSuggestion[]>([])
   const [photoInputError, setPhotoInputError] = useState<string>()
@@ -788,6 +798,85 @@ export function App({ apiClient = defaultApi }: AppProps) {
     })
   }
 
+  const handleSelectionAddWord = useCallback((event: SelectionAddWordEvent) => {
+    if (!event || typeof event.destination !== 'string') return
+
+    setActionError(undefined)
+    if (event.destination === 'vocabulary') {
+      setVocabularyFocusQuery((previous) => ({
+        query: event.simplified || event.traditional || '',
+        token: previous.token + 1,
+      }))
+      setActionMessage(undefined)
+      setActiveView('vocabulary')
+      return
+    }
+
+    if (event.destination === 'inbox') {
+      const word = event.simplified || event.traditional || event.pinyin
+      setActiveView('inbox')
+      setActionMessage(`Opened the candidate for ${word}.`)
+      return
+    }
+
+    if (event.destination !== 'add-word') return
+
+    manualGenerationRequest.current += 1
+    setActiveView('add-word')
+    const selectionForm: ManualVocabularyForm = {
+      ...EMPTY_MANUAL_VOCABULARY_FORM,
+      simplified: event.simplified,
+      traditional: event.traditional ?? '',
+      pinyin: event.pinyin,
+      meaning: event.meaning === 'No English gloss saved' ? '' : event.meaning,
+    }
+
+    if (event.draft) {
+      const draft = event.draft
+      const variants = draft.variants ?? []
+      setManualGeneration(draft)
+      if (draft.needsChoice) {
+        setManualFormValue(selectionForm)
+        setManualVariantPrompt({
+          headword: selectionForm.simplified.trim(),
+          origin: selectionForm,
+          variants,
+          appliedIndex: -1,
+        })
+        setActionMessage('Choose a meaning to fill the empty fields.')
+        return
+      }
+
+      setManualFormValue(manualVocabularyDraftToForm(draft))
+      if (variants.length >= 2) {
+        const appliedIndex = draft.appliedVariant >= 0 && draft.appliedVariant < variants.length
+          ? draft.appliedVariant
+          : -1
+        setManualVariantPrompt({
+          headword: selectionForm.simplified.trim(),
+          origin: selectionForm,
+          variants,
+          appliedIndex,
+        })
+      } else {
+        setManualVariantPrompt(undefined)
+      }
+      setActionMessage('Missing details generated. Review every field before saving.')
+      return
+    }
+
+    setManualFormValue(selectionForm)
+    setManualGeneration(undefined)
+    setManualVariantPrompt(undefined)
+    setActionMessage(
+      event.lessonBlocked
+        ? 'Missing-detail generation is available again after the active lesson finishes.'
+        : undefined,
+    )
+  }, [])
+
+  useEffect(() => apiClient.subscribeSelectionAddWord(handleSelectionAddWord), [apiClient, handleSelectionAddWord])
+
   const handleDeleteLastLesson = () => {
     if (['live', 'starting', 'stopping'].includes(current.lesson.status) || !current.lesson.id || busyAction) return
     if (
@@ -922,6 +1011,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
                       : undefined
                   }
                   onDelete={handleDeleteVocabulary}
+                  focusQuery={vocabularyFocusQuery}
                 />
               )}
               {activeView === 'settings' && (
@@ -2340,12 +2430,14 @@ function VocabularyView({
   isRefreshing,
   deletingEntryId,
   onDelete,
+  focusQuery,
 }: {
   entries: AppSnapshot['vocabulary']
   onRefresh: () => void
   isRefreshing: boolean
   deletingEntryId?: string
   onDelete: (entry: AppSnapshot['vocabulary'][number]) => void
+  focusQuery?: VocabularyFocusQuery
 }) {
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<VocabularyStatus | 'all'>('all')
@@ -2373,6 +2465,12 @@ function VocabularyView({
   useEffect(() => {
     setPage(1)
   }, [query, status, tag])
+
+  useEffect(() => {
+    if (!focusQuery?.query) return
+    setQuery(focusQuery.query)
+    setPage(1)
+  }, [focusQuery])
 
   return (
     <div className="view-stack">

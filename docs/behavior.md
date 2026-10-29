@@ -21,8 +21,37 @@ These rules are enforced in code, but they are easy to miss because the UI, the 
 - `App.DeleteVocabulary` removes a confirmed word and its senses, examples, evidence, tags, and study rows. The same transaction drops that word's pending outbox rows and writes `vocabulary.entry.deleted`.
 - The unique key is simplified form + traditional form + reading (`idx_vocabulary_dedup`).
 - Evidence text must appear inside the transcript after Chinese normalization (`NormalizeCandidate`).
-- If the model supplies no senses, lookup uses the five-entry map in `NewEmbeddedDictionary`. There is no CC-CEDICT import.
+- Lesson candidate extraction uses the five-entry map in `NewEmbeddedDictionary` when the model supplies no senses. There is no CC-CEDICT import.
 - `snapshot.go` labels a confirmed entry `mastered` when study repetitions are at least 5, and `review` when `due_at` is in the past. No Wails method calls `RecordReview`, so normal use leaves saved entries in `learning`.
+
+### Highlighted-word lookup
+
+- While the app process is running, `Command-Option-5` asks the separate
+  `call-analyzer-lookup` helper to read the highlighted text through the
+  macOS Accessibility API. It checks SQLite first for exact simplified or
+  traditional matches with status `confirmed` or `candidate`; the five-entry
+  embedded dictionary is not used. Saved readings appear as separate rows,
+  with at most three rows, and a candidate is hidden when a confirmed row has
+  the same reading.
+- When the local query returns no rows and the session cache misses,
+  `google/gemini-3.1-flash-lite` receives the word and, when Accessibility
+  provides it, a short surrounding sentence. The request allows 200 tokens,
+  disables reasoning, and uses the same Zero Data Retention and
+  data-collection-denial controls as other text chat. Successful glosses are
+  cached in memory for the app session, up to 64 entries, and usage is stored
+  under `selection-lookup`. The surrounding sentence is not shown in the
+  panel. The selected text is not logged or added to `AppSnapshot`.
+- The panel shows pinyin and a short English gloss, not an example sentence.
+  A complete confirmed entry opens Vocabulary; a candidate with an example
+  opens Candidate Inbox. Otherwise the action is **Add word**. Highlights
+  without Han text, with internal punctuation, or with more than 12 Han
+  characters show a notice without calling the model.
+- **Add word** uses the existing `GenerateManualVocabulary` path (default
+  model `qwen/qwen3-32b`) and opens Add Word for review; it does not save the
+  entry. During an active lesson, generation is skipped, the form is
+  prefilled with the characters, pinyin, and gloss, and the existing lesson
+  message remains. The `No English gloss saved` placeholder is left blank in
+  the form.
 
 ## Budget and privacy
 

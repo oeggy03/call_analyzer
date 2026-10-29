@@ -489,6 +489,81 @@ func (r *VocabularyRepository) ListVocabulary(ctx context.Context, limit int) ([
 	return r.listByStatus(ctx, domain.VocabularyStatusConfirmed, limit)
 }
 
+// ListMatchingSurface returns saved or candidate entries whose simplified or
+// traditional form exactly matches one of the supplied forms.
+func (r *VocabularyRepository) ListMatchingSurface(
+	ctx context.Context,
+	forms []string,
+) ([]domain.VocabularyEntry, error) {
+	normalizedForms := make([]string, 0, len(forms))
+	seenForms := make(map[string]struct{}, len(forms))
+	for _, form := range forms {
+		form = strings.TrimSpace(form)
+		if form == "" {
+			continue
+		}
+		if _, seen := seenForms[form]; seen {
+			continue
+		}
+		seenForms[form] = struct{}{}
+		normalizedForms = append(normalizedForms, form)
+	}
+	if len(normalizedForms) == 0 {
+		return []domain.VocabularyEntry{}, nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(normalizedForms)), ",")
+	args := make([]any, 0, len(normalizedForms)*2)
+	for _, form := range normalizedForms {
+		args = append(args, form)
+	}
+	for _, form := range normalizedForms {
+		args = append(args, form)
+	}
+	rows, err := r.store.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT id FROM vocabulary_entries
+		WHERE status IN ('confirmed', 'candidate')
+			AND (simplified IN (%s) OR traditional IN (%s))
+		ORDER BY CASE status
+			WHEN 'confirmed' THEN 0
+			ELSE 1
+		END, updated_at DESC`, placeholders, placeholders), args...)
+	if err != nil {
+		return nil, fmt.Errorf("vocabulary: list matching surface: %w", err)
+	}
+
+	ids := make([]string, 0)
+	seenIDs := make(map[string]struct{})
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("vocabulary: list matching surface scan: %w", err)
+		}
+		if _, seen := seenIDs[id]; seen {
+			continue
+		}
+		seenIDs[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("vocabulary: list matching surface rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("vocabulary: close matching surface rows: %w", err)
+	}
+
+	entries := make([]domain.VocabularyEntry, 0, len(ids))
+	for _, id := range ids {
+		entry, err := r.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
 func (r *VocabularyRepository) ObservationStats(
 	ctx context.Context,
 	entryID string,

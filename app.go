@@ -17,6 +17,7 @@ import (
 	"github.com/oeggy03/call_analyzer/internal/capture"
 	"github.com/oeggy03/call_analyzer/internal/domain"
 	"github.com/oeggy03/call_analyzer/internal/openrouter"
+	"github.com/oeggy03/call_analyzer/internal/selection"
 	"github.com/oeggy03/call_analyzer/internal/service"
 	"github.com/oeggy03/call_analyzer/internal/storage"
 )
@@ -24,11 +25,12 @@ import (
 const appEventPrefix = "call_analyzer:"
 
 type App struct {
-	mu        sync.RWMutex
-	ctx       context.Context
-	readiness ReadinessSnapshot
-	service   *service.Service
-	store     *storage.Store
+	mu              sync.RWMutex
+	ctx             context.Context
+	readiness       ReadinessSnapshot
+	service         *service.Service
+	store           *storage.Store
+	selectionRunner *selection.Runner
 }
 
 func NewApp() (*App, error) {
@@ -62,8 +64,9 @@ func NewAppWithDependencies(
 		syncSecretStore = syncSecrets[0]
 	}
 	app := &App{
-		store:   store,
-		service: service.NewWithSyncSecretStore(store, source, secrets, router, syncSecretStore),
+		store:           store,
+		service:         service.NewWithSyncSecretStore(store, source, secrets, router, syncSecretStore),
+		selectionRunner: selection.NewRunner(selection.Config{}),
 	}
 	app.service.SetEventHook(app.onServiceEvent)
 	return app
@@ -76,6 +79,11 @@ func (a *App) startup(ctx context.Context) {
 	if err := a.service.Initialize(ctx); err != nil {
 		a.emit("backend.error", err.Error())
 		return
+	}
+	if a.selectionRunner != nil {
+		if err := a.selectionRunner.Start(ctx, a.service); err != nil {
+			a.emit("backend.error", err.Error())
+		}
 	}
 	a.emit("backend.ready", a.service.Config(ctx))
 	go a.checkSupabaseAccess()
@@ -115,6 +123,9 @@ func (a *App) beforeClose(ctx context.Context) bool {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.selectionRunner != nil {
+		_ = a.selectionRunner.Stop(ctx)
+	}
 	_ = a.service.StopCapture(ctx)
 	flushCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	_ = a.service.Shutdown(flushCtx)
@@ -144,6 +155,11 @@ func (a *App) emit(name string, payload any) {
 }
 
 func (a *App) onServiceEvent(name string, payload any) {
+	if name == "selection.add-word" {
+		ctx := a.context()
+		runtime.WindowUnminimise(ctx)
+		runtime.WindowShow(ctx)
+	}
 	a.emit(name, payload)
 	if name == "snapshot_changed" || name == "capture.levels" {
 		return

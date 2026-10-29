@@ -6,6 +6,7 @@ WAILS_BIN="${WAILS_BIN:-$(go env GOPATH)/bin/wails}"
 APP_PATH="${ROOT_DIR}/build/bin/call_analyzer.app"
 HELPER_DIR="${ROOT_DIR}/build/native"
 HELPER_PATH="${HELPER_DIR}/call-analyzer-capture"
+LOOKUP_HELPER_PATH="${HELPER_DIR}/call-analyzer-lookup"
 SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -20,6 +21,8 @@ fi
 
 CALL_ANALYZER_CAPTURE_OUTPUT_DIR="${HELPER_DIR}" \
   "${ROOT_DIR}/scripts/build-macos-capture.sh"
+CALL_ANALYZER_LOOKUP_OUTPUT_DIR="${HELPER_DIR}" \
+  "${ROOT_DIR}/scripts/build-macos-lookup.sh"
 (
   cd "${ROOT_DIR}"
   "${WAILS_BIN}" build -clean -platform darwin/arm64
@@ -31,11 +34,14 @@ if [[ ! -d "${APP_PATH}" ]]; then
 fi
 
 install -m 755 "${HELPER_PATH}" "${APP_PATH}/Contents/MacOS/call-analyzer-capture"
+install -m 755 "${LOOKUP_HELPER_PATH}" "${APP_PATH}/Contents/MacOS/call-analyzer-lookup"
 
 # Sign the nested executable first, then the app. "-" performs ad-hoc signing
 # for local development; set APPLE_SIGNING_IDENTITY for stable distribution.
 codesign --force --sign "${SIGNING_IDENTITY}" \
   "${APP_PATH}/Contents/MacOS/call-analyzer-capture"
+codesign --force --sign "${SIGNING_IDENTITY}" \
+  "${APP_PATH}/Contents/MacOS/call-analyzer-lookup"
 codesign --force --deep --sign "${SIGNING_IDENTITY}" "${APP_PATH}"
 codesign --verify --deep --strict "${APP_PATH}"
 

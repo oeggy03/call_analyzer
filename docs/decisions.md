@@ -10,6 +10,19 @@ The React app calls `window.go.main.App` only from `frontend/src/lib/api.ts`. Mo
 
 `native/macos-capture` is the ScreenCaptureKit, microphone, and Vision helper. Go starts it and reads JSON lines (`internal/capture/macos`). The Live view requests system audio across apps; Zoom does not need to be running. The helper writes 2-second 16 kHz mono chunks, and Go owns utterance windows (`internal/service/capture_pipeline.go`).
 
+## Selection lookup has its own model and helper
+
+The highlighted-word path is separate from lesson analysis because it has its
+own prompt and schema, lookup model, 200-token limit, reasoning setting,
+in-memory cache, and `selection-lookup` usage id. It handles one selected
+surface and optional surrounding context; the analyzer handles transcript
+extraction.
+
+`call-analyzer-lookup` is a separate `LSUIElement` process because it owns the
+global shortcut, Accessibility reads, and AppKit panel. Go starts and stops it
+through `internal/selection` and exchanges JSON lines. A missing helper is
+optional at app startup.
+
 ## The API key is not a database setting
 
 `NewDefaultSecretStore` on Darwin checks `OPENROUTER_API_KEY`, then Keychain (`internal/service/secret_darwin.go`). `SaveSettings` writes other preferences as JSON rows. The snapshot exposes only `openRouterKeyConfigured`.

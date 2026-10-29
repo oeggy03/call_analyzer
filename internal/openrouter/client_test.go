@@ -117,6 +117,48 @@ func TestTranscribeAndChatRequestContracts(t *testing.T) {
 	}
 }
 
+func TestChatJSONSupportsLookupModelAndMaxTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode chat request: %v", err)
+		}
+		if payload["model"] != DefaultLookupModel || payload["max_tokens"] != float64(200) {
+			t.Fatalf("unexpected lookup request model or token limit: %#v", payload)
+		}
+		if payload["zdr"] != true {
+			t.Fatalf("lookup request did not require top-level ZDR: %#v", payload)
+		}
+		provider, _ := payload["provider"].(map[string]any)
+		if provider["require_parameters"] != true ||
+			provider["data_collection"] != "deny" ||
+			provider["zdr"] != true {
+			t.Fatalf("lookup request did not require provider privacy controls: %#v", provider)
+		}
+		reasoning, _ := payload["reasoning"].(map[string]any)
+		if reasoning["effort"] != "none" {
+			t.Fatalf("lookup request did not disable reasoning: %#v", payload["reasoning"])
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"entries\":[]}"}}]}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{BaseURL: server.URL}, testKeyProvider{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ChatJSON(context.Background(), ChatRequest{
+		Prompt:           "学习",
+		Model:            "  " + DefaultLookupModel + " ",
+		MaxTokens:        200,
+		DisableReasoning: true,
+		SchemaName:       "selection_lookup",
+		Schema:           map[string]any{"type": "object"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRetriesRateLimit(t *testing.T) {
 	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

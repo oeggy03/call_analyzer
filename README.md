@@ -64,6 +64,8 @@ open build/bin/call_analyzer.app
 The first capture request opens macOS privacy controls. Allow Screen & System
 Audio Recording and, only if microphone capture is enabled in Settings,
 Microphone access. Restart the app after changing macOS privacy permissions.
+Selection lookup separately requires Accessibility permission for
+`call-analyzer-lookup`; it does not use Screen Recording.
 
 For frontend-only work with deterministic sample data:
 
@@ -79,10 +81,14 @@ For a Wails development session:
 ./scripts/dev.sh
 ```
 
-That builds the helper, then starts Wails. The same two steps are `scripts/build-macos-capture.sh` and `wails dev`.
+That builds the capture helper and the lookup helper, then starts Wails. The
+underlying commands are `scripts/build-macos-capture.sh`,
+`scripts/build-macos-lookup.sh`, and `wails dev`.
 
 The helper can be overridden with
 `CALL_ANALYZER_CAPTURE_HELPER=/absolute/path/to/call-analyzer-capture`.
+The lookup helper can be overridden with
+`CALL_ANALYZER_LOOKUP_HELPER=/absolute/path/to/call-analyzer-lookup`.
 
 ## Using the MVP
 
@@ -95,6 +101,10 @@ The helper can be overridden with
 4. Press `M` or click **Mark Moment** for important words.
 5. Confirm, edit, merge, or reject suggestions in Candidate Inbox.
 6. Confirmed entries appear in Vocabulary immediately. Deleting a saved word removes it locally and queues that delete for cloud sync.
+7. While Call Analyzer is running, highlight a Chinese word and press
+   `Command-Option-5` to review its pinyin and gloss, then choose **Add word**
+   to review it in Add Word or **Open** the matching Vocabulary or Candidate
+   Inbox entry.
 
 You can also open **Add Word** and enter only the simplified Chinese word.
 **Generate missing details** uses the configured analyzer (Qwen 3 32B by

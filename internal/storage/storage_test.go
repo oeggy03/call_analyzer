@@ -368,6 +368,80 @@ func TestSQLiteRepositoriesAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestListMatchingSurfaceUsesExactSavedFormsAndLoadsChildren(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	confirmed, err := store.Vocabulary().UpsertCandidate(ctx, domain.VocabularyEntry{
+		Simplified:  "学习",
+		Traditional: "學習",
+		Reading:     "xue2 xi2",
+		Senses:      []domain.Sense{{Gloss: "to study", SortOrder: 0}},
+		Examples: []domain.Example{{
+			Simplified:  "我学习中文。",
+			Reading:     "wo3 xue2 xi2 zhong1 wen2",
+			Translation: "I study Chinese.",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Vocabulary().Confirm(ctx, confirmed.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	rejected, err := store.Vocabulary().UpsertCandidate(ctx, domain.VocabularyEntry{
+		Simplified:  "谢谢",
+		Traditional: "謝謝",
+		Reading:     "xie4 xie4",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Vocabulary().Reject(ctx, rejected.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	matched, err := store.Vocabulary().ListMatchingSurface(ctx, []string{"学习"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matched) != 1 || matched[0].ID != confirmed.ID {
+		t.Fatalf("simplified exact match = %#v", matched)
+	}
+	if len(matched[0].Senses) != 1 || matched[0].Senses[0].Gloss != "to study" ||
+		len(matched[0].Examples) != 1 {
+		t.Fatalf("matching entry children were not loaded: %#v", matched[0])
+	}
+
+	matched, err = store.Vocabulary().ListMatchingSurface(ctx, []string{"學習"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matched) != 1 || matched[0].ID != confirmed.ID {
+		t.Fatalf("traditional exact match = %#v", matched)
+	}
+	if matched, err := store.Vocabulary().ListMatchingSurface(ctx, []string{"学"}); err != nil {
+		t.Fatal(err)
+	} else if len(matched) != 0 {
+		t.Fatalf("longer word matched a shorter query: %#v", matched)
+	}
+	if matched, err := store.Vocabulary().ListMatchingSurface(ctx, []string{"谢谢"}); err != nil {
+		t.Fatal(err)
+	} else if len(matched) != 0 {
+		t.Fatalf("rejected word matched: %#v", matched)
+	}
+	if matched, err := store.Vocabulary().ListMatchingSurface(ctx, []string{"", "  "}); err != nil {
+		t.Fatal(err)
+	} else if matched == nil || len(matched) != 0 {
+		t.Fatalf("blank forms did not return an empty slice: %#v", matched)
+	}
+}
+
 func TestLessonDeleteRemovesOrphanCandidate(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, ":memory:")

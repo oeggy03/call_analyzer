@@ -41,17 +41,19 @@ The app does not load `.env` files. `.env.example` lists the process environment
 | `SUPABASE_URL` | Optional vocabulary PostgREST endpoint override. Defaults to the configured hosted Supabase project. |
 | `CALL_ANALYZER_CAPTURE_HELPER` | Absolute helper path; tried before `CALL_ANALYZER_CAPTURE_BIN`, the executable-adjacent helper, and `build/bin/call-analyzer-capture`. See `resolveHelperPath`. |
 | `CALL_ANALYZER_CAPTURE_BIN` | Alternate helper path. |
+| `CALL_ANALYZER_LOOKUP_HELPER` | Selection-helper path; tried before the executable-adjacent `call-analyzer-lookup` and `build/bin/call-analyzer-lookup`. |
 | `WAILS_BIN` | Wails CLI used by `scripts/setup.sh`, `scripts/dev.sh`, and `scripts/build-macos-app.sh`. |
 | `APPLE_SIGNING_IDENTITY` | Passed to `codesign` by `scripts/build-macos-app.sh`. Default `-` is ad-hoc. |
 | `CALL_ANALYZER_CAPTURE_OUTPUT_DIR` | Helper install directory for `scripts/build-macos-capture.sh`. |
 | `CALL_ANALYZER_CAPTURE_SWIFT_SCRATCH` | Swift package scratch directory used by `scripts/build-macos-capture.sh`. |
+| `CALL_ANALYZER_LOOKUP_SWIFT_SCRATCH` | Swift package scratch directory used by `scripts/build-macos-lookup.sh`. |
 
 There is no database server, Redis, or other local service. Most tests open SQLite with `storage.Open(ctx, ":memory:")`; persistence and migration tests use temporary database files.
 
 Tests follow their language conventions: Go `_test.go` files stay beside their
 package code, Vitest specs and setup live in `frontend/src/test`, and Swift
-tests live in `native/macos-capture/Tests`. Synthetic evaluation cases live in
-`fixtures/evaluation`.
+tests live under `native/macos-capture/Tests` and `native/macos-lookup/Tests`.
+Synthetic evaluation cases live in `fixtures/evaluation`.
 
 ## Fixtures and offline checks
 
@@ -75,7 +77,8 @@ Desktop session, after setup:
 ./scripts/dev.sh
 ```
 
-That builds the helper with `scripts/build-macos-capture.sh`, then runs `wails dev`.
+That builds the capture helper with `scripts/build-macos-capture.sh` and the
+lookup helper with `scripts/build-macos-lookup.sh`, then runs `wails dev`.
 
 UI demo without capture:
 
@@ -101,7 +104,8 @@ The script exits non-zero on the first failed check. It runs:
 3. `go test` and `go vet` for `go list ./...`, excluding `/frontend/node_modules/`.
 4. `go run ./cmd/evaluate` with no `-execute` flag.
 5. On macOS, `swift build -c release` for `native/macos-capture`.
-6. `swift test` in that package only when `xcrun --find xctest` succeeds.
+6. On macOS, `swift build -c release` for `native/macos-lookup`.
+7. `swift test` in both Swift packages only when `xcrun --find xctest` succeeds.
 
 `assets.go` embeds `frontend/dist`. The frontend build is step 2 so a fresh clone can compile package main. `./scripts/setup.sh` also runs that build.
 
@@ -113,7 +117,7 @@ For focused checks while iterating, use the relevant package or boundary:
 | Wails method or snapshot | After building the frontend if `frontend/dist` is absent, run `go test -count=1 -run TestWailsMethodsMatchFrontendContract .`, then `cd frontend && npm run typecheck && npm test -- --run` |
 | React UI | `cd frontend && npm run typecheck && npm test -- --run && npm run lint` |
 | SQL migration | `go test ./internal/storage` |
-| Swift helper or macOS adapter | `swift build -c release --package-path native/macos-capture`; run `swift test` in that directory when full Xcode is installed |
+| Swift helper or macOS adapter | `swift build -c release --package-path native/macos-capture`; `swift build -c release --package-path native/macos-lookup`; run `swift test` in each directory when full Xcode is installed |
 
 Run `./scripts/verify.sh` before finishing a cross-component change.
 
@@ -129,6 +133,7 @@ GitHub Actions runs the same script on `macos-latest` after `npm ci --prefix fro
 | `go test ./...` mentions `flatted` | Use `./scripts/verify.sh`. The `flatted` npm package contains a `.go` file, and this module otherwise compiles it. |
 | `no such module 'XCTest'` | Expected without full Xcode. Install Xcode to run `swift test`, or rely on the script's skip. |
 | Helper not found | Build it with `./scripts/build-macos-capture.sh`, or set `CALL_ANALYZER_CAPTURE_HELPER`. |
+| Lookup helper not found | Build it with `./scripts/build-macos-lookup.sh`, or set `CALL_ANALYZER_LOOKUP_HELPER`. |
 | Screen Recording or microphone changes do nothing | The root README says to restart the app after changing macOS privacy permissions. |
 | Settings will not clear the API key | `OPENROUTER_API_KEY` is set in the environment. |
 | `wails: command not found` | The install path is `$(go env GOPATH)/bin/wails`. `./scripts/dev.sh` uses that path, or `WAILS_BIN`. |

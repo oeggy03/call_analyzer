@@ -11,6 +11,7 @@ Package roles are listed in `README.md`. This file is the boundary and flow map.
 | Lesson service | `internal/service/service.go`, `capture_pipeline.go` | capture, OpenRouter, storage, vocabulary | `capture.Source`, `openrouter.Client`, `storage.Store` |
 | Capture | `internal/capture/capture.go` | macOS adapter on Darwin, `MockSource` otherwise | `Source`, plus optional `ConfigurableSource`, `EventSource`, `TargetSource` |
 | Helper process | `internal/capture/macos` | `native/macos-capture` | JSON-line events. Commands are in `native/macos-capture/Sources/call-analyzer-capture/CLI.swift`. |
+| Selection lookup | `internal/selection`, `internal/service/selection_lookup.go` | `native/macos-lookup`, Wails runtime events | JSON-line lookup/add requests and `call_analyzer:selection.add-word` events |
 | Model HTTP | `internal/openrouter/client.go` | OpenRouter | Audio transcription, text chat, and vision chat |
 | Database | `internal/storage/store.go` | embedded SQL | `internal/storage/migrations/*.sql`, applied in filename order |
 | Vocabulary rules | `internal/vocabulary/vocabulary.go` | used by `internal/service/vocabulary.go` | `NormalizeCandidate`, `ExtractionSchema` |
@@ -29,6 +30,25 @@ Domain structs in `internal/domain/domain.go` are the storage and service shapes
 5. The adapter starts `call-analyzer-capture`. Resolution order is in `resolveHelperPath`.
 
 `ValidateTarget` performs the capture readiness check. For the system target it does not require a specific running app. `macos.Source.Configure` passes the system target to the helper.
+
+## Look up a highlighted word
+
+1. After service initialization, `App.startup` starts the optional selection
+   runner. `call-analyzer-lookup` registers `Command-Option-5`, reads the
+   focused app's selected text, optional surrounding context, and bounds
+   through Accessibility, then sends a JSON-line lookup request.
+   A missing helper does not block startup, and `App.shutdown` stops the
+   runner.
+2. `Service.LookupSelection` validates the surface, checks exact local
+   confirmed/candidate vocabulary and its session cache, and calls the
+   selection model only when the local query returns no rows and the cache
+   misses. The helper renders at most three pinyin/gloss rows.
+3. Choosing **Add word** sends a JSON-line add request. `Service.AddSelection`
+   either generates a non-persistent manual-vocabulary draft or, during a
+   lesson, emits the prefilled lesson-blocked event without generating.
+4. `App.onServiceEvent` brings the Wails window forward and emits
+   `call_analyzer:selection.add-word`; React opens Add Word for review or
+   focuses Vocabulary/Candidate Inbox. The add action never saves the entry.
 
 ## Live audio to a candidate
 
