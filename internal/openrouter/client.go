@@ -23,6 +23,7 @@ const (
 	DefaultBaseURL     = "https://openrouter.ai"
 	DefaultASRModel    = "qwen/qwen3-asr-1.7b"
 	DefaultChatModel   = "qwen/qwen3-32b"
+	DefaultLookupModel = "google/gemini-3.1-flash-lite"
 	DefaultVisionModel = "qwen/qwen3.7-flash"
 )
 
@@ -218,6 +219,8 @@ type ChatRequest struct {
 	System           string
 	SchemaName       string
 	Schema           map[string]any
+	Model            string
+	MaxTokens        int
 	Temperature      *float64
 	DisableReasoning bool
 }
@@ -242,6 +245,7 @@ type chatPayload struct {
 	ResponseFormat responseFormat   `json:"response_format"`
 	Provider       providerRules    `json:"provider"`
 	ZDR            bool             `json:"zdr"`
+	MaxTokens      int              `json:"max_tokens,omitempty"`
 	Temperature    *float64         `json:"temperature,omitempty"`
 	Reasoning      *visionReasoning `json:"reasoning,omitempty"`
 }
@@ -285,20 +289,24 @@ func (c *Client) ChatJSON(ctx context.Context, request ChatRequest) (ChatRespons
 		if errors.As(err, &httpErr) &&
 			httpErr.StatusCode == http.StatusBadRequest &&
 			strings.Contains(strings.ToLower(httpErr.Body), "reasoning") {
+			firstUsage := result.Usage
 			result = chatEnvelope{}
 			err = c.doWithRetry(ctx, c.chatRequest(ctx, request, false), &result)
+			if result.Usage == (Usage{}) {
+				result.Usage = firstUsage
+			}
 		}
 	}
 	if err != nil {
-		return ChatResponse{}, err
+		return ChatResponse{Usage: result.Usage}, err
 	}
 	c.budget.Add(result.Usage.Cost)
 	if len(result.Choices) == 0 {
-		return ChatResponse{}, errors.New("openrouter: chat response has no choices")
+		return ChatResponse{Usage: result.Usage}, errors.New("openrouter: chat response has no choices")
 	}
 	content, err := decodeMessageContent(result.Choices[0].Message.Content)
 	if err != nil {
-		return ChatResponse{}, err
+		return ChatResponse{Usage: result.Usage}, err
 	}
 	return ChatResponse{Content: content, Usage: result.Usage}, nil
 }
@@ -314,8 +322,12 @@ func (c *Client) chatRequest(ctx context.Context, request ChatRequest, disableRe
 			messages = append(messages, chatMessage{Role: "system", Content: request.System})
 		}
 		messages = append(messages, chatMessage{Role: "user", Content: request.Prompt})
+		model := strings.TrimSpace(request.Model)
+		if model == "" {
+			model = c.chatModel
+		}
 		payload := chatPayload{
-			Model:    c.chatModel,
+			Model:    model,
 			Messages: messages,
 			ResponseFormat: responseFormat{
 				Type: "json_schema",
@@ -331,6 +343,7 @@ func (c *Client) chatRequest(ctx context.Context, request ChatRequest, disableRe
 				ZDR:               true,
 			},
 			ZDR:         true,
+			MaxTokens:   request.MaxTokens,
 			Temperature: request.Temperature,
 		}
 		if disableReasoning {
@@ -643,6 +656,15 @@ func (c *Client) doWithRetry(ctx context.Context, requestFactory func() (*http.R
 			return nil
 		}
 		lastErr = &HTTPError{StatusCode: response.StatusCode, Body: string(data)}
+		var errorEnvelope struct {
+			Usage Usage `json:"usage"`
+		}
+		if json.Unmarshal(data, &errorEnvelope) == nil &&
+			errorEnvelope.Usage != (Usage{}) {
+			if envelope, ok := output.(*chatEnvelope); ok {
+				envelope.Usage = errorEnvelope.Usage
+			}
+		}
 		if !retryableStatus(response.StatusCode) || attempt == c.maxRetries {
 			return lastErr
 		}

@@ -1739,6 +1739,35 @@ kbd {
   font-size: 9px;
 }
 
+.existing-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.existing-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-toggle {
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink-800);
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.tag-toggle-on {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+  color: var(--navy);
+}
+
 .candidate-actions {
   display: flex;
   align-items: center;

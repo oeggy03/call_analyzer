@@ -33,20 +33,22 @@ Vitest specs and shared setup live in `src/test`.
 `BACKEND_METHODS`. That object is the method list; do not keep a second copy
 here. `contract_test.go` fails when a listed name is missing on `App`.
 
-Most methods return `AppSnapshot`. Four methods return dedicated result types:
+Most methods return `AppSnapshot`. Five methods return dedicated result types:
 `GenerateManualVocabulary` returns `ManualVocabularyDraft`,
 `RecognizeVocabularyPhoto` returns `PhotoVocabularyDraft`,
-`ListLessonTranscripts` returns `[]LessonTranscriptSummary`, and
-`GetLessonTranscript` returns `LessonTranscript`. Argument shapes are the
+`ListLessonTranscripts` returns `[]LessonTranscriptSummary`,
+`GetLessonTranscript` returns `LessonTranscript`, and `ListTags` returns
+`[]string`. Argument shapes are the
 structs in `app_contract.go` and `src/lib/types.ts`. `StartLesson` and
 `SaveSettings` receive one object.
 Confirm, reject, merge, and vocabulary delete receive positional IDs. `EditCandidate` receives
 `(candidateID, patch)`; `app.go` maps patch `pinyin` onto `reading`.
 
-The runtime event `call_analyzer:snapshot_changed` is subscribed to when
-`window.runtime.EventsOn` exists. An event payload may be an `AppSnapshot`; if
-it is not, the frontend fetches a fresh snapshot. The event names are
-`BACKEND_EVENTS`.
+The runtime events `call_analyzer:snapshot_changed` and
+`call_analyzer:selection.add-word` are subscribed to when
+`window.runtime.EventsOn` exists. A snapshot event payload may be an
+`AppSnapshot`; if it is not, the frontend fetches a fresh snapshot. The event
+names are `BACKEND_EVENTS`.
 
 Domain types in `src/lib/types.ts` use **camelCase** consistently. The Go
 methods should expose JSON with camelCase keys (for example `capturePermission`,

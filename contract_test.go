@@ -35,6 +35,7 @@ func TestWailsMethodsMatchFrontendContract(t *testing.T) {
 		"RecognizeVocabularyPhoto": reflect.TypeOf(PhotoVocabularyDraft{}),
 		"ListLessonTranscripts":    reflect.TypeOf([]LessonTranscriptSummary{}),
 		"GetLessonTranscript":      reflect.TypeOf(LessonTranscript{}),
+		"ListTags":                 reflect.TypeOf([]string{}),
 	}
 	seen := map[string]bool{}
 	for _, match := range matches {

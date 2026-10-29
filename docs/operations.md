@@ -11,13 +11,19 @@ On macOS, after `./scripts/setup.sh`:
 open build/bin/call_analyzer.app
 ```
 
-The script builds the Swift helper, runs `wails build -clean -platform darwin/arm64`, copies `call-analyzer-capture` into `Contents/MacOS`, and codesigns the helper and the bundle. `APPLE_SIGNING_IDENTITY` defaults to `-` (ad-hoc). The bundle id and usage strings are in `build/darwin/Info.plist`.
+The script builds both Swift helpers, runs `wails build -clean -platform darwin/arm64`, copies `call-analyzer-capture` and `call-analyzer-lookup` into `Contents/MacOS` next to each other, and codesigns both nested helpers and the bundle. `APPLE_SIGNING_IDENTITY` defaults to `-` (ad-hoc). The bundle id and usage strings are in `build/darwin/Info.plist`.
 
 `build/bin/` is gitignored.
 
 ## Permissions
 
 The first capture request opens macOS privacy controls. Screen & System Audio Recording is required. Microphone access is required only when microphone capture is enabled in Settings. Restart the app after changing those permissions.
+
+Selection lookup requires Accessibility permission for `call-analyzer-lookup`
+in System Settings → Privacy & Security → Accessibility; granting it only to
+the main bundle is insufficient. This feature does not use Screen Recording.
+Ad-hoc signing can make macOS ask for Accessibility again after a rebuild, so
+grant the helper permission again when prompted.
 
 The helper's plist is `native/macos-capture/Sources/call-analyzer-capture/Info.plist`.
 
@@ -31,7 +37,7 @@ The helper's plist is `native/macos-capture/Sources/call-analyzer-capture/Info.p
 | Supabase URL | `SUPABASE_URL`, defaulting to `https://zoiwsytnyrdifggwleru.supabase.co` | Used only by the vocabulary PostgREST client. |
 | Capture audio | A temp directory created by `createSessionSpool` | 16 kHz mono chunks are deleted as the adapter reads them. The session spool is removed on stop; stale directories with no live owner are removed during source initialization and before a new session. |
 | Settings | `settings` table | JSON values. Keys are the constants in `internal/service/settings.go`. |
-| Model usage | `request_usage` | Per lesson id, plus `manual-vocabulary` for Add Word generation and `photo-vocabulary` for photo recognition. |
+| Model usage | `request_usage` | Per lesson id, plus `manual-vocabulary` for Add Word generation, `photo-vocabulary` for photo recognition, and `selection-lookup` for highlighted-word lookup. |
 
 The selected audio-retention label is stored on lesson metadata, but the helper currently removes audio at the end of capture regardless of that setting.
 

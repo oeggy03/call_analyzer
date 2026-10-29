@@ -46,6 +46,7 @@ These instructions authorize the orchestrator to delegate implementation work wi
 - Never put the OpenRouter key in SQLite, logs, or `AppSnapshot`. The UI receives only `openRouterKeyConfigured`. On macOS the environment value precedes Keychain.
 - Transcription and standard chat requests ask for Zero Data Retention and deny data collection. Vision photo-recognition chat intentionally omits those controls; inspect `internal/openrouter/client.go` before making claims about provider privacy flags. Provider flags are separate from local audio retention.
 - macOS `Source.Configure` maps system-audio aliases to its system-audio source and accepts a nonblank explicit bundle ID. Wails currently limits lesson targets in `validTarget`; Zoom is a default option, not the only app the capture source can target. Check both boundaries before claiming a target is supported in the UI. Swift emits 2-second chunks; Go assembles utterance windows in `internal/service/capture_pipeline.go`.
+- The selection lookup helper is separate from capture. `helperEnvironment` removes `OPENROUTER_API_KEY` and `SUPABASE_SECRET_KEY` before that process starts. Selection text must not be logged or stored in `AppSnapshot`. Non-Darwin builds keep `internal/selection.Runner` as a no-op.
 - `loadSettings` forces sync off. The app does not start `internal/sync.Dispatcher`; never sync the SQLite file.
 - The vocabulary sync runner is a separate cross-platform goroutine started by
   `Service.Initialize`; it does not use or revive the legacy `SyncEnabled` flag.

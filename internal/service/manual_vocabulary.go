@@ -23,7 +23,7 @@ const (
 
 	manualVocabularyMaxTags         = 32
 	manualVocabularyMaxTagRunes     = 64
-	manualVocabularyMaxWordRunes    = 64
+	manualVocabularyMaxWordRunes    = 2000
 	manualVocabularyMaxShortRunes   = 256
 	manualVocabularyMaxMeaningRunes = 1000
 	manualVocabularyMaxExampleRunes = 2000
@@ -285,7 +285,15 @@ func (s *Service) GenerateManualVocabulary(
 	ctx context.Context,
 	input ManualVocabularyInput,
 ) (ManualVocabularyDraft, error) {
-	if s.HasActiveLesson() {
+	return s.generateManualVocabulary(ctx, input, true)
+}
+
+func (s *Service) generateManualVocabulary(
+	ctx context.Context,
+	input ManualVocabularyInput,
+	blockDuringLesson bool,
+) (ManualVocabularyDraft, error) {
+	if blockDuringLesson && s.HasActiveLesson() {
 		return ManualVocabularyDraft{}, errors.New(
 			"manual vocabulary: finish the active lesson before generating word details",
 		)

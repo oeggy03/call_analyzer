@@ -34,6 +34,10 @@ export function ListLessonTranscripts(arg1) {
   return window['go']['main']['App']['ListLessonTranscripts'](arg1);
 }
 
+export function ListTags() {
+  return window['go']['main']['App']['ListTags']();
+}
+
 export function MarkMoment() {
   return window['go']['main']['App']['MarkMoment']();
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the capture helper and start the Wails desktop session.
+# Build the native helpers and start the Wails desktop session.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,4 +17,5 @@ if [[ ! -x "${wails_bin}" ]]; then
 fi
 
 "${ROOT_DIR}/scripts/build-macos-capture.sh"
+"${ROOT_DIR}/scripts/build-macos-lookup.sh"
 exec "${wails_bin}" dev

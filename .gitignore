@@ -8,6 +8,8 @@
 /build/native/
 /native/macos-capture/.build/
 /native/macos-capture/.swiftpm/
+/native/macos-lookup/.build/
+/native/macos-lookup/.swiftpm/
 
 # Local databases and captured media
 *.db

@@ -57,6 +57,7 @@ type Service struct {
 	settings        RuntimeSettings
 	settingsLoaded  bool
 	eventHook       EventHook
+	selectionCache  selectionLookupCache
 	databasePath    string
 	syncEnabled     bool
 }

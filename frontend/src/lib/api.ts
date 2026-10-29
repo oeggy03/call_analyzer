@@ -15,6 +15,7 @@ import type {
   ManualVocabularyInput,
   ManualVocabularyVariant,
   PhotoVocabularyDraft,
+  SelectionAddWordEvent,
   TargetApp,
 } from './types'
 import type { VocabularyEntry } from './types'
@@ -55,6 +56,7 @@ export const BACKEND_METHODS = {
   recognizeVocabularyPhoto: 'RecognizeVocabularyPhoto',
   saveManualVocabulary: 'SaveManualVocabulary',
   listLessonTranscripts: 'ListLessonTranscripts',
+  listTags: 'ListTags',
   getLessonTranscript: 'GetLessonTranscript',
   requestCapturePermission: 'RequestCapturePermission',
   startLesson: 'StartLesson',
@@ -75,6 +77,7 @@ export const BACKEND_METHODS = {
 export const BACKEND_EVENTS = {
   snapshotChanged: 'call_analyzer:snapshot_changed',
   captureLevels: 'call_analyzer:capture.levels',
+  selectionAddWord: 'call_analyzer:selection.add-word',
 } as const
 
 export type ApiMode = 'runtime' | 'demo' | 'unavailable'
@@ -87,6 +90,7 @@ export interface AppApi {
   recognizeVocabularyPhoto(imageBase64: string): Promise<PhotoVocabularyDraft>
   saveManualVocabulary(input: ManualVocabularyInput): Promise<AppSnapshot>
   listLessonTranscripts(limit: number): Promise<LessonTranscriptSummary[]>
+  listTags(): Promise<string[]>
   getLessonTranscript(lessonId: string): Promise<LessonTranscript>
   requestCapturePermission(): Promise<AppSnapshot>
   startLesson(input: StartLessonInput): Promise<AppSnapshot>
@@ -103,6 +107,7 @@ export interface AppApi {
   deleteLastLesson(): Promise<AppSnapshot>
   refresh(): Promise<AppSnapshot>
   subscribe(listener: (snapshot: AppSnapshot) => void): () => void
+  subscribeSelectionAddWord(listener: (event: SelectionAddWordEvent) => void): () => void
 }
 
 export class ApiUnavailableError extends Error {
@@ -769,6 +774,7 @@ class DemoApi implements AppApi {
   readonly mode = 'demo' as const
   private snapshot = createDemoSnapshot()
   private listener?: (snapshot: AppSnapshot) => void
+  private selectionAddWordListeners = new Set<(event: SelectionAddWordEvent) => void>()
   private nextMoment = 1
 
   async getSnapshot(): Promise<AppSnapshot> {
@@ -864,6 +870,17 @@ class DemoApi implements AppApi {
       model: this.snapshot.settings.visionModel,
       cost,
     }
+  }
+
+  async listTags(): Promise<string[]> {
+    const names = new Set<string>()
+    for (const entry of [...this.snapshot.vocabulary, ...this.snapshot.candidates]) {
+      for (const tag of entry.tags) {
+        const name = tag.trim()
+        if (name) names.add(name)
+      }
+    }
+    return [...names].sort((left, right) => left.localeCompare(right))
   }
 
   async listLessonTranscripts(limit: number): Promise<LessonTranscriptSummary[]> {
@@ -1116,6 +1133,15 @@ class DemoApi implements AppApi {
     }
   }
 
+  subscribeSelectionAddWord(listener: (event: SelectionAddWordEvent) => void): () => void {
+    this.selectionAddWordListeners.add(listener)
+    return () => this.selectionAddWordListeners.delete(listener)
+  }
+
+  emitSelectionAddWord(event: SelectionAddWordEvent): void {
+    for (const listener of this.selectionAddWordListeners) listener(event)
+  }
+
   private findCandidate(candidateId: string): Candidate {
     const candidate = this.snapshot.candidates.find((item) => item.id === candidateId)
     if (!candidate) throw new ApiValidationError('Candidate no longer exists.')
@@ -1159,6 +1185,14 @@ class RuntimeApi implements AppApi {
 
   async saveManualVocabulary(input: ManualVocabularyInput): Promise<AppSnapshot> {
     return this.callMutation(BACKEND_METHODS.saveManualVocabulary, input)
+  }
+
+  async listTags(): Promise<string[]> {
+    const result = await this.call(BACKEND_METHODS.listTags, [])
+    if (!Array.isArray(result) || !result.every((tag) => typeof tag === 'string')) {
+      throw new ApiUnavailableError(`Backend method ${BACKEND_METHODS.listTags} returned invalid tags.`)
+    }
+    return result
   }
 
   async listLessonTranscripts(limit: number): Promise<LessonTranscriptSummary[]> {
@@ -1270,6 +1304,23 @@ class RuntimeApi implements AppApi {
     }
   }
 
+  subscribeSelectionAddWord(listener: (event: SelectionAddWordEvent) => void): () => void {
+    const eventsOn = window.runtime?.EventsOn
+    if (!eventsOn) return () => undefined
+
+    const callback = (...args: unknown[]) => {
+      const possibleEvent = args[0]
+      if (isRecord(possibleEvent) && typeof possibleEvent.destination === 'string') {
+        listener(possibleEvent as unknown as SelectionAddWordEvent)
+      }
+    }
+    const cleanup = eventsOn(BACKEND_EVENTS.selectionAddWord, callback)
+    return () => {
+      if (typeof cleanup === 'function') cleanup()
+      else window.runtime?.EventsOff?.(BACKEND_EVENTS.selectionAddWord)
+    }
+  }
+
   private async callSnapshot(methodName: string, ...args: unknown[]): Promise<AppSnapshot> {
     const result = await this.call(methodName, args)
     if (!isAppSnapshot(result)) {
@@ -1326,6 +1377,10 @@ class UnavailableApi implements AppApi {
   }
 
   saveManualVocabulary(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  listTags(): Promise<string[]> {
     return this.fail()
   }
 
@@ -1397,6 +1452,10 @@ class UnavailableApi implements AppApi {
     return () => undefined
   }
 
+  subscribeSelectionAddWord(): () => void {
+    return () => undefined
+  }
+
   private fail<T>(): Promise<T> {
     return Promise.reject(new ApiUnavailableError())
   }
@@ -1412,7 +1471,9 @@ function isDevBuild(): boolean {
   return typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV)
 }
 
-export function createDemoApi(): AppApi {
+export function createDemoApi(): AppApi & {
+  emitSelectionAddWord(event: SelectionAddWordEvent): void
+} {
   return new DemoApi()
 }
 

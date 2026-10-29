@@ -18,6 +18,8 @@ export function GetLessonTranscript(arg1:string):Promise<main.LessonTranscript>;
 
 export function ListLessonTranscripts(arg1:number):Promise<Array<main.LessonTranscriptSummary>>;
 
+export function ListTags():Promise<Array<string>>;
+
 export function MarkMoment():Promise<main.AppSnapshot>;
 
 export function MergeCandidates(arg1:string,arg2:string):Promise<main.AppSnapshot>;

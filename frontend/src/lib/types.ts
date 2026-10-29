@@ -177,6 +177,17 @@ export interface ManualVocabularyDraft extends ManualVocabularyInput {
   variants?: ManualVocabularyVariant[]
 }
 
+export interface SelectionAddWordEvent {
+  simplified: string
+  traditional?: string
+  pinyin: string
+  meaning: string
+  vocabularyId?: string
+  destination: 'add-word' | 'vocabulary' | 'inbox'
+  lessonBlocked: boolean
+  draft?: ManualVocabularyDraft
+}
+
 export interface PhotoVocabularyDraft {
   entries: ManualVocabularyInput[]
   model: string

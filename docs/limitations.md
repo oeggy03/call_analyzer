@@ -11,6 +11,10 @@ Verified against the current tree. Product boundaries also listed in `README.md`
 - `fixtures/evaluation/manifest.json` is synthetic text. It has no WAV files. The root README says accuracy should be recalibrated with consent-cleared lessons before unattended capture.
 - OCR is off by default. In system mode the helper captures screen frames from the largest display; there is no user-selected display or crop (`defaultRuntimeSettings`).
 - A native stream failure is shown on the lesson and does not restart capture.
+- Highlighted-word lookup needs the Call Analyzer process running; closing the
+  app window quits it and stops the `Command-Option-5` helper. There is no
+  menu-bar-only mode.
+- Lookup reads selected text through Accessibility, not screen pixels. A selection without Han text is refused. There is no character-count cap on the highlight.
 - Vocabulary outbox delivery requires a configured per-machine Supabase
   secret. Without it, rows remain local. The runner does not sync lessons,
   transcripts, observations, study-state changes, or review events.
