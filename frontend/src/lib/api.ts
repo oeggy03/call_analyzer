@@ -56,6 +56,7 @@ export const BACKEND_METHODS = {
   recognizeVocabularyPhoto: 'RecognizeVocabularyPhoto',
   saveManualVocabulary: 'SaveManualVocabulary',
   listLessonTranscripts: 'ListLessonTranscripts',
+  listTags: 'ListTags',
   getLessonTranscript: 'GetLessonTranscript',
   requestCapturePermission: 'RequestCapturePermission',
   startLesson: 'StartLesson',
@@ -89,6 +90,7 @@ export interface AppApi {
   recognizeVocabularyPhoto(imageBase64: string): Promise<PhotoVocabularyDraft>
   saveManualVocabulary(input: ManualVocabularyInput): Promise<AppSnapshot>
   listLessonTranscripts(limit: number): Promise<LessonTranscriptSummary[]>
+  listTags(): Promise<string[]>
   getLessonTranscript(lessonId: string): Promise<LessonTranscript>
   requestCapturePermission(): Promise<AppSnapshot>
   startLesson(input: StartLessonInput): Promise<AppSnapshot>
@@ -870,6 +872,17 @@ class DemoApi implements AppApi {
     }
   }
 
+  async listTags(): Promise<string[]> {
+    const names = new Set<string>()
+    for (const entry of [...this.snapshot.vocabulary, ...this.snapshot.candidates]) {
+      for (const tag of entry.tags) {
+        const name = tag.trim()
+        if (name) names.add(name)
+      }
+    }
+    return [...names].sort((left, right) => left.localeCompare(right))
+  }
+
   async listLessonTranscripts(limit: number): Promise<LessonTranscriptSummary[]> {
     const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0
     return demoPastLessons.slice(0, safeLimit).map(({ lesson }) => ({ ...lesson }))
@@ -1174,6 +1187,14 @@ class RuntimeApi implements AppApi {
     return this.callMutation(BACKEND_METHODS.saveManualVocabulary, input)
   }
 
+  async listTags(): Promise<string[]> {
+    const result = await this.call(BACKEND_METHODS.listTags, [])
+    if (!Array.isArray(result) || !result.every((tag) => typeof tag === 'string')) {
+      throw new ApiUnavailableError(`Backend method ${BACKEND_METHODS.listTags} returned invalid tags.`)
+    }
+    return result
+  }
+
   async listLessonTranscripts(limit: number): Promise<LessonTranscriptSummary[]> {
     const result = await this.call(BACKEND_METHODS.listLessonTranscripts, [limit])
     if (!Array.isArray(result) || !result.every(isLessonTranscriptSummary)) {
@@ -1356,6 +1377,10 @@ class UnavailableApi implements AppApi {
   }
 
   saveManualVocabulary(): Promise<AppSnapshot> {
+    return this.fail()
+  }
+
+  listTags(): Promise<string[]> {
     return this.fail()
   }
 

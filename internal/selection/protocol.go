@@ -60,7 +60,8 @@ type CardDraft struct {
 }
 
 type LookupResult struct {
-	Surface string      `json:"surface"`
-	Lines   []GlossLine `json:"lines,omitempty"`
-	Notice  string      `json:"notice,omitempty"`
+	Surface      string      `json:"surface"`
+	Lines        []GlossLine `json:"lines,omitempty"`
+	Notice       string      `json:"notice,omitempty"`
+	ExistingTags []string    `json:"existingTags,omitempty"`
 }

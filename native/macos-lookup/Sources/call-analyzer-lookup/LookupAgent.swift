@@ -124,6 +124,7 @@ final class LookupAgent: NSObject, NSApplicationDelegate {
                 surface: surface,
                 lines: message.lines ?? [],
                 notice: message.notice ?? "",
+                existingTags: message.existingTags ?? [],
                 anchor: anchor
             )
         case "draft":

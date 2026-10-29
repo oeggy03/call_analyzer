@@ -208,4 +208,5 @@ struct ParentMessage: Decodable, Sendable {
     let notice: String?
     let message: String?
     let draft: CardDraft?
+    let existingTags: [String]?
 }

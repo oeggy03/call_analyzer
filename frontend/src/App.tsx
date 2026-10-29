@@ -224,6 +224,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
     query: '',
     token: 0,
   })
+  const [existingTags, setExistingTags] = useState<string[]>([])
   const [photoQueue, setPhotoQueue] = useState<PhotoQueueItem[]>([])
   const [photoSuggestions, setPhotoSuggestions] = useState<PhotoSuggestion[]>([])
   const [photoInputError, setPhotoInputError] = useState<string>()
@@ -266,6 +267,24 @@ export function App({ apiClient = defaultApi }: AppProps) {
       unsubscribe()
     }
   }, [apiClient])
+
+  const tagCatalogKey = useMemo(() => {
+    return [...current.vocabulary, ...current.candidates]
+      .flatMap((entry) => entry.tags)
+      .join('\n')
+  }, [current.vocabulary, current.candidates])
+
+  useEffect(() => {
+    let active = true
+    void apiClient.listTags()
+      .then((tags) => {
+        if (active) setExistingTags(tags)
+      })
+      .catch(() => undefined)
+    return () => {
+      active = false
+    }
+  }, [apiClient, tagCatalogKey])
 
   const runAction = useCallback(
     async (name: string, action: () => Promise<AppSnapshot>, successMessage: string) => {
@@ -982,6 +1001,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
                   photoModel={photoModel}
                   photoReadProgress={photoReadProgress}
                   vocabulary={current.vocabulary}
+                  existingTags={existingTags}
                   hasApiKey={current.settings.openRouterKeyConfigured}
                   lessonActive={['live', 'starting', 'stopping'].includes(current.lesson.status)}
                   busyAction={busyAction}
@@ -1032,6 +1052,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
         <EditCandidateDialog
           candidate={editingCandidate}
           draft={editDraft}
+          existingTags={existingTags}
           validationError={editError}
           isSaving={busyAction === `edit-${editingCandidate.id}`}
           onDraftChange={(draft) => {
@@ -1753,6 +1774,7 @@ function ManualVocabularyView({
   photoModel,
   photoReadProgress,
   vocabulary,
+  existingTags,
   hasApiKey,
   lessonActive,
   busyAction,
@@ -1780,6 +1802,7 @@ function ManualVocabularyView({
   photoModel?: string
   photoReadProgress?: { current: number; total: number }
   vocabulary: AppSnapshot['vocabulary']
+  existingTags: string[]
   hasApiKey: boolean
   lessonActive: boolean
   busyAction?: string
@@ -1852,6 +1875,7 @@ function ManualVocabularyView({
               suggestions={photoSuggestions}
               photoQueue={photoQueue}
               vocabulary={vocabulary}
+              existingTags={existingTags}
               isSaving={busyAction === 'save-photo-vocabulary'}
               onToggle={onTogglePhotoSuggestion}
               onUpdate={onUpdatePhotoSuggestion}
@@ -2001,6 +2025,11 @@ function ManualVocabularyView({
               value={form.tags}
               onChange={(event) => onFormChange({ ...form, tags: event.target.value })}
               placeholder="例如：study, work"
+            />
+            <ExistingTagPicker
+              tags={existingTags}
+              value={form.tags}
+              onChange={(tags) => onFormChange({ ...form, tags })}
             />
           </div>
 
@@ -2297,6 +2326,7 @@ function PhotoVocabularyReview({
   suggestions,
   photoQueue,
   vocabulary,
+  existingTags,
   isSaving,
   onToggle,
   onUpdate,
@@ -2306,6 +2336,7 @@ function PhotoVocabularyReview({
   suggestions: PhotoSuggestion[]
   photoQueue: PhotoQueueItem[]
   vocabulary: AppSnapshot['vocabulary']
+  existingTags: string[]
   isSaving: boolean
   onToggle: (suggestionId: string, selected: boolean) => void
   onUpdate: (suggestionId: string, patch: Partial<ManualVocabularyInput>) => void
@@ -2384,6 +2415,11 @@ function PhotoVocabularyReview({
                   <PhotoReviewField id={fieldId('example-pinyin')} label="Example pinyin" value={suggestion.input.examplePinyin ?? ''} onChange={(value) => onUpdate(suggestion.id, { examplePinyin: value })} />
                   <PhotoReviewField id={fieldId('example-translation')} label="Example translation" value={suggestion.input.exampleTranslation ?? ''} onChange={(value) => onUpdate(suggestion.id, { exampleTranslation: value })} />
                   <PhotoReviewField id={fieldId('tags')} label="Tags" value={(suggestion.input.tags ?? []).join(', ')} onChange={(value) => onUpdate(suggestion.id, { tags: parseTags(value) })} wide />
+                  <ExistingTagPicker
+                    tags={existingTags}
+                    value={(suggestion.input.tags ?? []).join(', ')}
+                    onChange={(value) => onUpdate(suggestion.id, { tags: parseTags(value) })}
+                  />
                 </div>
               )}
             </article>
@@ -2877,6 +2913,7 @@ function DiagnosticRow({ label, value, tone }: { label: string; value: string; t
 function EditCandidateDialog({
   candidate,
   draft,
+  existingTags,
   validationError,
   isSaving,
   onDraftChange,
@@ -2885,6 +2922,7 @@ function EditCandidateDialog({
 }: {
   candidate: Candidate
   draft: CandidateEditDraft
+  existingTags: string[]
   validationError?: string
   isSaving: boolean
   onDraftChange: (draft: CandidateEditDraft) => void
@@ -2991,6 +3029,11 @@ function EditCandidateDialog({
         <div className="field-group">
           <label className="field-label" htmlFor="edit-tags">Tags <span className="field-hint">(comma-separated)</span></label>
           <input id="edit-tags" className="text-input" value={draft.tags} onChange={(event) => onDraftChange({ ...draft, tags: event.target.value })} />
+          <ExistingTagPicker
+            tags={existingTags}
+            value={draft.tags}
+            onChange={(tags) => onDraftChange({ ...draft, tags })}
+          />
         </div>
         <div className="dialog-actions">
           <button className="button button-ghost" type="button" onClick={onCancel}>Cancel</button>
@@ -3358,6 +3401,50 @@ function confidenceTone(confidence: number): string {
 
 function normalizeModel(value: string, options: readonly { value: string }[], fallback: string): string {
   return options.some((option) => option.value === value) ? value : fallback
+}
+
+function toggleTagValue(value: string, tag: string): string {
+  const names = parseTags(value)
+  const key = tag.trim().toLowerCase()
+  if (!key) return value
+  const without = names.filter((name) => name.toLowerCase() !== key)
+  const next = without.length === names.length ? [...names, tag.trim()] : without
+  return next.join(', ')
+}
+
+function ExistingTagPicker({
+  tags,
+  value,
+  onChange,
+}: {
+  tags: string[]
+  value: string
+  onChange: (value: string) => void
+}) {
+  const unique = Array.from(new Set(tags.map((tag) => tag.trim()).filter(Boolean)))
+  if (unique.length === 0) return null
+  const selected = new Set(parseTags(value).map((tag) => tag.toLowerCase()))
+  return (
+    <div className="existing-tags">
+      <span className="field-hint">Select from existing tags</span>
+      <div className="existing-tag-list">
+        {unique.map((tag) => {
+          const pressed = selected.has(tag.toLowerCase())
+          return (
+            <button
+              key={tag}
+              className={pressed ? 'tag-toggle tag-toggle-on' : 'tag-toggle'}
+              type="button"
+              aria-pressed={pressed}
+              onClick={() => onChange(toggleTagValue(value, tag))}
+            >
+              {tag}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 function parseTags(value: string): string[] {

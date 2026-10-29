@@ -24,34 +24,50 @@ private final class PaddedButton: NSButton {
         guard size.width != NSView.noIntrinsicMetric else {
             return size
         }
-        return NSSize(width: size.width + 24, height: size.height)
+        return NSSize(width: size.width + 24, height: max(size.height, 24))
+    }
+}
+
+private final class FlowView: NSView {
+    override var isFlipped: Bool { true }
+
+    func setItems(_ items: [NSView]) {
+        subviews.forEach { $0.removeFromSuperview() }
+        items.forEach { addSubview($0) }
+        invalidateIntrinsicContentSize()
+        needsLayout = true
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas {
-            removeTrackingArea(area)
+    override var intrinsicContentSize: NSSize {
+        layoutItems(in: 312, place: false)
+    }
+
+    override func layout() {
+        super.layout()
+        let width = bounds.width > 1 ? bounds.width : 312
+        _ = layoutItems(in: width, place: true)
+    }
+
+    private func layoutItems(in maxWidth: CGFloat, place: Bool) -> NSSize {
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for item in subviews {
+            let fit = item.fittingSize
+            let width = min(maxWidth, max(fit.width, 44))
+            let height = max(fit.height, 24)
+            if x > 0 && x + width > maxWidth + 0.5 {
+                x = 0
+                y += rowHeight + 6
+                rowHeight = 0
+            }
+            if place {
+                item.frame = NSRect(x: x, y: y, width: width, height: height)
+            }
+            x += width + 6
+            rowHeight = max(rowHeight, height)
         }
-        addTrackingArea(NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect, .cursorUpdate],
-            owner: self,
-            userInfo: nil
-        ))
-    }
-
-    override func cursorUpdate(with event: NSEvent) {
-        NSCursor.pointingHand.set()
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        super.mouseEntered(with: event)
-        NSCursor.pointingHand.set()
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        super.mouseExited(with: event)
-        NSCursor.arrow.set()
+        return NSSize(width: maxWidth, height: y + rowHeight)
     }
 }
 
@@ -68,14 +84,21 @@ final class PanelController: NSObject {
 
     private let panel: LookupPanel
     private let bodyStack = NSStackView()
+    private let scrollView = NSScrollView()
     private let closeButton: PaddedButton
     private let panelWidth: CGFloat = 340
+    private var scrollHeight: NSLayoutConstraint?
+    private var bodyHeight: NSLayoutConstraint?
+    private var cursorTimer: Timer?
+    private var usingCustomCursor = false
     private var currentLines: [GlossLine] = []
     private var fieldInputs: [String: NSTextField] = [:]
     private var formErrorLabel: NSTextField?
     private var generatedCard = false
     private var showingCard = false
     private var cardVariants: [CardVariant] = []
+    private var existingTags: [String] = []
+    private var tagButtons: [NSButton] = []
     private var lastAnchor: PanelAnchor?
 
     override init() {
@@ -111,8 +134,10 @@ final class PanelController: NSObject {
         surface: String,
         lines: [GlossLine],
         notice: String,
+        existingTags: [String] = [],
         anchor: PanelAnchor
     ) {
+        self.existingTags = existingTags
         currentLines = Array(lines.prefix(3))
         if currentLines.isEmpty {
             replaceBody(with: [
@@ -174,6 +199,7 @@ final class PanelController: NSObject {
     }
 
     func hide() {
+        stopCursorTracking()
         panel.orderOut(nil)
         currentLines = []
         showingCard = false
@@ -299,7 +325,27 @@ final class PanelController: NSObject {
         bodyStack.orientation = .vertical
         bodyStack.alignment = .width
         bodyStack.spacing = 8
-        mainStack.addArrangedSubview(bodyStack)
+        bodyStack.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.documentView = bodyStack
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        let clip = scrollView.contentView
+        NSLayoutConstraint.activate([
+            bodyStack.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
+            bodyStack.trailingAnchor.constraint(equalTo: clip.trailingAnchor),
+            bodyStack.topAnchor.constraint(equalTo: clip.topAnchor),
+            bodyStack.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+        ])
+        mainStack.addArrangedSubview(scrollView)
+        let height = scrollView.heightAnchor.constraint(equalToConstant: 80)
+        height.isActive = true
+        scrollHeight = height
+        let contentHeight = bodyStack.heightAnchor.constraint(equalToConstant: 80)
+        contentHeight.isActive = true
+        bodyHeight = contentHeight
     }
 
     private func replaceBody(with views: [NSView]) {
@@ -433,13 +479,87 @@ final class PanelController: NSObject {
 
     private func show(at anchor: PanelAnchor) {
         lastAnchor = anchor
+        bodyHeight?.isActive = false
         panel.contentView?.layoutSubtreeIfNeeded()
-        let fittingHeight = panel.contentView?.fittingSize.height ?? 100
-        let maxHeight = max(240, (NSScreen.main?.visibleFrame.height ?? 800) - 80)
-        let height = min(max(80, fittingHeight), maxHeight)
+        let contentHeight = max(bodyStack.fittingSize.height, 24)
+        bodyHeight?.constant = contentHeight
+        bodyHeight?.isActive = true
+        let chrome: CGFloat = 62
+        let screenHeight = NSScreen.main?.visibleFrame.height ?? 800
+        let maxScroll = max(120, screenHeight - 120 - chrome)
+        scrollHeight?.constant = min(contentHeight, maxScroll)
+        let height = (scrollHeight?.constant ?? contentHeight) + chrome
         panel.setContentSize(NSSize(width: panelWidth, height: height))
         position(using: anchor)
         panel.orderFrontRegardless()
+        startCursorTracking()
+    }
+
+    private func startCursorTracking() {
+        cursorTimer?.invalidate()
+        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.updatePointerCursor()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        cursorTimer = timer
+    }
+
+    private func stopCursorTracking() {
+        cursorTimer?.invalidate()
+        cursorTimer = nil
+    }
+
+    private func updatePointerCursor() {
+        guard panel.isVisible else {
+            return
+        }
+        let mouse = NSEvent.mouseLocation
+        guard panel.frame.contains(mouse), let content = panel.contentView else {
+            if usingCustomCursor {
+                NSCursor.arrow.set()
+                usingCustomCursor = false
+            }
+            return
+        }
+        let windowPoint = panel.convertPoint(fromScreen: mouse)
+        let localPoint = content.convert(windowPoint, from: nil)
+        var view = content.hitTest(localPoint)
+        var hoveringButton = false
+        var hoveringField = false
+        while let current = view {
+            if current is NSButton {
+                hoveringButton = true
+                break
+            }
+            if current is NSTextField, (current as? NSTextField)?.isEditable == true {
+                hoveringField = true
+            }
+            view = current.superview
+        }
+        if hoveringButton {
+            NSCursor.pointingHand.set()
+            usingCustomCursor = true
+        } else if hoveringField {
+            NSCursor.iBeam.set()
+            usingCustomCursor = true
+        } else if usingCustomCursor {
+            NSCursor.arrow.set()
+            usingCustomCursor = false
+        }
+    }
+
+    private func fieldBoxHeight(_ text: String, font: NSFont, multiline: Bool) -> CGFloat {
+        guard multiline else {
+            return 30
+        }
+        let measured = (text as NSString).boundingRect(
+            with: NSSize(width: 296, height: 800),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font]
+        )
+        return min(96, max(36, ceil(measured.height) + 14))
     }
 
     private func position(using anchor: PanelAnchor) {
@@ -495,12 +615,12 @@ final class PanelController: NSObject {
         let rows: [(String, String, String, Bool)] = [
             ("simplified", "Simplified", fields.simplified, false),
             ("traditional", "Traditional", fields.traditional ?? "", false),
-            ("pinyin", "Pinyin", fields.pinyin, false),
+            ("pinyin", "Pinyin", fields.pinyin, true),
             ("meaning", "Meaning", fields.meaning, true),
             ("partOfSpeech", "Part of speech", fields.partOfSpeech ?? "", false),
             ("classifier", "Classifier", fields.classifier ?? "", false),
             ("example", "Example", fields.example ?? "", true),
-            ("examplePinyin", "Example pinyin", fields.examplePinyin ?? "", false),
+            ("examplePinyin", "Example pinyin", fields.examplePinyin ?? "", true),
             ("exampleTranslation", "Translation", fields.exampleTranslation ?? "", true),
             ("tags", "Tags", (fields.tags ?? []).joined(separator: ", "), false),
         ]
@@ -529,10 +649,12 @@ final class PanelController: NSObject {
         box.layer?.backgroundColor = NSColor.white.cgColor
         box.translatesAutoresizingMaskIntoConstraints = false
         box.widthAnchor.constraint(equalToConstant: 312).isActive = true
-        box.heightAnchor.constraint(equalToConstant: multiline ? 52 : 30).isActive = true
+        let font = chineseFont(size: 12, weight: .regular)
+        let boxHeight = fieldBoxHeight(value, font: font, multiline: multiline)
+        box.heightAnchor.constraint(equalToConstant: boxHeight).isActive = true
 
         let input = NSTextField(string: value)
-        input.font = chineseFont(size: 12, weight: .regular)
+        input.font = font
         input.textColor = .lookupInk
         input.isEditable = editable
         input.isSelectable = true
@@ -572,7 +694,80 @@ final class PanelController: NSObject {
             ))
         }
         stack.addArrangedSubview(box)
+        if key == "tags" && editable && !existingTags.isEmpty {
+            stack.addArrangedSubview(makeExistingTagPicker())
+        }
         return stack
+    }
+
+    private func makeExistingTagPicker() -> NSView {
+        let caption = makeLabel(
+            "Existing tags",
+            font: chineseFont(size: 11, weight: .medium),
+            color: .lookupSecondary
+        )
+        let flow = FlowView()
+        flow.translatesAutoresizingMaskIntoConstraints = false
+        tagButtons = existingTags.map { tag in
+            let button = PaddedButton(title: tag, target: self, action: #selector(toggleExistingTag(_:)))
+            button.isBordered = false
+            button.font = chineseFont(size: 11, weight: .medium)
+            button.lineBreakMode = .byTruncatingTail
+            button.setAccessibilityLabel("Tag \(tag)")
+            button.translatesAutoresizingMaskIntoConstraints = true
+            styleTagButton(button)
+            return button
+        }
+        flow.setItems(tagButtons)
+        let fitted = flow.intrinsicContentSize
+        flow.widthAnchor.constraint(equalToConstant: 312).isActive = true
+        flow.heightAnchor.constraint(equalToConstant: max(fitted.height, 24)).isActive = true
+        let stack = NSStackView(views: [caption, flow])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 4
+        return stack
+    }
+
+    private func styleTagButton(_ button: NSButton) {
+        let selected = selectedTagNames().contains(button.title.lowercased())
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 8
+        button.layer?.borderWidth = 1
+        let color: NSColor = selected ? .lookupNavy : .lookupInk
+        let font = chineseFont(size: 11, weight: .medium)
+        button.attributedTitle = NSAttributedString(
+            string: button.title,
+            attributes: [.foregroundColor: color, .font: font]
+        )
+        if selected {
+            button.layer?.backgroundColor = NSColor(calibratedRed: 0xE9 / 255.0, green: 0xF1 / 255.0, blue: 0xFD / 255.0, alpha: 1).cgColor
+            button.layer?.borderColor = NSColor.lookupButton.cgColor
+        } else {
+            button.layer?.backgroundColor = NSColor.white.cgColor
+            button.layer?.borderColor = NSColor.lookupLine.cgColor
+        }
+    }
+
+    private func selectedTagNames() -> Set<String> {
+        Set(fieldValue("tags").split(separator: ",").map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }.filter { !$0.isEmpty })
+    }
+
+    @objc private func toggleExistingTag(_ sender: NSButton) {
+        let tag = sender.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tag.isEmpty else { return }
+        var names = fieldValue("tags").split(separator: ",").map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty }
+        if let index = names.firstIndex(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
+            names.remove(at: index)
+        } else {
+            names.append(tag)
+        }
+        setField("tags", names.joined(separator: ", "))
+        tagButtons.forEach(styleTagButton)
     }
 
     private func makeChoiceButton(title: String, tag: Int) -> NSButton {

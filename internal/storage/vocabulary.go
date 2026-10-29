@@ -564,6 +564,32 @@ func (r *VocabularyRepository) ListMatchingSurface(
 	return entries, nil
 }
 
+// ListTagNames returns every saved vocabulary tag name, sorted case-insensitively.
+func (r *VocabularyRepository) ListTagNames(ctx context.Context) ([]string, error) {
+	rows, err := r.store.db.QueryContext(ctx, `
+		SELECT name FROM tags
+		ORDER BY name COLLATE NOCASE`)
+	if err != nil {
+		return nil, fmt.Errorf("vocabulary: list tags: %w", err)
+	}
+	defer rows.Close()
+	names := make([]string, 0)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("vocabulary: list tags scan: %w", err)
+		}
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("vocabulary: list tags rows: %w", err)
+	}
+	return names, nil
+}
+
 func (r *VocabularyRepository) ObservationStats(
 	ctx context.Context,
 	entryID string,

@@ -519,6 +519,20 @@ describe('Call Analyzer frontend', () => {
     await waitFor(() => expect(search).toHaveValue('方案'))
   })
 
+  it('toggles an existing tag into the Add Word form', async () => {
+    renderDemo()
+    await openView('Add Word')
+
+    const tags = await screen.findByLabelText(/^tags$/i)
+    fireEvent.click(screen.getByRole('button', { name: 'work' }))
+    expect(tags).toHaveValue('work')
+    expect(screen.getByRole('button', { name: 'work' })).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(screen.getByRole('button', { name: 'work' }))
+    expect(tags).toHaveValue('')
+    expect(screen.getByRole('button', { name: 'work' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
   it('shows the opened candidate message for an inbox selection', async () => {
     const api = createDemoApi()
     render(<App apiClient={api} />)

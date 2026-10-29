@@ -42,7 +42,7 @@ These rules are enforced in code, but they are easy to miss because the UI, the 
   under `selection-lookup`. The surrounding sentence is not shown in the
   panel. The selected text is not logged or added to `AppSnapshot`.
 - The panel shows pinyin and a short English gloss. It stays open until Close is pressed. A saved entry's **Details** button expands that card in the panel. **Add word** generates the example and the other card fields in the panel, including during a live lesson, and **Save** writes the confirmed entry from there. The main window is not brought forward. Highlights without Han text show a notice and do not call the model. A phrase or sentence is allowed.
-- Tooltip generation uses the same manual-vocabulary model and parser as Add Word (`qwen/qwen3-32b` by default). The placeholder `No English gloss saved` is left blank on the card.
+- Tooltip generation uses the same manual-vocabulary model and parser as Add Word (`qwen/qwen3-32b` by default). The placeholder `No English gloss saved` is left blank on the card. Saved tag names can be toggled on the tooltip card and on the Add Word, photo review, and candidate edit forms. `ListTags` returns those names.
 
 ## Budget and privacy
 

@@ -98,11 +98,12 @@ func (r helperRequest) sentenceContext() string {
 }
 
 type resultMessage struct {
-	Type    string      `json:"type"`
-	ID      string      `json:"id"`
-	Surface string      `json:"surface"`
-	Lines   []GlossLine `json:"lines"`
-	Notice  string      `json:"notice"`
+	Type         string      `json:"type"`
+	ID           string      `json:"id"`
+	Surface      string      `json:"surface"`
+	Lines        []GlossLine `json:"lines"`
+	Notice       string      `json:"notice"`
+	ExistingTags []string    `json:"existingTags,omitempty"`
 }
 
 type errorMessage struct {
@@ -227,12 +228,17 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, handler Handler) er
 				if lines == nil {
 					lines = []GlossLine{}
 				}
+				tags := result.ExistingTags
+				if tags == nil {
+					tags = []string{}
+				}
 				recordWriteError(write(resultMessage{
-					Type:    "result",
-					ID:      request.ID,
-					Surface: result.Surface,
-					Lines:   lines,
-					Notice:  result.Notice,
+					Type:         "result",
+					ID:           request.ID,
+					Surface:      result.Surface,
+					Lines:        lines,
+					Notice:       result.Notice,
+					ExistingTags: tags,
 				}))
 			}()
 		case "add":

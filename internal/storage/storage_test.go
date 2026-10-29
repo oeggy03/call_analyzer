@@ -1023,6 +1023,33 @@ func TestPendingVocabularyDeleteBlocksCloudRestore(t *testing.T) {
 	}
 }
 
+func TestListTagNamesReturnsUniqueSortedNames(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	entry, err := store.Vocabulary().UpsertCandidate(ctx, domain.VocabularyEntry{
+		Simplified: "学习",
+		Reading:    "xue2 xi2",
+		Senses:     []domain.Sense{{Gloss: "to study"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Vocabulary().AddTags(ctx, entry.ID, []string{"food", " lesson ", "food"}); err != nil {
+		t.Fatal(err)
+	}
+	names, err := store.Vocabulary().ListTagNames(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(names, ",") != "food,lesson" {
+		t.Fatalf("tag names = %#v", names)
+	}
+}
+
 func timeAt(milliseconds int64) (value time.Time) {
 	return time.UnixMilli(milliseconds).UTC()
 }

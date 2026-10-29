@@ -33,11 +33,12 @@ Vitest specs and shared setup live in `src/test`.
 `BACKEND_METHODS`. That object is the method list; do not keep a second copy
 here. `contract_test.go` fails when a listed name is missing on `App`.
 
-Most methods return `AppSnapshot`. Four methods return dedicated result types:
+Most methods return `AppSnapshot`. Five methods return dedicated result types:
 `GenerateManualVocabulary` returns `ManualVocabularyDraft`,
 `RecognizeVocabularyPhoto` returns `PhotoVocabularyDraft`,
-`ListLessonTranscripts` returns `[]LessonTranscriptSummary`, and
-`GetLessonTranscript` returns `LessonTranscript`. Argument shapes are the
+`ListLessonTranscripts` returns `[]LessonTranscriptSummary`,
+`GetLessonTranscript` returns `LessonTranscript`, and `ListTags` returns
+`[]string`. Argument shapes are the
 structs in `app_contract.go` and `src/lib/types.ts`. `StartLesson` and
 `SaveSettings` receive one object.
 Confirm, reject, merge, and vocabulary delete receive positional IDs. `EditCandidate` receives

@@ -492,6 +492,10 @@ func (a *App) SyncNow() (AppSnapshot, error) {
 	return snapshot, nil
 }
 
+func (a *App) ListTags() ([]string, error) {
+	return a.service.ListTagNames(a.context())
+}
+
 func (a *App) ListLessonTranscripts(limit int) ([]LessonTranscriptSummary, error) {
 	summaries, err := a.service.ListLessonTranscripts(a.context(), limit)
 	if err != nil {

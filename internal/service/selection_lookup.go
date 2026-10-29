@@ -113,6 +113,11 @@ func (s *Service) LookupSelection(
 	if s == nil || s.store == nil {
 		return result, errors.New("selection lookup: storage is not configured")
 	}
+	tagNames, err := s.ListTagNames(ctx)
+	if err != nil {
+		return result, err
+	}
+	result.ExistingTags = tagNames
 
 	simplified := chinese.ToSimplified(normalized)
 	contextText := normalizeSelectionContext(
@@ -246,6 +251,20 @@ func (s *Service) AddSelection(
 		return selection.CardDraft{}, err
 	}
 	return cardDraftFromManual(draft), nil
+}
+
+func (s *Service) ListTagNames(ctx context.Context) ([]string, error) {
+	if s == nil || s.store == nil {
+		return nil, errors.New("selection lookup: storage is not configured")
+	}
+	names, err := s.store.Vocabulary().ListTagNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if names == nil {
+		return []string{}, nil
+	}
+	return names, nil
 }
 
 func (s *Service) SaveSelection(ctx context.Context, fields selection.CardFields) error {
