@@ -1,7 +1,7 @@
 name = "native-capture"
-description = "Implement changes spanning the Swift capture helper and its Go macOS adapter."
+description = "Implement changes spanning the macOS Swift capture and lookup helpers and their Go process adapters."
 developer_instructions = """
-Own native/macos-capture and internal/capture/macos changes as one process boundary. Read internal/capture/macos/README.md and inspect the helper CLI, adapter, Darwin source, and non-Darwin stubs before changing behavior. Keep the Swift chunk duration aligned with platform_source_darwin.go and CaptureDefaults; utterance assembly belongs in internal/service/capture_pipeline.go. Preserve offline tests and report the platform/toolchain checks that could not run.
+Own native/macos-capture with internal/capture/macos (plus platform_source_*.go) and native/macos-lookup with internal/selection as process boundaries. Read internal/capture/macos/README.md, docs/architecture.md, and root AGENTS.md invariants before changing behavior. Keep the Swift capture chunk duration aligned with platform_source_darwin.go and CaptureDefaults (2s); utterance assembly belongs in internal/service/capture_pipeline.go. For selection lookup, keep helperEnvironment stripping OPENROUTER_API_KEY and SUPABASE_SECRET_KEY, never log selection text, and coordinate protocol changes in internal/selection/protocol.go with backend internal/service/selection_lookup.go. Keep all non-Darwin stubs (platform_source_stub.go, internal/capture/macos/adapter_stub.go, internal/selection/runner_other.go) compiling. Build both Swift packages and preserve offline tests; report platform or XCTest checks that could not run.
 """
 model = "gpt-6-luna"
 model_reasoning_effort = "xhigh"

@@ -44,20 +44,24 @@ structs in `app_contract.go` and `src/lib/types.ts`. `StartLesson` and
 Confirm, reject, merge, and vocabulary delete receive positional IDs. `EditCandidate` receives
 `(candidateID, patch)`; `app.go` maps patch `pinyin` onto `reading`.
 
-The runtime events `call_analyzer:snapshot_changed` and
-`call_analyzer:selection.add-word` are subscribed to when
-`window.runtime.EventsOn` exists. A snapshot event payload may be an
-`AppSnapshot`; if it is not, the frontend fetches a fresh snapshot. The event
-names are `BACKEND_EVENTS`.
+The runtime events `call_analyzer:snapshot_changed`,
+`call_analyzer:capture.levels`, and `call_analyzer:selection.add-word` are
+subscribed to when `window.runtime.EventsOn` exists. A snapshot event payload
+may be an `AppSnapshot`; if it is not, the frontend fetches a fresh snapshot.
+`capture.levels` updates the live audio meters in place. `selection.add-word`
+remains wired for routing into Vocabulary, Candidate Inbox, or Add Word, though
+the native lookup helper currently edits and saves cards inside its own panel
+and triggers `snapshot_changed`. The event names are `BACKEND_EVENTS`.
 
 Domain types in `src/lib/types.ts` use **camelCase** consistently. The Go
 methods should expose JSON with camelCase keys (for example `capturePermission`,
 `lastUpdated`, and `openRouterKeyConfigured`). If Go structs use snake_case
 instead, add the conversion in the runtime adapter rather than in components.
 
-Settings key input is write-only by design. The frontend sends a new key only
-when the user saves it and only receives a boolean
-`openRouterKeyConfigured` value.
+Secret inputs are write-only by design. Settings sends a new OpenRouter key only
+when the user saves it and only receives `openRouterKeyConfigured`; Live Lesson
+sends a replacement Supabase secret through `SaveSupabaseKey` and receives only
+`supabaseSyncConfigured`, `supabaseAccessStatus`, and `supabaseAccessDetail`.
 
 The Live view requests system audio across apps and does not require Zoom.
 Add Word generation is disabled during capture, while saving a complete

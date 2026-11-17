@@ -17,7 +17,7 @@ Use this skill when a task calls for the full repository check or when a failure
 3. Inspect the failing command and its output. Fix the reported issue in the relevant files and rerun the required check; do not claim success from a partial run.
 4. Keep checks offline. Do not pass `-execute` to `go run ./cmd/evaluate` or submit live audio to OpenRouter unless the user explicitly asks.
 
-The script runs `gofmt -l`, frontend typecheck/tests/lint/build, Go tests and vet, offline fixture evaluation, and macOS Swift checks. It skips all Swift checks off macOS. On macOS it builds Swift and runs `swift test` only when XCTest is available; the skip is expected without full Xcode. The script exits nonzero when a required check fails.
+The script runs `gofmt -l`, frontend typecheck/tests/lint/build, Go tests and vet, offline fixture evaluation, and macOS Swift checks across both `native/macos-capture` and `native/macos-lookup`. It skips all Swift checks off macOS. On macOS it builds both Swift packages and runs `swift test` in both packages only when XCTest is available; the skip is expected without full Xcode. The script exits nonzero when a required check fails.
 
 SQLite tests use in-memory databases for most repository cases and temporary directories when persistence across opens is under test. Keep them isolated from the real user database. OpenRouter tests use local HTTP fakes; never require a live key for ordinary tests.
 

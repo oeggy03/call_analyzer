@@ -30,11 +30,14 @@ token, service key, or password in source, tests, logs, or docs.
 - Deleting a saved word removes the local row and writes
   `vocabulary.entry.deleted` with its id, simplified form, traditional form,
   and reading. The runner deletes the hosted row by id and, when those key
-  fields are present, by that key. Launch pull leaves that word out while the
-  delete is still pending. A missing local row also deletes the hosted row by
-  id. `study.review.recorded` remains pending, does not block the
-  vocabulary timer, and is never uploaded. Lessons, transcripts,
-  observations, and study-state updates are outside this sync.
+  fields are present, by that key. Launch pull (paged at 1,000 rows up to
+  20,000 rows) leaves that word out while the delete is still pending. Deleting
+  a lesson purges pending `vocabulary_entry` outbox rows with that lesson's
+  evidence, deletes orphaned `candidate`/`rejected` rows (`vocabulary.entry.deleted`),
+  and queues `vocabulary.entry.evidence_redacted` for surviving `confirmed` rows.
+  A missing local row also deletes the hosted row by id. `study.review.recorded`
+  remains pending, does not block the vocabulary timer, and is never uploaded.
+  Lessons, transcripts, observations, and study-state updates are outside this sync.
 - A first confirmed/manual publish initializes `study_state` with
   `on_conflict=entry_id` and ignore-duplicates resolution.
 
