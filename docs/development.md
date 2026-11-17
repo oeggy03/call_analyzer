@@ -2,7 +2,7 @@
 
 The macOS desktop app requires Go 1.25 or newer, Node.js 22 or newer, npm, macOS 15 or later, and Swift 6. The Go language version in `go.mod` is 1.25.0. Windows builds use the capture stub and do not provide native capture.
 
-Lockfiles to keep: `go.sum` and `frontend/package-lock.json`. The Swift package has no dependencies, so there is no `Package.resolved`.
+Lockfiles to keep: `go.sum` and `frontend/package-lock.json`. Neither Swift package (`native/macos-capture`, `native/macos-lookup`) has external dependencies, so there are no `Package.resolved` files.
 
 ## Install
 
@@ -46,6 +46,7 @@ The app does not load `.env` files. `.env.example` lists the process environment
 | `APPLE_SIGNING_IDENTITY` | Passed to `codesign` by `scripts/build-macos-app.sh`. Default `-` is ad-hoc. |
 | `CALL_ANALYZER_CAPTURE_OUTPUT_DIR` | Helper install directory for `scripts/build-macos-capture.sh`. |
 | `CALL_ANALYZER_CAPTURE_SWIFT_SCRATCH` | Swift package scratch directory used by `scripts/build-macos-capture.sh`. |
+| `CALL_ANALYZER_LOOKUP_OUTPUT_DIR` | Helper install directory for `scripts/build-macos-lookup.sh`. |
 | `CALL_ANALYZER_LOOKUP_SWIFT_SCRATCH` | Swift package scratch directory used by `scripts/build-macos-lookup.sh`. |
 
 There is no database server, Redis, or other local service. Most tests open SQLite with `storage.Open(ctx, ":memory:")`; persistence and migration tests use temporary database files.
@@ -99,7 +100,7 @@ Packaged app: `docs/operations.md`.
 
 The script exits non-zero on the first failed check. It runs:
 
-1. `gofmt -l` on Go files outside `frontend/node_modules`, `native/macos-capture/.build`, and `build`.
+1. `gofmt -l` on Go files outside `frontend/node_modules`, `native/macos-capture/.build`, `native/macos-lookup/.build`, and `build`.
 2. In `frontend`: `npm run typecheck`, `npm test -- --run`, `npm run lint`, `npm run build`.
 3. `go test` and `go vet` for `go list ./...`, excluding `/frontend/node_modules/`.
 4. `go run ./cmd/evaluate` with no `-execute` flag.
@@ -121,7 +122,7 @@ For focused checks while iterating, use the relevant package or boundary:
 
 Run `./scripts/verify.sh` before finishing a cross-component change.
 
-`TestWailsMethodsMatchFrontendContract` checks that each name in `BACKEND_METHODS` exists on `App` and validates the result shapes for `GenerateManualVocabulary`, `RecognizeVocabularyPhoto`, `ListLessonTranscripts`, and `GetLessonTranscript`.
+`TestWailsMethodsMatchFrontendContract` checks that each name in `BACKEND_METHODS` exists on `App` and validates the result shapes for `GenerateManualVocabulary`, `RecognizeVocabularyPhoto`, `ListLessonTranscripts`, `GetLessonTranscript`, and `ListTags`.
 
 GitHub Actions runs the same script on `macos-latest` after `npm ci --prefix frontend` (`.github/workflows/verify.yml`). The Swift test step runs when `xctest` is available; otherwise the script reports that it skipped that step.
 

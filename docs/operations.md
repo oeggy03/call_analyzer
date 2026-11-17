@@ -25,7 +25,7 @@ the main bundle is insufficient. This feature does not use Screen Recording.
 Ad-hoc signing can make macOS ask for Accessibility again after a rebuild, so
 grant the helper permission again when prompted.
 
-The helper's plist is `native/macos-capture/Sources/call-analyzer-capture/Info.plist`.
+The embedded helper plists are `native/macos-capture/Sources/call-analyzer-capture/Info.plist` (`com.oeggy03.callanalyzer.capture`) and `native/macos-lookup/Sources/call-analyzer-lookup/Info.plist` (`com.oeggy03.callanalyzer.lookup`, `LSUIElement = true`).
 
 ## Local data
 
@@ -37,7 +37,7 @@ The helper's plist is `native/macos-capture/Sources/call-analyzer-capture/Info.p
 | Supabase URL | `SUPABASE_URL`, defaulting to `https://zoiwsytnyrdifggwleru.supabase.co` | Used only by the vocabulary PostgREST client. |
 | Capture audio | A temp directory created by `createSessionSpool` | 16 kHz mono chunks are deleted as the adapter reads them. The session spool is removed on stop; stale directories with no live owner are removed during source initialization and before a new session. |
 | Settings | `settings` table | JSON values. Keys are the constants in `internal/service/settings.go`. |
-| Model usage | `request_usage` | Per lesson id, plus `manual-vocabulary` for Add Word generation, `photo-vocabulary` for photo recognition, and `selection-lookup` for highlighted-word lookup. |
+| Model usage | `request_usage` | Per lesson id, plus `manual-vocabulary` for Add Word and tooltip card generation, `photo-vocabulary` for photo recognition, and `selection-lookup` for highlighted-word lookup. |
 
 The selected audio-retention label is stored on lesson metadata, but the helper currently removes audio at the end of capture regardless of that setting.
 

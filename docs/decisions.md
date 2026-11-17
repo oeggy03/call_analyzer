@@ -4,7 +4,7 @@ These describe what the code does now. They are not a history of why an alternat
 
 ## Desktop UI talks to one Wails snapshot API
 
-The React app calls `window.go.main.App` only from `frontend/src/lib/api.ts`. Most methods return `AppSnapshot`; `GenerateManualVocabulary`, `RecognizeVocabularyPhoto`, `ListLessonTranscripts`, and `GetLessonTranscript` return dedicated draft or transcript-history types. The demo client implements the same interface so UI tests do not start Wails.
+The React app calls `window.go.main.App` only from `frontend/src/lib/api.ts`. Most methods return `AppSnapshot`; `GenerateManualVocabulary`, `RecognizeVocabularyPhoto`, `ListLessonTranscripts`, `GetLessonTranscript`, and `ListTags` return dedicated draft, transcript-history, or tag-catalog types. The demo client implements the same interface so UI tests do not start Wails.
 
 ## Capture is a separate Swift process
 
@@ -13,15 +13,17 @@ The React app calls `window.go.main.App` only from `frontend/src/lib/api.ts`. Mo
 ## Selection lookup has its own model and helper
 
 The highlighted-word path is separate from lesson analysis because it has its
-own prompt and schema, lookup model, 200-token limit, reasoning setting,
-in-memory cache, and `selection-lookup` usage id. It handles one selected
-surface and optional surrounding context; the analyzer handles transcript
-extraction.
+own prompt and schema, lookup model (`google/gemini-3.1-flash-lite`), 400-token
+limit, reasoning setting, in-memory cache, and `selection-lookup` usage id. It
+handles one selected surface and optional surrounding context; the analyzer
+handles transcript extraction and full card generation.
 
 `call-analyzer-lookup` is a separate `LSUIElement` process because it owns the
-global shortcut, Accessibility reads, and AppKit panel. Go starts and stops it
-through `internal/selection` and exchanges JSON lines. A missing helper is
-optional at app startup.
+global shortcut, Accessibility reads, and AppKit panel (including in-panel card
+generation and saving). Go starts and stops it through `internal/selection`,
+strips `OPENROUTER_API_KEY` and `SUPABASE_SECRET_KEY` from its environment, and
+exchanges `lookup`, `add`, and `save` JSON lines. A missing helper is optional
+at app startup.
 
 ## The API key is not a database setting
 
@@ -33,7 +35,7 @@ New automatic suggestions start as `candidate`, and confirmation is separate. Wh
 
 ## Provider privacy flags vary by request
 
-`internal/openrouter/client.go` requests `zdr` and `data_collection: deny` for lesson transcription, lesson analysis, and Add Word generation. Photo vision calls do not include those flags. Local audio lifetime is the session spool, separate from provider routing.
+`internal/openrouter/client.go` requests `zdr` and `data_collection: deny` for lesson transcription, lesson analysis, Add Word generation, and selection lookup/card generation (`Transcribe` and `ChatJSON`). Photo vision calls (`ChatVisionJSON`) do not include those flags. Local audio lifetime is the session spool, separate from provider routing.
 
 ## Cost display has no runtime cap
 

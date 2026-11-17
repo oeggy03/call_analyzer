@@ -1,15 +1,17 @@
 ---
-description: Swift capture helper and Go macOS adapter boundary
+description: Swift capture and selection-lookup helpers and their Go macOS adapters
 globs:
   - native/macos-capture/**/*
   - internal/capture/macos/**/*
+  - native/macos-lookup/**/*
+  - internal/selection/**/*
 alwaysApply: false
 ---
 
-# macOS capture
+# macOS helpers
 
-Follow the capture invariants in root `AGENTS.md` and `internal/capture/macos/README.md`. Treat the helper and Go adapter as one boundary; keep non-Darwin stubs building.
+Follow the capture and selection-lookup invariants in root `AGENTS.md`, `internal/capture/macos/README.md`, and `docs/architecture.md`. Treat each Swift helper and its Go adapter as one process boundary, and keep all non-Darwin stubs (`platform_source_stub.go`, `internal/capture/macos/adapter_stub.go`, `internal/selection/runner_other.go`) building.
 
-- The app and `CaptureDefaults.chunkSeconds` use 2-second chunks. Go assembles utterance windows in `internal/service/capture_pipeline.go`.
-- Helper commands are `list`, `capture`, and `stop`; `capture` requires `--bundle-id` and `--spool`.
-- `swift build` works with Command Line Tools. `swift test` requires full Xcode; `scripts/verify.sh` handles the XCTest skip on macOS.
+- Capture (`call-analyzer-capture` + `internal/capture/macos`): `CaptureDefaults.chunkSeconds` and `platform_source_darwin.go` use 2-second 16 kHz mono WAV chunks; Go assembles utterance windows in `internal/service/capture_pipeline.go`. Helper commands are `list`, `capture`, and `stop` (`capture` requires `--bundle-id` and `--spool`).
+- Selection lookup (`call-analyzer-lookup` + `internal/selection`): `helperEnvironment` must strip `OPENROUTER_API_KEY` and `SUPABASE_SECRET_KEY` before starting the `LSUIElement` helper. JSON-line requests are `lookup`, `add`, and `save`. Never log selection text or expose it in `AppSnapshot`.
+- `swift build` works with Command Line Tools for both packages. `swift test` requires full Xcode; `scripts/verify.sh` builds both Swift packages on macOS and handles the XCTest skip when full Xcode is absent.

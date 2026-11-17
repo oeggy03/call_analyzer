@@ -5,8 +5,8 @@
 | Embedded migrations | `internal/storage/migrations/*.sql` |
 | Apply order, transactions, and migration records | `internal/storage/store.go` |
 | Lesson and transcript repositories | `internal/storage/lessons.go` |
-| Vocabulary repositories | `internal/storage/vocabulary.go` |
-| Outbox and usage repositories | `internal/storage/outbox.go` |
+| Vocabulary and cloud-pull repositories | `internal/storage/vocabulary.go`, `internal/storage/vocabulary_cloud.go` |
+| Outbox, observations, settings, and usage repositories | `internal/storage/outbox.go` |
 | Study state | `internal/storage/study.go` |
 | Domain row shapes | `internal/domain/domain.go` |
 | Storage tests | `internal/storage/storage_test.go` |

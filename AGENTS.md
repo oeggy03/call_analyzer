@@ -35,18 +35,20 @@ Do not read every document for a small single-package change.
 
 ## Models and delegation
 
-The repository Codex configuration assigns the orchestrator/planner `gpt-6.1-sol` with high reasoning. The orchestrator plans, reviews, integrates, and validates; it does not implement repository changes. Frontend, backend, native capture, tooling, and documentation implementation roles use `gpt-6-luna` with xhigh reasoning.
+The repository supports Codex (`.codex/config.toml`, `.codex/agents/*.toml`), Cursor (`.cursor/rules`, `.cursor/skills`), and Claude Code (`CLAUDE.md`), sharing the canonical skills in `.agents/skills`.
 
-These instructions authorize the orchestrator to delegate implementation work within the user's requested repository scope. Assign each task to the matching configured role with bounded, non-overlapping ownership; the orchestrator integrates cross-boundary contracts and reviews the result. If the required role or model is unavailable or not loaded, report that and pause dependent implementation instead of silently substituting a model. Role files do not change the user's approval or sandbox settings.
+In Codex sessions, `.codex/config.toml` assigns the orchestrator/planner `gpt-6.1-sol` with high reasoning. The Codex orchestrator plans, reviews, integrates, and validates; it does not implement repository changes. Frontend, backend, native capture/lookup, tooling, and documentation implementation roles use `gpt-6-luna` with xhigh reasoning. These instructions authorize the Codex orchestrator to delegate implementation work within the user's requested repository scope, assigning each task to the matching configured role with bounded, non-overlapping ownership and integrating cross-boundary contracts. If a Codex session fails to load its configured role or model, report that and pause dependent implementation instead of silently substituting another Codex model.
+
+In Cursor and Claude Code sessions (where `.codex/` is not loaded by the runtime), use the user-selected session model and follow the same ownership boundaries in `docs/agents.md`, canonical skills in `.agents/skills`, contracts, invariants, and verification checks. Role files do not change the user's approval or sandbox settings.
 
 ## Project invariants
 
 - `StartLesson` checks consent, target, and API-key readiness. Settings are locked during an active lesson.
-- New automatic suggestions start as `candidate`; when a suggestion matches an existing word, its current status is preserved. Confirmation promotes a candidate to trusted vocabulary; reject and merge resolve it without promotion. `SaveManualVocabulary` creates a confirmed entry, while generation and photo recognition return drafts without inserting vocabulary.
+- New automatic suggestions start as `candidate`; when a suggestion matches an existing word, its current status is preserved. Newly created automatic `candidate` rows receive the lesson's normalized `LessonTags`. Confirmation promotes a candidate to trusted vocabulary; reject and merge resolve it without promotion. `SaveManualVocabulary` (and tooltip `SaveSelection`) creates or updates a `confirmed` entry, while Add Word generation, tooltip card generation, and photo recognition return drafts without inserting vocabulary. Add Word generation is blocked during an active lesson; tooltip card generation (`AddSelection`), manual saves of completed cards, and photo recognition remain available during capture.
 - Never put the OpenRouter key in SQLite, logs, or `AppSnapshot`. The UI receives only `openRouterKeyConfigured`. On macOS the environment value precedes Keychain.
-- Transcription and standard chat requests ask for Zero Data Retention and deny data collection. Vision photo-recognition chat intentionally omits those controls; inspect `internal/openrouter/client.go` before making claims about provider privacy flags. Provider flags are separate from local audio retention.
+- Transcription (`Transcribe`) and standard text chat (`ChatJSON`: lesson analysis, Add Word generation, `Command-Option-5` selection lookup via `google/gemini-3.1-flash-lite`, and tooltip card generation) ask for Zero Data Retention and deny data collection. Vision photo-recognition chat (`ChatVisionJSON`) intentionally omits those controls; inspect `internal/openrouter/client.go` before making claims about provider privacy flags. Provider flags are separate from local audio retention.
 - macOS `Source.Configure` maps system-audio aliases to its system-audio source and accepts a nonblank explicit bundle ID. Wails currently limits lesson targets in `validTarget`; Zoom is a default option, not the only app the capture source can target. Check both boundaries before claiming a target is supported in the UI. Swift emits 2-second chunks; Go assembles utterance windows in `internal/service/capture_pipeline.go`.
-- The selection lookup helper is separate from capture. `helperEnvironment` removes `OPENROUTER_API_KEY` and `SUPABASE_SECRET_KEY` before that process starts. Selection text must not be logged or stored in `AppSnapshot`. Non-Darwin builds keep `internal/selection.Runner` as a no-op.
+- The selection lookup helper (`native/macos-lookup`, `internal/selection`) is separate from capture. `helperEnvironment` removes `OPENROUTER_API_KEY` and `SUPABASE_SECRET_KEY` before `call-analyzer-lookup` starts. Selection text must not be logged or stored in `AppSnapshot`. Non-Darwin builds keep `internal/selection.Runner` as a no-op (`runner_other.go`).
 - `loadSettings` forces sync off. The app does not start `internal/sync.Dispatcher`; never sync the SQLite file.
 - The vocabulary sync runner is a separate cross-platform goroutine started by
   `Service.Initialize`; it does not use or revive the legacy `SyncEnabled` flag.
@@ -67,15 +69,18 @@ These instructions authorize the orchestrator to delegate implementation work wi
   different `SUPABASE_SECRET_KEY` environment value; never reuse the Mac key.
 - The sync runner must use the app-provided secret store, not construct a
   default store internally. Never place the Supabase secret in SQLite, logs,
-  tests, documentation, or `AppSnapshot`.
+  tests, documentation, or `AppSnapshot`. Generic Supabase/Postgres skills must
+  not be used to run live Supabase queries or add Postgres migrations in this
+  desktop repository; shared Postgres schema lives in `../call-analyzer-lesson-db`
+  and desktop sync stays offline per `.agents/skills/supabase-sync/SKILL.md`.
 - Wails JSON is camelCase. `EditCandidate` sends `pinyin`, mapped in `app.go` to `domain.CandidateEdit.Reading`.
-- Keep the non-Darwin capture stubs compiling when changing the capture implementation.
+- Keep all non-Darwin stubs (`platform_source_stub.go`, `internal/capture/macos/adapter_stub.go`, `internal/selection/runner_other.go`) compiling when changing macOS helpers or adapters.
 - Tests and fixture evaluation stay offline. Never pass `-execute` to `cmd/evaluate` unless the user explicitly asks for live OpenRouter calls.
 - Do not read or write the real Keychain item or `~/Library/Application Support/call_analyzer/call_analyzer.db` unless the user asks.
 
 ## Contract and completion
 
-Before a cross-component change, find all callers and consumers, inspect persisted data, and update the Go and frontend contracts together. For a Wails change, inspect `app.go`, `app_contract.go`, `frontend/src/lib/types.ts`, and both clients in `frontend/src/lib/api.ts`. For a schema change, add the next migration; do not edit an applied migration.
+Before a cross-component change, find all callers and consumers, inspect persisted data, and update the Go and frontend contracts together. For a Wails change, inspect `app.go`, `app_contract.go`, `snapshot.go`, `contract_test.go`, `frontend/src/lib/types.ts`, and both clients in `frontend/src/lib/api.ts`. For a SQLite schema change, add the next migration; do not edit an applied migration.
 
 If work will span sessions or another agent must resume it, follow `docs/work/README.md`: create a focused `docs/work/<short-slug>.md` handoff note and delete it when the work is done. Do not add a handoff note for routine work.
 

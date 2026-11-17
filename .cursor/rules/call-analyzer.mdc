@@ -9,6 +9,6 @@ Follow the root `AGENTS.md`. Current source code defines behavior and contracts;
 
 Use the canonical skills in `.agents/skills` for verification, Wails contracts, SQLite migrations, and desktop vocabulary sync. Cursor compatibility pointers live in `.cursor/skills`.
 
-The shared Postgres schema lives in `../call-analyzer-lesson-db`. The live morning Telegram job lives in `../call-analyzer-active-recall`. Do not edit those repos from this workspace unless the user opened them. Never copy the Mac `SUPABASE_SECRET_KEY` into the recall service or a Windows environment.
+The shared Postgres schema lives in `../call-analyzer-lesson-db`. The live morning Telegram job lives in `../call-analyzer-active-recall`. Do not edit those repos from this workspace unless the user opened them, and do not add Postgres migrations or run live Supabase commands from this desktop repo. Never copy the Mac `SUPABASE_SECRET_KEY` into the recall service or a Windows environment, and never put secrets or `Command-Option-5` selection text into SQLite, logs, or `AppSnapshot`.
 
 Keep checks offline: do not run `go run ./cmd/evaluate -execute` or send live lesson audio unless the user asks. Preserve unrelated changes and report checks that could not be run.

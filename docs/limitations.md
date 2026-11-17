@@ -14,7 +14,9 @@ Verified against the current tree. Product boundaries also listed in `README.md`
 - Highlighted-word lookup needs the Call Analyzer process running; closing the
   app window quits it and stops the `Command-Option-5` helper. There is no
   menu-bar-only mode.
-- Lookup reads selected text through Accessibility, not screen pixels. A selection without Han text is refused. There is no character-count cap on the highlight.
+- Lookup reads selected text through Accessibility, not screen pixels. A selection without Han text is refused. Surrounding Accessibility context is capped to 80 runes (`normalizeSelectionContext`), while there is no character-count cap on the highlight itself.
+- `call_analyzer:selection.add-word` remains wired in `app.go` and `frontend/src/lib/api.ts`, though `call-analyzer-lookup` now generates and saves cards inside its own panel (refreshing the main window via `vocabulary.changed` → `call_analyzer:snapshot_changed`) instead of emitting that event.
+- Vocabulary screen cards can be filtered and deleted, not edited in place: `EditCandidate` only updates `status = 'candidate'` rows in Candidate Inbox. Re-saving the same `(simplified, traditional, reading)` key through Add Word, Photo review, or the lookup tooltip replaces its senses, examples, and tags.
 - Vocabulary outbox delivery requires a configured per-machine Supabase
   secret. Without it, rows remain local. The runner does not sync lessons,
   transcripts, observations, study-state changes, or review events.
