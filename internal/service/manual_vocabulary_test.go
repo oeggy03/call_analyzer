@@ -103,8 +103,15 @@ func TestGenerateManualVocabularyUsesStrictModelAndPreservesUserValues(t *testin
 	if requestPayload["model"] != openrouter.DefaultChatModel {
 		t.Fatalf("unexpected request model: %#v", requestPayload["model"])
 	}
-	if requestPayload["zdr"] != true {
-		t.Fatalf("request did not require ZDR: %#v", requestPayload)
+	if _, ok := requestPayload["zdr"]; ok {
+		t.Fatalf("request unexpectedly included top-level zdr: %#v", requestPayload)
+	}
+	provider, _ := requestPayload["provider"].(map[string]any)
+	if provider["require_parameters"] != true || provider["data_collection"] != "deny" {
+		t.Fatalf("request did not deny provider data collection: %#v", requestPayload["provider"])
+	}
+	if _, ok := provider["zdr"]; ok {
+		t.Fatalf("request provider unexpectedly included zdr: %#v", provider)
 	}
 	reasoning, _ := requestPayload["reasoning"].(map[string]any)
 	if reasoning["effort"] != "none" {

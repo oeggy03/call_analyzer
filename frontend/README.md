@@ -68,8 +68,10 @@ Add Word generation is disabled during capture, while saving a complete
 manual entry remains available. Photo reading and saving are also available
 during capture.
 
-ZDR describes provider-side routing for lesson transcription, lesson analysis,
-and Add Word generation. Photo vision requests do not include ZDR or
+`privacy.zdrEnabled` reports whether Zero Data Retention routing is active (`false`
+by default; lesson transcription, lesson analysis, Add Word generation, and
+selection lookup send `data_collection: deny` without restricting `zdr` routing).
+Photo vision requests do not include ZDR or
 data-collection-denial fields. Local audio retention is separate; the helper
 currently deletes audio after capture regardless of the selected retention
 label.

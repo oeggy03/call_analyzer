@@ -146,17 +146,17 @@ func TestManualAnalysisKeepsEntireMarkedWindow(t *testing.T) {
 	}
 }
 
-func TestAutomaticAnalysisBatchesTwentySecondsOfTranscript(t *testing.T) {
+func TestAutomaticAnalysisBatchesThirtySecondsOfTranscript(t *testing.T) {
 	segments := []domain.TranscriptSegment{
-		{StartMS: 0, EndMS: 8_000, Text: "第一句"},
-		{StartMS: 9_000, EndMS: 19_000, Text: "第二句"},
+		{StartMS: 0, EndMS: 12_000, Text: "第一句"},
+		{StartMS: 13_000, EndMS: 29_000, Text: "第二句"},
 	}
 	if automaticBatchReady(segments) {
-		t.Fatal("automatic analyzer ran before the twenty-second cadence")
+		t.Fatal("automatic analyzer ran before the thirty-second cadence")
 	}
-	segments = append(segments, domain.TranscriptSegment{StartMS: 19_000, EndMS: 22_000, Text: "第三句"})
+	segments = append(segments, domain.TranscriptSegment{StartMS: 29_000, EndMS: 32_000, Text: "第三句"})
 	if !automaticBatchReady(segments) {
-		t.Fatal("automatic analyzer did not run after accumulating twenty seconds")
+		t.Fatal("automatic analyzer did not run after accumulating thirty seconds")
 	}
 }
 
@@ -172,7 +172,7 @@ func TestBudgetExhaustionPausesCloudWorkWithoutErrorSpam(t *testing.T) {
 	svc.exhaustSessionBudget(session)
 	svc.exhaustSessionBudget(session)
 
-	if !session.budgetExhausted {
+	if !session.budgetExhausted.Load() {
 		t.Fatal("session was not moved to budget-exhausted state")
 	}
 	if events != 1 {
@@ -348,6 +348,327 @@ func TestStopTimeoutRetainsLessonForRecovery(t *testing.T) {
 	}
 	if svc.capturing {
 		t.Fatal("timed-out stop still reported active capture")
+	}
+}
+
+func TestSlowVocabularyExtractionDoesNotBlockTranscription(t *testing.T) {
+	chatEntered := make(chan struct{}, 1)
+	releaseChat := make(chan struct{})
+	var sttCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/audio/transcriptions":
+			n := sttCalls.Add(1)
+			_, _ = w.Write([]byte(`{"text":"第` + string(rune('一'+n-1)) + `句中文"}`))
+		case "/api/v1/chat/completions":
+			select {
+			case chatEntered <- struct{}{}:
+			default:
+			}
+			<-releaseChat
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"candidates\":[]}"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	secrets := NewMemorySecretStore()
+	if err := secrets.Set(ctx, secretOpenRouterAPIKey, "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	router, err := openrouter.NewClient(openrouter.Config{
+		BaseURL:   server.URL,
+		RetryBase: time.Millisecond,
+	}, APIKeySecretProvider{Store: secrets, Name: secretOpenRouterAPIKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := capture.NewMockSource()
+	svc := New(store, source, secrets, router)
+	if err := svc.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ocrEnabled := true
+	if err := svc.ApplySettings(ctx, SettingsPatch{OCREnabled: &ocrEnabled}); err != nil {
+		t.Fatal(err)
+	}
+	emittedSegments := make(chan domain.TranscriptSegment, 8)
+	svc.SetEventHook(func(name string, payload any) {
+		if name == "transcript.segment" {
+			if seg, ok := payload.(domain.TranscriptSegment); ok {
+				emittedSegments <- seg
+			}
+		}
+	})
+
+	start := time.Unix(1_000, 0).UTC()
+	lesson, err := svc.StartLesson(ctx, "decoupled", start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.StartCapture(ctx, lesson.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Trigger an immediate background ChatJSON call via an OCR event, and hold
+	// ChatJSON open on the server while feeding live audio utterances.
+	svc.receiveEvent(capture.Event{
+		Kind:      "ocr",
+		Source:    "system/ocr",
+		Timestamp: start.Add(time.Second),
+		Text:      "屏幕词汇",
+	})
+	select {
+	case <-chatEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background vocabulary extraction did not start")
+	}
+	// Drain the OCR transcript segment event.
+	<-emittedSegments
+
+	// Feed a voiced 8s + 4s silence utterance while ChatJSON is completely blocked.
+	for i := 0; i < 4; i++ {
+		if err := source.Feed(testAudioFrame(start.Add(time.Duration(i)*2*time.Second), 2_000)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 4; i < 6; i++ {
+		if err := source.Feed(testAudioFrame(start.Add(time.Duration(i)*2*time.Second), 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	select {
+	case seg := <-emittedSegments:
+		if seg.Source != "remote" || !strings.Contains(seg.Text, "中文") {
+			t.Fatalf("unexpected live transcript segment while vocab AI blocked: %#v", seg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("audio transcription was blocked by slow ChatJSON vocabulary extraction")
+	}
+
+	close(releaseChat)
+	if err := svc.StopCapture(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConcurrentTranscriptionsCommitInStrictSequenceOrder(t *testing.T) {
+	secondDone := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/audio/transcriptions":
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			file, header, err := r.FormFile("file")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			_ = file.Close()
+			// Identify win1 (smaller 4-sample WAV) vs win2 (larger 8-sample WAV)
+			// regardless of which worker goroutine reaches TCP accept first.
+			if header.Size < 60 {
+				<-secondDone
+				_, _ = w.Write([]byte(`{"text":"今天我们学习谈判技巧"}`))
+			} else {
+				_, _ = w.Write([]byte(`{"text":"谈判技巧非常重要"}`))
+				close(secondDone)
+			}
+		case "/api/v1/chat/completions":
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"candidates\":[]}"}}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	secrets := NewMemorySecretStore()
+	if err := secrets.Set(ctx, secretOpenRouterAPIKey, "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	router, err := openrouter.NewClient(openrouter.Config{
+		BaseURL:   server.URL,
+		RetryBase: time.Millisecond,
+	}, APIKeySecretProvider{Store: secrets, Name: secretOpenRouterAPIKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := New(store, capture.NewMockSource(), secrets, router)
+	start := time.Unix(2_000, 0).UTC()
+	lesson, err := svc.StartLesson(ctx, "ordered", start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ring, err := audio.NewRingBuffer(audio.DefaultRingCapacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := newCaptureSession(ctx, ring, lesson.ID, start)
+	session.start(svc)
+
+	win1 := audio.AudioWindow{
+		Start: start, End: start.Add(10 * time.Second),
+		Samples: []int16{2_000, -2_000, 2_000, -2_000}, SampleRate: 2, Channels: 1,
+	}
+	win2 := audio.AudioWindow{
+		Start: start.Add(8 * time.Second), End: start.Add(18 * time.Second),
+		Samples: []int16{2_000, -2_000, 2_000, -2_000, 2_000, -2_000, 2_000, -2_000, 2_000, -2_000, 2_000, -2_000}, SampleRate: 2, Channels: 1,
+	}
+	if !session.enqueueJob(analysisJob{window: win1, source: "remote"}, false) {
+		t.Fatal("enqueue win1 failed")
+	}
+	if !session.enqueueJob(analysisJob{window: win2, source: "remote"}, false) {
+		t.Fatal("enqueue win2 failed")
+	}
+	if err := session.stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	segments, err := svc.ListTranscript(ctx, lesson.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segments) != 2 {
+		t.Fatalf("expected 2 ordered segments, got %#v", segments)
+	}
+	if segments[0].Text != "今天我们学习谈判技巧" {
+		t.Fatalf("segment[0] = %q, want first window intact", segments[0].Text)
+	}
+	if segments[1].Text != "非常重要" {
+		t.Fatalf("segment[1] = %q, want overlap-deduplicated delta \"非常重要\"", segments[1].Text)
+	}
+}
+
+func TestAccumulatorCoalescesUnderBackpressureWithoutDroppingSpeech(t *testing.T) {
+	start := time.Unix(30, 0).UTC()
+	ring, err := audio.NewRingBuffer(audio.DefaultRingCapacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := newCaptureSession(context.Background(), ring, "lesson", start)
+	owner := &Service{}
+
+	// Fill the job queue completely to simulate cloud backpressure.
+	for i := 0; i < captureJobQueueSize; i++ {
+		if !session.enqueueJob(analysisJob{text: "queued"}, false) {
+			t.Fatalf("queue filled early at %d", i)
+		}
+	}
+
+	// Feed 16 seconds of voiced speech; it must stay buffered instead of dropping.
+	for i := 0; i < 8; i++ {
+		session.accumulate(owner, testAudioFrame(start.Add(time.Duration(i)*2*time.Second), 1_500))
+	}
+	if owner.LessonError() != "" {
+		t.Fatalf("unexpected drop error within coalesce cap: %q", owner.LessonError())
+	}
+	if len(session.accumulators["remote"].frames) == 0 {
+		t.Fatal("speech frames were dropped instead of coalesced during backpressure")
+	}
+
+	// Free one slot and feed one more frame; the buffered 15s window should enqueue.
+	<-session.jobs
+	session.accumulate(owner, testAudioFrame(start.Add(16*time.Second), 1_500))
+	if len(session.jobs) != captureJobQueueSize {
+		t.Fatalf("buffered speech was not enqueued once queue capacity freed: len=%d", len(session.jobs))
+	}
+}
+
+func TestStopAndEndCurrentLessonFinalizesWhenTrailingVocabExtractionTimesOut(t *testing.T) {
+	serverDone := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/audio/transcriptions":
+			_, _ = w.Write([]byte(`{"text":"保存下来的课程内容","usage":{"cost":0.01}}`))
+		case "/api/v1/chat/completions":
+			select {
+			case <-r.Context().Done():
+			case <-serverDone:
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer func() {
+		close(serverDone)
+		server.Close()
+	}()
+
+	prevVocabDrain := vocabStopDrainTimeout
+	prevCancelDrain := sessionCancelDrainTimeout
+	vocabStopDrainTimeout = 25 * time.Millisecond
+	sessionCancelDrainTimeout = 25 * time.Millisecond
+	t.Cleanup(func() {
+		vocabStopDrainTimeout = prevVocabDrain
+		sessionCancelDrainTimeout = prevCancelDrain
+	})
+
+	ctx := context.Background()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	secrets := NewMemorySecretStore()
+	if err := secrets.Set(ctx, secretOpenRouterAPIKey, "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	router, err := openrouter.NewClient(openrouter.Config{
+		BaseURL:     server.URL,
+		MaxRetries:  0,
+		ChatTimeout: 30 * time.Millisecond,
+	}, APIKeySecretProvider{Store: secrets, Name: secretOpenRouterAPIKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := capture.NewMockSource()
+	svc := New(store, source, secrets, router)
+	if err := svc.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Unix(3_000, 0).UTC()
+	lesson, err := svc.StartLesson(ctx, "resilient-stop", start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.StartCapture(ctx, lesson.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		if err := source.Feed(testAudioFrame(start.Add(time.Duration(i)*2*time.Second), 2_000)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ended, err := svc.StopAndEndCurrentLesson(ctx)
+	if err != nil {
+		t.Fatalf("StopAndEndCurrentLesson failed when only trailing vocab AI timed out: %v", err)
+	}
+	if ended.EndedAt == nil {
+		t.Fatal("lesson EndedAt was left nil")
+	}
+	segments, err := svc.ListTranscript(ctx, lesson.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segments) != 1 || segments[0].Text != "保存下来的课程内容" {
+		t.Fatalf("captured transcript was not preserved before lesson close: %#v", segments)
 	}
 }
 

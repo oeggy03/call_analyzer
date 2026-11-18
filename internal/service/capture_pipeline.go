@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/oeggy03/call_analyzer/internal/audio"
@@ -18,23 +19,42 @@ import (
 )
 
 const (
-	captureFrameQueueSize    = 64
-	captureJobQueueSize      = 16
-	chunkDuration            = 15 * time.Second
-	chunkOverlap             = 2 * time.Second
-	minUtteranceContext      = 8 * time.Second
-	utteranceSilence         = 2 * time.Second
-	automaticAnalysisCadence = 20 * time.Second
-	vadThreshold             = 0.01
+	captureFrameQueueSize       = 64
+	captureJobQueueSize         = 64
+	captureVocabQueueSize       = 128
+	transcriptionWorkerCount    = 3
+	maxBackpressureCoalesceSpan = 45 * time.Second
+	chunkDuration               = 15 * time.Second
+	chunkOverlap                = 2 * time.Second
+	minUtteranceContext         = 8 * time.Second
+	utteranceSilence            = 2 * time.Second
+	automaticAnalysisCadence    = 30 * time.Second
+	vadThreshold                = 0.01
 )
 
-var sessionCancelDrainTimeout = 5 * time.Second
+var (
+	sessionCancelDrainTimeout = 5 * time.Second
+	transcriptionDrainTimeout = 2 * time.Minute
+	vocabStopDrainTimeout     = 45 * time.Second
+)
 
 type analysisJob struct {
+	seq       uint64
 	window    audio.AudioWindow
 	source    string
 	manual    bool
 	text      string
+	timestamp time.Time
+}
+
+type transcribedItem struct {
+	job  analysisJob
+	text string
+}
+
+type vocabTask struct {
+	segment   domain.TranscriptSegment
+	manual    bool
 	timestamp time.Time
 }
 
@@ -45,63 +65,100 @@ type sourceAccumulator struct {
 }
 
 type captureSession struct {
-	ctx             context.Context
-	cancel          context.CancelFunc
-	manualCtx       context.Context
-	manualCancel    context.CancelFunc
-	stopCh          chan struct{}
-	stopOnce        sync.Once
-	failureOnce     sync.Once
-	frames          chan capture.AudioFrame
-	events          chan capture.Event
-	jobs            chan analysisJob
-	priorityJobs    chan analysisJob
-	done            chan struct{}
-	manualWG        sync.WaitGroup
-	accumulators    map[string]*sourceAccumulator
-	lastText        map[string]string
-	pendingAuto     []domain.TranscriptSegment
-	pendingSince    time.Time
-	nextAutoAttempt time.Time
-	budgetExhausted bool
-	ring            *audio.RingBuffer
-	lessonID        string
-	lessonStart     time.Time
-	sessionID       string
+	ctx               context.Context
+	cancel            context.CancelFunc
+	manualCtx         context.Context
+	manualCancel      context.CancelFunc
+	vocabCtx          context.Context
+	vocabCancel       context.CancelFunc
+	stopCh            chan struct{}
+	stopOnce          sync.Once
+	failureOnce       sync.Once
+	frames            chan capture.AudioFrame
+	events            chan capture.Event
+	jobs              chan analysisJob
+	priorityJobs      chan analysisJob
+	transcribed       chan transcribedItem
+	vocabTasks        chan vocabTask
+	transcriptionDone chan struct{}
+	done              chan struct{}
+	manualWG          sync.WaitGroup
+	jobSeqMu          sync.Mutex
+	nextJobSeq        uint64
+	accumulators      map[string]*sourceAccumulator
+	lastText          map[string]string
+	pendingAuto       []domain.TranscriptSegment
+	pendingSince      time.Time
+	nextAutoAttempt   time.Time
+	budgetExhausted   atomic.Bool
+	ring              *audio.RingBuffer
+	lessonID          string
+	lessonStart       time.Time
+	sessionID         string
 }
 
 func newCaptureSession(parent context.Context, ring *audio.RingBuffer, lessonID string, lessonStart time.Time) *captureSession {
 	ctx, cancel := context.WithCancel(parent)
 	manualCtx, manualCancel := context.WithCancel(ctx)
+	vocabCtx, vocabCancel := context.WithCancel(ctx)
 	return &captureSession{
-		ctx:          ctx,
-		cancel:       cancel,
-		manualCtx:    manualCtx,
-		manualCancel: manualCancel,
-		stopCh:       make(chan struct{}),
-		frames:       make(chan capture.AudioFrame, captureFrameQueueSize),
-		events:       make(chan capture.Event, captureFrameQueueSize),
-		jobs:         make(chan analysisJob, captureJobQueueSize),
-		priorityJobs: make(chan analysisJob, captureJobQueueSize),
-		done:         make(chan struct{}),
-		accumulators: make(map[string]*sourceAccumulator),
-		lastText:     make(map[string]string),
-		ring:         ring,
-		lessonID:     lessonID,
-		lessonStart:  lessonStart,
-		sessionID:    lessonID,
+		ctx:               ctx,
+		cancel:            cancel,
+		manualCtx:         manualCtx,
+		manualCancel:      manualCancel,
+		vocabCtx:          vocabCtx,
+		vocabCancel:       vocabCancel,
+		stopCh:            make(chan struct{}),
+		frames:            make(chan capture.AudioFrame, captureFrameQueueSize),
+		events:            make(chan capture.Event, captureFrameQueueSize),
+		jobs:              make(chan analysisJob, captureJobQueueSize),
+		priorityJobs:      make(chan analysisJob, captureJobQueueSize),
+		transcribed:       make(chan transcribedItem, captureJobQueueSize),
+		vocabTasks:        make(chan vocabTask, captureVocabQueueSize),
+		transcriptionDone: make(chan struct{}),
+		done:              make(chan struct{}),
+		accumulators:      make(map[string]*sourceAccumulator),
+		lastText:          make(map[string]string),
+		ring:              ring,
+		lessonID:          lessonID,
+		lessonStart:       lessonStart,
+		sessionID:         lessonID,
 	}
+}
+
+func (s *captureSession) vocabContext() context.Context {
+	if s.vocabCtx != nil {
+		return s.vocabCtx
+	}
+	if s.ctx != nil {
+		return s.ctx
+	}
+	return context.Background()
 }
 
 func (s *captureSession) start(owner *Service) {
 	go s.runFrames(owner)
-	go s.runProcessor(owner)
+	var sttWG sync.WaitGroup
+	sttWG.Add(transcriptionWorkerCount)
+	for worker := 0; worker < transcriptionWorkerCount; worker++ {
+		go s.runTranscriptionWorker(owner, &sttWG)
+	}
+	go func() {
+		sttWG.Wait()
+		close(s.transcribed)
+	}()
+	go s.runTranscriptCommitter(owner)
+	go s.runVocabAnalyzer(owner)
 }
 
-func (s *captureSession) stop(ctx context.Context) error {
+func (s *captureSession) requestStop() {
 	s.stopOnce.Do(func() {
 		close(s.stopCh)
 	})
+}
+
+func (s *captureSession) stop(ctx context.Context) error {
+	s.requestStop()
 	select {
 	case <-s.done:
 		s.cancel()
@@ -109,11 +166,59 @@ func (s *captureSession) stop(ctx context.Context) error {
 	case <-ctx.Done():
 		s.cancel()
 		s.manualCancel()
+		if s.vocabCancel != nil {
+			s.vocabCancel()
+		}
 		select {
 		case <-s.done:
 		case <-time.After(sessionCancelDrainTimeout):
 		}
 		return ctx.Err()
+	}
+}
+
+// stopForLessonEnd drains audio transcription first so all spoken segments are
+// persisted to SQLite, then gives background vocabulary extraction a separate
+// bounded window that will not wedge lesson closure if an LLM call times out.
+func (s *captureSession) stopForLessonEnd(parent context.Context) (transcriptionErr error, vocabErr error) {
+	s.requestStop()
+
+	sttCtx, sttCancel := context.WithTimeout(parent, transcriptionDrainTimeout)
+	select {
+	case <-s.transcriptionDone:
+		sttCancel()
+	case <-sttCtx.Done():
+		sttErr := sttCtx.Err()
+		sttCancel()
+		s.cancel()
+		s.manualCancel()
+		if s.vocabCancel != nil {
+			s.vocabCancel()
+		}
+		select {
+		case <-s.done:
+		case <-time.After(sessionCancelDrainTimeout):
+		}
+		return sttErr, nil
+	}
+
+	vocabWaitCtx, vocabWaitCancel := context.WithTimeout(parent, vocabStopDrainTimeout)
+	defer vocabWaitCancel()
+	select {
+	case <-s.done:
+		s.cancel()
+		return nil, nil
+	case <-vocabWaitCtx.Done():
+		err := vocabWaitCtx.Err()
+		if s.vocabCancel != nil {
+			s.vocabCancel()
+		}
+		select {
+		case <-s.done:
+		case <-time.After(sessionCancelDrainTimeout):
+		}
+		s.cancel()
+		return nil, err
 	}
 }
 
@@ -144,8 +249,13 @@ func (s *captureSession) enqueueJob(job analysisJob, required bool) bool {
 			return false
 		}
 	}
+	s.jobSeqMu.Lock()
+	defer s.jobSeqMu.Unlock()
+	nextSeq := s.nextJobSeq + 1
+	job.seq = nextSeq
 	select {
 	case s.jobs <- job:
+		s.nextJobSeq = nextSeq
 		return true
 	default:
 		return false
@@ -201,7 +311,7 @@ func (s *captureSession) handleFrame(owner *Service, frame capture.AudioFrame) {
 			SampleRate: frame.SampleRate,
 			Channels:   frame.Channels,
 		}); err != nil {
-			owner.diagnostic("capture frame dropped", err)
+			owner.transientDiagnostic("capture frame dropped", err)
 			return
 		}
 	}
@@ -219,9 +329,7 @@ func (s *captureSession) handleEvent(owner *Service, event capture.Event) {
 		if event.Fatal {
 			s.failureOnce.Do(func() {
 				owner.captureSessionFailed(s)
-				s.stopOnce.Do(func() {
-					close(s.stopCh)
-				})
+				s.requestStop()
 			})
 		}
 		return
@@ -254,14 +362,12 @@ func (s *captureSession) handleEvent(owner *Service, event capture.Event) {
 		text:      event.Text,
 		timestamp: event.Timestamp,
 	}, false) {
-		owner.diagnostic("OCR analysis queue full", nil)
+		owner.transientDiagnostic("OCR analysis queue full", nil)
 	}
 }
 
-func (s *captureSession) runProcessor(owner *Service) {
-	defer close(s.done)
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+func (s *captureSession) runTranscriptionWorker(owner *Service, wg *sync.WaitGroup) {
+	defer wg.Done()
 	jobs := s.jobs
 	priorityJobs := s.priorityJobs
 	for jobs != nil || priorityJobs != nil {
@@ -271,7 +377,8 @@ func (s *captureSession) runProcessor(owner *Service) {
 				if !ok {
 					priorityJobs = nil
 				} else {
-					owner.processAnalysisJob(s.ctx, s, job)
+					text := owner.transcribeJob(s.ctx, s, job)
+					s.transcribed <- transcribedItem{job: job, text: text}
 				}
 				continue
 			default:
@@ -283,24 +390,73 @@ func (s *captureSession) runProcessor(owner *Service) {
 				priorityJobs = nil
 				continue
 			}
-			owner.processAnalysisJob(s.ctx, s, job)
+			text := owner.transcribeJob(s.ctx, s, job)
+			s.transcribed <- transcribedItem{job: job, text: text}
 		case job, ok := <-jobs:
 			if !ok {
 				jobs = nil
 				continue
 			}
-			owner.processAnalysisJob(s.ctx, s, job)
+			text := owner.transcribeJob(s.ctx, s, job)
+			s.transcribed <- transcribedItem{job: job, text: text}
+		}
+	}
+}
+
+func (s *captureSession) runTranscriptCommitter(owner *Service) {
+	defer func() {
+		close(s.vocabTasks)
+		close(s.transcriptionDone)
+	}()
+	expectedSeq := uint64(1)
+	pending := make(map[uint64]transcribedItem)
+	for item := range s.transcribed {
+		if item.job.manual || item.job.seq == 0 {
+			owner.commitTranscribedItem(s, item)
+			continue
+		}
+		pending[item.job.seq] = item
+		for {
+			next, ok := pending[expectedSeq]
+			if !ok {
+				break
+			}
+			delete(pending, expectedSeq)
+			expectedSeq++
+			owner.commitTranscribedItem(s, next)
+		}
+	}
+}
+
+func (s *captureSession) runVocabAnalyzer(owner *Service) {
+	defer close(s.done)
+	vctx := s.vocabContext()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	vocabTasks := s.vocabTasks
+	for vocabTasks != nil {
+		select {
+		case task, ok := <-vocabTasks:
+			if !ok {
+				vocabTasks = nil
+				continue
+			}
+			owner.handleVocabTask(vctx, s, task)
 		case <-ticker.C:
 			dueAt := s.pendingSince.Add(automaticAnalysisCadence)
 			if !s.nextAutoAttempt.IsZero() {
 				dueAt = s.nextAutoAttempt
 			}
 			if !s.pendingSince.IsZero() && !time.Now().Before(dueAt) {
-				owner.flushAutomaticAnalysis(s.ctx, s)
+				owner.flushAutomaticAnalysis(vctx, s)
 			}
+		case <-vctx.Done():
+			return
 		}
 	}
-	owner.flushAutomaticAnalysis(s.ctx, s)
+	if vctx.Err() == nil {
+		owner.flushAutomaticAnalysis(vctx, s)
+	}
 }
 
 func (s *captureSession) accumulate(owner *Service, frame capture.AudioFrame) {
@@ -329,27 +485,50 @@ func (s *captureSession) accumulate(owner *Service, frame capture.AudioFrame) {
 	for framesDuration(acc.frames) >= chunkDuration {
 		windowVoiced := prefixFramesVoiced(acc.frames, chunkDuration)
 		window, remaining := splitAccumulator(acc.frames, chunkDuration, chunkOverlap)
-		acc.frames = remaining
-		acc.voiced = accumulatorVoiced(remaining)
-		acc.silenceDuration = trailingSilenceDuration(remaining)
-		if windowVoiced && window.End.After(window.Start) {
-			if !s.enqueueJob(analysisJob{window: window, source: source}, false) {
-				owner.diagnostic("audio analysis queue full", nil)
-			}
+		if !windowVoiced || !window.End.After(window.Start) {
+			acc.frames = remaining
+			acc.voiced = accumulatorVoiced(remaining)
+			acc.silenceDuration = trailingSilenceDuration(remaining)
+			continue
 		}
+		if s.enqueueJob(analysisJob{window: window, source: source}, false) {
+			acc.frames = remaining
+			acc.voiced = accumulatorVoiced(remaining)
+			acc.silenceDuration = trailingSilenceDuration(remaining)
+			continue
+		}
+		// Keep speech buffered across brief cloud backpressure instead of
+		// dropping the window immediately; shed oldest audio only past the cap.
+		if framesDuration(acc.frames) > maxBackpressureCoalesceSpan {
+			acc.frames = remaining
+			acc.voiced = accumulatorVoiced(remaining)
+			acc.silenceDuration = trailingSilenceDuration(remaining)
+			owner.transientDiagnostic("audio analysis queue full", nil)
+		}
+		return
 	}
 	if acc.voiced &&
 		framesDuration(acc.frames) >= minUtteranceContext &&
 		acc.silenceDuration >= utteranceSilence {
 		window := combineFrames(acc.frames)
-		if window.End.After(window.Start) {
-			if !s.enqueueJob(analysisJob{window: window, source: source}, false) {
-				owner.diagnostic("audio analysis queue full", nil)
-			}
+		if !window.End.After(window.Start) {
+			acc.frames = nil
+			acc.voiced = false
+			acc.silenceDuration = 0
+			return
 		}
-		acc.frames = nil
-		acc.voiced = false
-		acc.silenceDuration = 0
+		if s.enqueueJob(analysisJob{window: window, source: source}, false) {
+			acc.frames = nil
+			acc.voiced = false
+			acc.silenceDuration = 0
+			return
+		}
+		if framesDuration(acc.frames) > maxBackpressureCoalesceSpan {
+			acc.frames = nil
+			acc.voiced = false
+			acc.silenceDuration = 0
+			owner.transientDiagnostic("audio analysis queue full", nil)
+		}
 	}
 }
 
@@ -361,7 +540,7 @@ func (s *captureSession) flush(owner *Service) {
 		window := combineFrames(acc.frames)
 		if acc.voiced && window.End.After(window.Start) {
 			if !s.enqueueJob(analysisJob{window: window, source: source}, false) {
-				owner.diagnostic("audio flush queue full", nil)
+				owner.transientDiagnostic("audio flush queue full", nil)
 			}
 		}
 		acc.frames = nil
@@ -417,10 +596,11 @@ func splitAccumulator(frames []audio.Frame, maxDuration, overlap time.Duration) 
 		return window, nil
 	}
 	takeSamples := maxFrames * window.Channels
-	window.Samples = append([]int16(nil), window.Samples[:takeSamples]...)
+	allSamples := window.Samples
+	window.Samples = append([]int16(nil), allSamples[:takeSamples]...)
 	window.End = window.Start.Add(time.Duration(float64(maxFrames) / float64(window.SampleRate) * float64(time.Second)))
 	retainFrom := (maxFrames - overlapFrames) * window.Channels
-	remainingSamples := append([]int16(nil), combineFrames(frames).Samples[retainFrom:]...)
+	remainingSamples := append([]int16(nil), allSamples[retainFrom:]...)
 	remainingStart := window.Start.Add(time.Duration(float64(maxFrames-overlapFrames) / float64(window.SampleRate) * float64(time.Second)))
 	return window, []audio.Frame{{
 		Timestamp:  remainingStart,
@@ -466,45 +646,58 @@ func trailingSilenceDuration(frames []audio.Frame) time.Duration {
 	return duration
 }
 
-func (s *Service) processAnalysisJob(ctx context.Context, session *captureSession, job analysisJob) {
+func (s *Service) transcribeJob(ctx context.Context, session *captureSession, job analysisJob) string {
+	if text := strings.TrimSpace(job.text); text != "" {
+		return text
+	}
+	if ctx.Err() != nil {
+		return ""
+	}
 	s.mu.RLock()
 	router := s.router
 	s.mu.RUnlock()
 	if router == nil {
 		s.diagnostic("OpenRouter is not configured", nil)
-		return
+		return ""
 	}
-	text := strings.TrimSpace(job.text)
-	if text == "" && (session.budgetExhausted || router.BudgetStatus().HardExceeded) {
+	if session.budgetExhausted.Load() || router.BudgetStatus().HardExceeded {
 		s.exhaustSessionBudget(session)
-		return
+		return ""
 	}
-	var usage openrouter.Usage
-	if text == "" {
-		if !audio.VoiceActive(job.window.Samples, vadThreshold) {
-			return
+	if !audio.VoiceActive(job.window.Samples, vadThreshold) {
+		return ""
+	}
+	wav, err := job.window.WAV()
+	if err != nil {
+		s.transientDiagnostic("WAV encoding failed", err)
+		return ""
+	}
+	result, err := router.Transcribe(ctx, wav, "lesson.wav")
+	if result.Usage.Cost > 0 {
+		recordCtx := ctx
+		if recordCtx.Err() != nil {
+			recordCtx = context.Background()
 		}
-		wav, err := job.window.WAV()
-		if err != nil {
-			s.diagnostic("WAV encoding failed", err)
-			return
+		if recordErr := s.recordUsage(recordCtx, session.sessionID, router.ASRModel(), "/api/v1/audio/transcriptions", result.Usage); recordErr != nil {
+			s.transientDiagnostic("recording transcription usage failed", recordErr)
 		}
-		result, err := router.Transcribe(ctx, wav, "lesson.wav")
-		usage = result.Usage
-		if usage.Cost > 0 {
-			if recordErr := s.recordUsage(ctx, session.sessionID, router.ASRModel(), "/api/v1/audio/transcriptions", usage); recordErr != nil {
-				s.diagnostic("recording transcription usage failed", recordErr)
-			}
-		}
-		if err != nil && !errors.Is(err, openrouter.ErrBudgetExceeded) {
-			s.diagnostic("transcription failed", err)
-			return
-		}
-		text = strings.TrimSpace(result.Text)
+	}
+	if err != nil {
 		if errors.Is(err, openrouter.ErrBudgetExceeded) {
 			s.exhaustSessionBudget(session)
+			return strings.TrimSpace(result.Text)
 		}
+		if !errors.Is(err, context.Canceled) {
+			s.transientDiagnostic("transcription failed", err)
+		}
+		return ""
 	}
+	s.clearTransientLessonError()
+	return strings.TrimSpace(result.Text)
+}
+
+func (s *Service) commitTranscribedItem(session *captureSession, item transcribedItem) {
+	text := strings.TrimSpace(item.text)
 	if text == "" {
 		return
 	}
@@ -512,30 +705,34 @@ func (s *Service) processAnalysisJob(ctx context.Context, session *captureSessio
 	if !chinese.ContainsHan(text) {
 		return
 	}
-	source := job.source
+	source := item.job.source
 	if source == "" {
 		source = "microphone"
 	}
 	previous := session.lastText[source]
-	merged, delta := reconcileAnalysisText(previous, text, job.manual)
-	if !job.manual {
+	merged, delta := reconcileAnalysisText(previous, text, item.job.manual)
+	if !item.job.manual {
 		session.lastText[source] = merged
 	}
 	if delta == "" {
 		return
 	}
 
-	start := job.window.Start
-	end := job.window.End
+	start := item.job.window.Start
+	end := item.job.window.End
 	if start.IsZero() {
-		start = job.timestamp
-		end = job.timestamp
+		start = item.job.timestamp
+		end = item.job.timestamp
 		if start.IsZero() {
 			start = time.Now().UTC()
 			end = start
 		}
 	}
-	segment, err := s.store.Transcripts().Insert(ctx, domain.TranscriptSegment{
+	storeCtx := session.ctx
+	if storeCtx == nil || storeCtx.Err() != nil {
+		storeCtx = context.Background()
+	}
+	segment, err := s.store.Transcripts().Insert(storeCtx, domain.TranscriptSegment{
 		LessonID:   session.lessonID,
 		StartMS:    start.Sub(session.lessonStart).Milliseconds(),
 		EndMS:      end.Sub(session.lessonStart).Milliseconds(),
@@ -544,40 +741,65 @@ func (s *Service) processAnalysisJob(ctx context.Context, session *captureSessio
 		Confidence: 1,
 	})
 	if err != nil {
-		s.diagnostic("persisting transcript failed", err)
+		s.transientDiagnostic("persisting transcript failed", err)
 		return
 	}
 	s.emit("transcript.segment", segment)
-	analysisText := segment.Text
-	if strings.HasPrefix(source, "system/ocr") {
-		speechContext, contextErr := s.recentSpeechContext(ctx, session, job.timestamp)
-		if contextErr != nil {
-			s.diagnostic("loading recent speech context failed", contextErr)
-		} else if speechContext != "" {
-			analysisText += "\nRecent speech context:\n" + speechContext
-		}
+
+	vctx := session.vocabContext()
+	select {
+	case session.vocabTasks <- vocabTask{
+		segment:   segment,
+		manual:    item.job.manual,
+		timestamp: item.job.timestamp,
+	}:
+	case <-vctx.Done():
 	}
-	if !job.manual && !strings.HasPrefix(source, "system/ocr") {
-		session.pendingAuto = append(session.pendingAuto, segment)
+}
+
+func (s *Service) handleVocabTask(ctx context.Context, session *captureSession, task vocabTask) {
+	if !task.manual && !strings.HasPrefix(task.segment.Source, "system/ocr") {
+		session.pendingAuto = append(session.pendingAuto, task.segment)
 		if session.pendingSince.IsZero() {
 			session.pendingSince = time.Now()
 		}
-		if automaticBatchReady(session.pendingAuto) &&
+		if len(session.vocabTasks) == 0 &&
+			automaticBatchReady(session.pendingAuto) &&
 			(session.nextAutoAttempt.IsZero() || !time.Now().Before(session.nextAutoAttempt)) {
 			s.flushAutomaticAnalysis(ctx, session)
 		}
 		return
 	}
-	if session.budgetExhausted {
+	if session.budgetExhausted.Load() || ctx.Err() != nil {
 		return
 	}
-	if err := s.analyzeTranscript(ctx, session, router, segment, job.manual, analysisText); err != nil {
+	s.mu.RLock()
+	router := s.router
+	s.mu.RUnlock()
+	if router == nil {
+		s.diagnostic("OpenRouter is not configured", nil)
+		return
+	}
+	analysisText := task.segment.Text
+	if strings.HasPrefix(task.segment.Source, "system/ocr") {
+		speechContext, contextErr := s.recentSpeechContext(ctx, session, task.timestamp)
+		if contextErr != nil {
+			s.transientDiagnostic("loading recent speech context failed", contextErr)
+		} else if speechContext != "" {
+			analysisText += "\nRecent speech context:\n" + speechContext
+		}
+	}
+	if err := s.analyzeTranscript(ctx, session, router, task.segment, task.manual, analysisText); err != nil {
 		if errors.Is(err, openrouter.ErrBudgetExceeded) {
 			s.exhaustSessionBudget(session)
 			return
 		}
-		s.diagnostic("vocabulary extraction failed", err)
+		if !errors.Is(err, context.Canceled) {
+			s.transientDiagnostic("vocabulary extraction failed", err)
+		}
+		return
 	}
+	s.clearTransientLessonError()
 }
 
 func automaticBatchReady(segments []domain.TranscriptSegment) bool {
@@ -592,7 +814,7 @@ func (s *Service) flushAutomaticAnalysis(ctx context.Context, session *captureSe
 		return
 	}
 	segments := session.pendingAuto
-	if session.budgetExhausted {
+	if session.budgetExhausted.Load() {
 		session.pendingAuto = nil
 		session.pendingSince = time.Time{}
 		session.nextAutoAttempt = time.Time{}
@@ -635,19 +857,21 @@ func (s *Service) flushAutomaticAnalysis(ctx context.Context, session *captureSe
 			return
 		}
 		session.nextAutoAttempt = time.Now().Add(15 * time.Second)
-		s.diagnostic("vocabulary extraction failed", err)
+		if !errors.Is(err, context.Canceled) {
+			s.transientDiagnostic("vocabulary extraction failed", err)
+		}
 		return
 	}
 	session.pendingAuto = nil
 	session.pendingSince = time.Time{}
 	session.nextAutoAttempt = time.Time{}
+	s.clearTransientLessonError()
 }
 
 func (s *Service) exhaustSessionBudget(session *captureSession) {
-	if session.budgetExhausted {
+	if !session.budgetExhausted.CompareAndSwap(false, true) {
 		return
 	}
-	session.budgetExhausted = true
 	s.diagnostic(
 		"Session cost limit reached. Cloud analysis is paused; capture and marked-moment timestamps will continue for local review.",
 		nil,
@@ -704,8 +928,12 @@ func (s *Service) analyzeTranscript(
 		Schema:     vocabularyExtractionSchema(),
 	})
 	if response.Usage.Cost > 0 {
-		if recordErr := s.recordUsage(ctx, session.sessionID, router.ChatModel(), "/api/v1/chat/completions", response.Usage); recordErr != nil {
-			s.diagnostic("recording analyzer usage failed", recordErr)
+		recordCtx := ctx
+		if recordCtx.Err() != nil {
+			recordCtx = context.Background()
+		}
+		if recordErr := s.recordUsage(recordCtx, session.sessionID, router.ChatModel(), "/api/v1/chat/completions", response.Usage); recordErr != nil {
+			s.transientDiagnostic("recording analyzer usage failed", recordErr)
 		}
 	}
 	if err != nil {
@@ -728,7 +956,7 @@ func (s *Service) analyzeTranscript(
 	if !manual {
 		tagged, tagErr := s.tagAutomaticEntries(ctx, session.lessonID, entries)
 		if tagErr != nil {
-			s.diagnostic("tagging lesson vocabulary failed", tagErr)
+			s.transientDiagnostic("tagging lesson vocabulary failed", tagErr)
 		} else {
 			entries = tagged
 		}
@@ -825,6 +1053,14 @@ func (s *Service) recordUsage(ctx context.Context, sessionID, model, endpoint st
 }
 
 func (s *Service) diagnostic(message string, err error) {
+	s.recordDiagnostic(message, err, false)
+}
+
+func (s *Service) transientDiagnostic(message string, err error) {
+	s.recordDiagnostic(message, err, true)
+}
+
+func (s *Service) recordDiagnostic(message string, err error, transient bool) {
 	payload := map[string]string{"message": message}
 	if err != nil {
 		payload["error"] = err.Error()
@@ -839,8 +1075,25 @@ func (s *Service) diagnostic(message string, err error) {
 	}
 	if actionable != "" {
 		s.mu.Lock()
-		s.lessonError = actionable
+		// Never overwrite a non-transient session failure (e.g. fatal stream
+		// stop) with a recoverable warning that could later auto-clear it.
+		if !transient || s.lessonError == "" || s.lessonErrorTransient {
+			s.lessonError = actionable
+			s.lessonErrorTransient = transient
+		}
 		s.mu.Unlock()
 	}
 	s.emit("diagnostic", payload)
+}
+
+func (s *Service) clearTransientLessonError() {
+	s.mu.Lock()
+	if s.lessonError == "" || !s.lessonErrorTransient {
+		s.mu.Unlock()
+		return
+	}
+	s.lessonError = ""
+	s.lessonErrorTransient = false
+	s.mu.Unlock()
+	s.emit("diagnostic.cleared", nil)
 }

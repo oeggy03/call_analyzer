@@ -227,13 +227,18 @@ func TestLookupSelectionCallsLookupModelOnceAndCachesResult(t *testing.T) {
 			t.Errorf("decode lookup request: %v", err)
 		}
 		if payload["model"] != openrouter.DefaultLookupModel ||
-			payload["max_tokens"] != float64(selectionLookupMaxTokens) ||
-			payload["zdr"] != true {
+			payload["max_tokens"] != float64(selectionLookupMaxTokens) {
 			t.Errorf("unexpected lookup request: %#v", payload)
 		}
+		if _, ok := payload["zdr"]; ok {
+			t.Errorf("lookup request unexpectedly included top-level zdr: %#v", payload)
+		}
 		provider, _ := payload["provider"].(map[string]any)
-		if provider["data_collection"] != "deny" || provider["zdr"] != true {
+		if provider["require_parameters"] != true || provider["data_collection"] != "deny" {
 			t.Errorf("unexpected lookup provider privacy controls: %#v", provider)
+		}
+		if _, ok := provider["zdr"]; ok {
+			t.Errorf("lookup provider unexpectedly included zdr: %#v", provider)
 		}
 		messages, _ := payload["messages"].([]any)
 		if len(messages) != 2 {

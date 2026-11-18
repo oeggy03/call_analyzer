@@ -123,7 +123,7 @@ func (a *App) buildSnapshot(ctx context.Context) (AppSnapshot, error) {
 			Currency:      "USD",
 		},
 		Privacy: PrivacyState{
-			ZDREnabled:     true,
+			ZDREnabled:     false,
 			AudioRetention: settings.AudioRetention,
 		},
 		Settings: SettingsSnapshot{

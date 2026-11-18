@@ -35,7 +35,7 @@ New automatic suggestions start as `candidate`, and confirmation is separate. Wh
 
 ## Provider privacy flags vary by request
 
-`internal/openrouter/client.go` requests `zdr` and `data_collection: deny` for lesson transcription, lesson analysis, Add Word generation, and selection lookup/card generation (`Transcribe` and `ChatJSON`). Photo vision calls (`ChatVisionJSON`) do not include those flags. Local audio lifetime is the session spool, separate from provider routing.
+`internal/openrouter/client.go` requests `data_collection: deny` (`require_parameters: true`) without requiring `zdr` for lesson transcription, lesson analysis, Add Word generation, and selection lookup/card generation (`Transcribe` and `ChatJSON`). Photo vision calls (`ChatVisionJSON`) do not include those flags. Local audio lifetime is the session spool, separate from provider routing.
 
 ## Cost display has no runtime cap
 
