@@ -39,27 +39,28 @@ type Service struct {
 	supabaseAccessStatus string
 	supabaseAccessDetail string
 
-	mu              sync.RWMutex
-	capturing       bool
-	currentLesson   string
-	lastLesson      string
-	lessonError     string
-	ring            *audio.RingBuffer
-	session         *captureSession
-	sessionID       string
-	sessionLessonID string
-	lessonStarted   time.Time
-	target          string
-	permission      capture.Permission
-	micLevel        float64
-	remoteLevel     float64
-	lastLevelEmit   time.Time
-	settings        RuntimeSettings
-	settingsLoaded  bool
-	eventHook       EventHook
-	selectionCache  selectionLookupCache
-	databasePath    string
-	syncEnabled     bool
+	mu                   sync.RWMutex
+	capturing            bool
+	currentLesson        string
+	lastLesson           string
+	lessonError          string
+	lessonErrorTransient bool
+	ring                 *audio.RingBuffer
+	session              *captureSession
+	sessionID            string
+	sessionLessonID      string
+	lessonStarted        time.Time
+	target               string
+	permission           capture.Permission
+	micLevel             float64
+	remoteLevel          float64
+	lastLevelEmit        time.Time
+	settings             RuntimeSettings
+	settingsLoaded       bool
+	eventHook            EventHook
+	selectionCache       selectionLookupCache
+	databasePath         string
+	syncEnabled          bool
 }
 
 func New(store *storage.Store, source capture.Source, secrets SecretStore, router *openrouter.Client) *Service {
@@ -451,6 +452,7 @@ func (s *Service) StartLessonWithMetadata(
 		s.mu.Lock()
 		s.lastLesson = lesson.ID
 		s.lessonError = ""
+		s.lessonErrorTransient = false
 		s.mu.Unlock()
 		s.emit("lesson.started", lesson)
 	}
@@ -510,6 +512,7 @@ func (s *Service) DeleteLesson(ctx context.Context, id string) error {
 		}
 		if s.lessonError != "" && s.currentLesson == "" {
 			s.lessonError = ""
+			s.lessonErrorTransient = false
 		}
 		s.mu.Unlock()
 		if latest, latestErr := s.store.Lessons().Latest(ctx); latestErr == nil {
@@ -555,6 +558,7 @@ func (s *Service) DeleteLastLesson(ctx context.Context) error {
 	s.ring = nil
 	s.lessonStarted = time.Time{}
 	s.lessonError = ""
+	s.lessonErrorTransient = false
 	s.mu.Unlock()
 	if latest, latestErr := s.store.Lessons().Latest(ctx); latestErr == nil {
 		s.mu.Lock()
@@ -709,14 +713,12 @@ func (s *Service) StopAndEndCurrentLesson(ctx context.Context) (domain.Lesson, e
 	if lessonID == "" {
 		return domain.Lesson{}, errors.New("service: no active lesson")
 	}
-	flushCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-	defer cancel()
-	stopErr := s.StopCapture(flushCtx)
+	stopErr := s.stopCaptureForLessonEnd(ctx)
 	if stopErr != nil {
 		return domain.Lesson{}, stopErr
 	}
 	if router == nil || !router.BudgetStatus().HardExceeded {
-		reconcileCtx, reconcileCancel := context.WithTimeout(ctx, 20*time.Second)
+		reconcileCtx, reconcileCancel := context.WithTimeout(ctx, 35*time.Second)
 		reconcileErr := s.reconcileLesson(
 			reconcileCtx,
 			lessonID,
@@ -731,6 +733,56 @@ func (s *Service) StopAndEndCurrentLesson(ctx context.Context) (domain.Lesson, e
 	}
 	lesson, endErr := s.EndLesson(ctx, lessonID, time.Time{})
 	return lesson, endErr
+}
+
+func (s *Service) stopCaptureForLessonEnd(ctx context.Context) error {
+	if s.source == nil {
+		err := errors.New("service: capture source is not configured")
+		s.diagnostic(err.Error(), nil)
+		return err
+	}
+	s.mu.RLock()
+	running := s.capturing
+	lessonID := s.currentLesson
+	session := s.session
+	s.mu.RUnlock()
+	if !running && session == nil {
+		return nil
+	}
+	sourceCtx, sourceCancel := context.WithTimeout(ctx, 30*time.Second)
+	sourceErr := s.source.Stop(sourceCtx)
+	sourceCancel()
+
+	var transcriptionErr, vocabErr error
+	if session != nil {
+		transcriptionErr, vocabErr = session.stopForLessonEnd(ctx)
+	}
+	s.mu.Lock()
+	s.capturing = false
+	if sourceErr == nil && transcriptionErr == nil {
+		s.currentLesson = ""
+		s.session = nil
+		s.ring = nil
+	}
+	s.micLevel = 0
+	s.remoteLevel = 0
+	s.lastLevelEmit = time.Time{}
+	s.mu.Unlock()
+
+	if sourceErr != nil {
+		s.diagnostic("stopping capture failed", sourceErr)
+	}
+	if transcriptionErr != nil {
+		s.diagnostic("finishing pending lesson analysis timed out", transcriptionErr)
+	} else if vocabErr != nil && !errors.Is(vocabErr, context.Canceled) {
+		s.diagnostic("background vocabulary analysis timed out on stop", vocabErr)
+	}
+	if sourceErr == nil && transcriptionErr == nil {
+		s.emit("capture.stopped", map[string]string{"lessonId": lessonID})
+		return nil
+	}
+	s.emit("capture.stop_failed", map[string]string{"lessonId": lessonID})
+	return errors.Join(sourceErr, transcriptionErr)
 }
 
 func (s *Service) captureSessionFailed(session *captureSession) {
@@ -754,7 +806,7 @@ func (s *Service) receiveFrame(frame capture.AudioFrame) {
 	s.mu.RUnlock()
 	if session == nil || !session.enqueueFrame(frame) {
 		if session != nil {
-			s.diagnostic("capture frame queue full", nil)
+			s.transientDiagnostic("capture frame queue full", nil)
 		}
 		return
 	}
@@ -766,7 +818,7 @@ func (s *Service) receiveEvent(event capture.Event) {
 	s.mu.RUnlock()
 	if session == nil || !session.enqueueEvent(event) {
 		if session != nil {
-			s.diagnostic("capture event queue full", nil)
+			s.transientDiagnostic("capture event queue full", nil)
 		}
 	}
 }

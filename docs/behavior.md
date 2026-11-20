@@ -41,8 +41,8 @@ These rules are enforced in code, but they are easy to miss because the UI, the 
   `LookupAgent.swift`, trimmed to at most 80 runes in `normalizeSelectionContext`
   and omitted when identical to the selection or lacking Han text). The request
   allows 400 tokens (`selectionLookupMaxTokens`), sets temperature `0` and a
-  12-second timeout, disables reasoning, and uses the same Zero Data Retention
-  and data-collection-denial controls as other text chat. Successful glosses are
+  12-second timeout, disables reasoning, and uses the same data-collection-denial
+  provider controls as other text chat. Successful glosses are
   cached in memory for the app session, up to 64 entries, and usage is stored
   under `selection-lookup`. The surrounding sentence is not shown in the
   panel. The selected text is not logged or added to `AppSnapshot`.
@@ -54,7 +54,7 @@ These rules are enforced in code, but they are easy to miss because the UI, the 
 - Defaults are `qwen/qwen3-asr-1.7b` for transcription, `qwen/qwen3-32b` for analysis, `qwen/qwen3.7-flash` for photo recognition (`qwen/qwen3-vl-30b-a3b-instruct` is the other allowed vision setting), and `google/gemini-3.1-flash-lite` for highlighted-word lookup (`internal/openrouter/client.go`, `internal/service/settings.go`). Legacy non-ZDR analyzer model settings (`qwen/qwen3.8-flash`, `qwen/qwen3.8-max-0902`) reset to `qwen/qwen3-32b` on load.
 - The legacy `hardBudgetUsd` setting defaults to 0.50 USD and remains validated as greater than 0 and at most 0.50. Invalid stored values reset to 0.50 on load. This is not a runtime spending cap: `Budget.Check` returns no error and `HardExceeded` is always false.
 - The UI warning is `cost >= 0.35` in `snapshot.go`, independent of the configured budget. OpenRouter requests continue past either threshold.
-- Lesson transcription, lesson analysis, Add Word generation, and highlighted-word lookup/card generation send Zero Data Retention and `data_collection: deny`. Photo vision sends neither flag. `Privacy.ZDREnabled` is constant `true` and does not describe photo requests.
+- Lesson transcription, lesson analysis, Add Word generation, and highlighted-word lookup/card generation send `data_collection: deny` (`require_parameters: true`) without requiring Zero Data Retention (`zdr`). Photo vision sends neither flag. `Privacy.ZDREnabled` is `false` and does not describe photo requests.
 - `OPENROUTER_API_KEY` in the process environment is consulted before Keychain. `ClearAPIKey` cannot remove an environment value.
 - Settings accept `sessionOnly`, `oneDay`, and `sevenDays`. The UI disables the latter two. The selected value is copied onto the lesson as `retention_policy`, but WAV files are removed as they are read and the spool is removed when capture stops for every setting.
 

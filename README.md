@@ -149,13 +149,16 @@ a read-only reader.
 Automatic audio is transcribed in utterance-aware windows of up to 15 seconds,
 usually requiring eight seconds of buffered audio before a silence-triggered
 flush. Stopping can flush a shorter final window. Adjacent windows overlap by
-two seconds and use two seconds of trailing silence. Vocabulary extraction
-batches about 20 seconds of new transcript. A manual mark uses up to 25 seconds
-of pre-roll and 10 seconds of post-roll from system audio.
+two seconds and use two seconds of trailing silence. Audio transcription runs on
+a concurrent worker pool with ordered per-track commit, while vocabulary
+extraction runs on a separate background queue that batches about 30 seconds of
+new transcript. A manual mark uses up to 25 seconds of pre-roll and 10 seconds
+of post-roll from system audio.
 
 Lesson transcription, vocabulary analysis, Add Word generation, and
-`Command-Option-5` selection lookup/card generation request Zero Data Retention
-routing and deny data collection. Photo recognition does not send those
+`Command-Option-5` selection lookup/card generation deny provider data
+collection (`data_collection: deny`) without restricting Zero Data Retention
+routing. Photo recognition does not send those
 controls. Local audio retention is controlled separately. The default is
 session-only temporary chunks. Chunks are removed after processing and the
 session spool is removed when capture stops. A new session removes leftover

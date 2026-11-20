@@ -20,11 +20,14 @@ import (
 )
 
 const (
-	DefaultBaseURL     = "https://openrouter.ai"
-	DefaultASRModel    = "qwen/qwen3-asr-1.7b"
-	DefaultChatModel   = "qwen/qwen3-32b"
-	DefaultLookupModel = "google/gemini-3.1-flash-lite"
-	DefaultVisionModel = "qwen/qwen3.7-flash"
+	DefaultBaseURL           = "https://openrouter.ai"
+	DefaultASRModel          = "qwen/qwen3-asr-1.7b"
+	DefaultChatModel         = "qwen/qwen3-32b"
+	DefaultLookupModel       = "google/gemini-3.1-flash-lite"
+	DefaultVisionModel       = "qwen/qwen3.7-flash"
+	DefaultTranscribeTimeout = 25 * time.Second
+	DefaultChatTimeout       = 45 * time.Second
+	DefaultVisionTimeout     = 60 * time.Second
 )
 
 var ErrBudgetExceeded = errors.New("openrouter: session budget exceeded")
@@ -34,26 +37,32 @@ type APIKeyProvider interface {
 }
 
 type Config struct {
-	BaseURL     string
-	ASRModel    string
-	ChatModel   string
-	VisionModel string
-	HTTPClient  *http.Client
-	MaxRetries  int
-	RetryBase   time.Duration
-	Budget      *Budget
+	BaseURL           string
+	ASRModel          string
+	ChatModel         string
+	VisionModel       string
+	HTTPClient        *http.Client
+	MaxRetries        int
+	RetryBase         time.Duration
+	TranscribeTimeout time.Duration
+	ChatTimeout       time.Duration
+	VisionTimeout     time.Duration
+	Budget            *Budget
 }
 
 type Client struct {
-	baseURL     *url.URL
-	asrModel    string
-	chatModel   string
-	visionModel string
-	httpClient  *http.Client
-	maxRetries  int
-	retryBase   time.Duration
-	key         APIKeyProvider
-	budget      *Budget
+	baseURL           *url.URL
+	asrModel          string
+	chatModel         string
+	visionModel       string
+	httpClient        *http.Client
+	maxRetries        int
+	retryBase         time.Duration
+	transcribeTimeout time.Duration
+	chatTimeout       time.Duration
+	visionTimeout     time.Duration
+	key               APIKeyProvider
+	budget            *Budget
 }
 
 func NewClient(config Config, key APIKeyProvider) (*Client, error) {
@@ -89,19 +98,31 @@ func NewClient(config Config, key APIKeyProvider) (*Client, error) {
 	if config.RetryBase <= 0 {
 		config.RetryBase = 250 * time.Millisecond
 	}
+	if config.TranscribeTimeout <= 0 {
+		config.TranscribeTimeout = DefaultTranscribeTimeout
+	}
+	if config.ChatTimeout <= 0 {
+		config.ChatTimeout = DefaultChatTimeout
+	}
+	if config.VisionTimeout <= 0 {
+		config.VisionTimeout = DefaultVisionTimeout
+	}
 	if config.Budget == nil {
 		config.Budget = NewBudget(0.35, 0.50)
 	}
 	return &Client{
-		baseURL:     parsed,
-		asrModel:    config.ASRModel,
-		chatModel:   config.ChatModel,
-		visionModel: config.VisionModel,
-		httpClient:  config.HTTPClient,
-		maxRetries:  config.MaxRetries,
-		retryBase:   config.RetryBase,
-		key:         key,
-		budget:      config.Budget,
+		baseURL:           parsed,
+		asrModel:          config.ASRModel,
+		chatModel:         config.ChatModel,
+		visionModel:       config.VisionModel,
+		httpClient:        config.HTTPClient,
+		maxRetries:        config.MaxRetries,
+		retryBase:         config.RetryBase,
+		transcribeTimeout: config.TranscribeTimeout,
+		chatTimeout:       config.ChatTimeout,
+		visionTimeout:     config.VisionTimeout,
+		key:               key,
+		budget:            config.Budget,
 	}, nil
 }
 
@@ -165,8 +186,8 @@ func (c *Client) Transcribe(ctx context.Context, audio []byte, filename string) 
 		filename = "audio.wav"
 	}
 	var result Transcription
-	err := c.doWithRetry(ctx, func() (*http.Request, error) {
-		key, err := c.apiKey(ctx)
+	err := c.doWithRetry(ctx, c.transcribeTimeout, func(attemptCtx context.Context) (*http.Request, error) {
+		key, err := c.apiKey(attemptCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -182,13 +203,9 @@ func (c *Client) Transcribe(ctx context.Context, audio []byte, filename string) 
 		if err := writer.WriteField("model", c.asrModel); err != nil {
 			return nil, err
 		}
-		if err := writer.WriteField("zdr", "true"); err != nil {
-			return nil, err
-		}
 		provider, err := json.Marshal(providerRules{
 			RequireParameters: true,
 			DataCollection:    "deny",
-			ZDR:               true,
 		})
 		if err != nil {
 			return nil, err
@@ -199,7 +216,7 @@ func (c *Client) Transcribe(ctx context.Context, audio []byte, filename string) 
 		if err := writer.Close(); err != nil {
 			return nil, err
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		req, err := http.NewRequestWithContext(attemptCtx, http.MethodPost,
 			c.endpoint("/api/v1/audio/transcriptions"), &body)
 		if err != nil {
 			return nil, err
@@ -244,7 +261,7 @@ type chatPayload struct {
 	Messages       []chatMessage    `json:"messages"`
 	ResponseFormat responseFormat   `json:"response_format"`
 	Provider       providerRules    `json:"provider"`
-	ZDR            bool             `json:"zdr"`
+	ZDR            bool             `json:"zdr,omitempty"`
 	MaxTokens      int              `json:"max_tokens,omitempty"`
 	Temperature    *float64         `json:"temperature,omitempty"`
 	Reasoning      *visionReasoning `json:"reasoning,omitempty"`
@@ -269,7 +286,7 @@ type jsonSchema struct {
 type providerRules struct {
 	RequireParameters bool   `json:"require_parameters"`
 	DataCollection    string `json:"data_collection"`
-	ZDR               bool   `json:"zdr"`
+	ZDR               bool   `json:"zdr,omitempty"`
 }
 
 func (c *Client) ChatJSON(ctx context.Context, request ChatRequest) (ChatResponse, error) {
@@ -283,7 +300,7 @@ func (c *Client) ChatJSON(ctx context.Context, request ChatRequest) (ChatRespons
 		return ChatResponse{}, errors.New("openrouter: strict JSON schema is required")
 	}
 	var result chatEnvelope
-	err := c.doWithRetry(ctx, c.chatRequest(ctx, request, request.DisableReasoning), &result)
+	err := c.doWithRetry(ctx, c.chatTimeout, c.chatRequest(request, request.DisableReasoning), &result)
 	if err != nil && request.DisableReasoning {
 		var httpErr *HTTPError
 		if errors.As(err, &httpErr) &&
@@ -291,7 +308,7 @@ func (c *Client) ChatJSON(ctx context.Context, request ChatRequest) (ChatRespons
 			strings.Contains(strings.ToLower(httpErr.Body), "reasoning") {
 			firstUsage := result.Usage
 			result = chatEnvelope{}
-			err = c.doWithRetry(ctx, c.chatRequest(ctx, request, false), &result)
+			err = c.doWithRetry(ctx, c.chatTimeout, c.chatRequest(request, false), &result)
 			if result.Usage == (Usage{}) {
 				result.Usage = firstUsage
 			}
@@ -311,9 +328,9 @@ func (c *Client) ChatJSON(ctx context.Context, request ChatRequest) (ChatRespons
 	return ChatResponse{Content: content, Usage: result.Usage}, nil
 }
 
-func (c *Client) chatRequest(ctx context.Context, request ChatRequest, disableReasoning bool) func() (*http.Request, error) {
-	return func() (*http.Request, error) {
-		key, err := c.apiKey(ctx)
+func (c *Client) chatRequest(request ChatRequest, disableReasoning bool) func(context.Context) (*http.Request, error) {
+	return func(attemptCtx context.Context) (*http.Request, error) {
+		key, err := c.apiKey(attemptCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -340,9 +357,7 @@ func (c *Client) chatRequest(ctx context.Context, request ChatRequest, disableRe
 			Provider: providerRules{
 				RequireParameters: true,
 				DataCollection:    "deny",
-				ZDR:               true,
 			},
-			ZDR:         true,
 			MaxTokens:   request.MaxTokens,
 			Temperature: request.Temperature,
 		}
@@ -353,7 +368,7 @@ func (c *Client) chatRequest(ctx context.Context, request ChatRequest, disableRe
 		if err != nil {
 			return nil, err
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		req, err := http.NewRequestWithContext(attemptCtx, http.MethodPost,
 			c.endpoint("/api/v1/chat/completions"), bytes.NewReader(body))
 		if err != nil {
 			return nil, err
@@ -452,12 +467,21 @@ func (c *Client) doVisionWithRetry(
 ) error {
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
-		req, err := c.newVisionRequest(ctx, request, includeReasoning)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		attemptCtx, cancel := withAttemptTimeout(ctx, c.visionTimeout)
+		req, err := c.newVisionRequest(attemptCtx, request, includeReasoning)
 		if err != nil {
+			cancel()
 			return err
 		}
 		response, err := c.httpClient.Do(req)
 		if err != nil {
+			cancel()
+			if parentErr := ctx.Err(); parentErr != nil {
+				return parentErr
+			}
 			if !isRetryableError(err) || attempt == c.maxRetries {
 				return err
 			}
@@ -469,7 +493,11 @@ func (c *Client) doVisionWithRetry(
 		}
 		data, readErr := io.ReadAll(response.Body)
 		_ = response.Body.Close()
+		cancel()
 		if readErr != nil {
+			if parentErr := ctx.Err(); parentErr != nil {
+				return parentErr
+			}
 			if attempt == c.maxRetries {
 				return readErr
 			}
@@ -616,18 +644,32 @@ func (c *Client) endpoint(path string) string {
 	return endpoint.String()
 }
 
-func (c *Client) doWithRetry(ctx context.Context, requestFactory func() (*http.Request, error), output any) error {
+func (c *Client) doWithRetry(
+	ctx context.Context,
+	attemptTimeout time.Duration,
+	requestFactory func(context.Context) (*http.Request, error),
+	output any,
+) error {
 	if err := c.budget.Check(); err != nil {
 		return err
 	}
 	var lastErr error
 	for attempt := 0; attempt <= c.maxRetries; attempt++ {
-		req, err := requestFactory()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		attemptCtx, cancel := withAttemptTimeout(ctx, attemptTimeout)
+		req, err := requestFactory(attemptCtx)
 		if err != nil {
+			cancel()
 			return err
 		}
 		response, err := c.httpClient.Do(req)
 		if err != nil {
+			cancel()
+			if parentErr := ctx.Err(); parentErr != nil {
+				return parentErr
+			}
 			if !isRetryableError(err) || attempt == c.maxRetries {
 				return err
 			}
@@ -639,7 +681,11 @@ func (c *Client) doWithRetry(ctx context.Context, requestFactory func() (*http.R
 		}
 		data, readErr := io.ReadAll(response.Body)
 		_ = response.Body.Close()
+		cancel()
 		if readErr != nil {
+			if parentErr := ctx.Err(); parentErr != nil {
+				return parentErr
+			}
 			if attempt == c.maxRetries {
 				return readErr
 			}
@@ -676,6 +722,13 @@ func (c *Client) doWithRetry(ctx context.Context, requestFactory func() (*http.R
 	return lastErr
 }
 
+func withAttemptTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 type HTTPError struct {
 	StatusCode int
 	Body       string
@@ -697,7 +750,7 @@ func retryableStatus(status int) bool {
 }
 
 func isRetryableError(err error) bool {
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+	return errors.Is(err, context.DeadlineExceeded) ||
 		strings.Contains(strings.ToLower(err.Error()), "connection reset")
 }
 

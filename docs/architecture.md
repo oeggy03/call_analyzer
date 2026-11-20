@@ -58,9 +58,9 @@ Domain structs in `internal/domain/domain.go` are the storage and service shapes
 
 1. The helper writes WAV chunks and emits JSON events. The adapter reads a chunk and deletes the file.
 2. `captureSession.handleFrame` levels every frame. Only non-microphone frames go into the ring buffer.
-3. `capture_pipeline.go` cuts utterance windows and queues transcription.
-4. `openrouter.Client.Transcribe` posts the WAV. Overlap text is reconciled before insert.
-5. About every 20 seconds of new transcript, the analyzer returns JSON matching `vocabulary.ExtractionSchema`. Screen OCR events (`system/ocr`) attach up to 90 seconds of recent speech context (`recentSpeechContext`) and run extraction immediately.
+3. `capture_pipeline.go` cuts utterance windows (coalescing across brief backpressure up to 45 seconds) and dispatches transcription onto a 3-worker ASR pool.
+4. `openrouter.Client.Transcribe` posts the WAV. An ordered committer reconciles overlap text per track in sequence order before inserting segments and pushing text tasks onto the background vocabulary queue.
+5. On a separate background goroutine, about every 30 seconds of new transcript, the analyzer returns JSON matching `vocabulary.ExtractionSchema`. Screen OCR events (`system/ocr`) attach up to 90 seconds of recent speech context (`recentSpeechContext`) and run extraction on that background worker without blocking transcription.
 6. `VocabularyService.ProcessExtraction` drops candidates whose evidence is not in the transcript, then stores new suggestions as `candidate`. A match to an existing word keeps that row's status. `tagAutomaticEntries` attaches the lesson's `LessonTags` to newly stored `candidate` rows.
 
 Mark Moment is `App.MarkMoment` → `Service.MarkMoment`. It inserts a `system/mark` transcript row and queues up to 25 seconds of pre-roll and 10 seconds of post-roll from the system-audio ring buffer. Microphone frames are not added to that ring buffer. The constants are `DefaultPreRoll` and `DefaultPostRoll` in `internal/audio/ring.go`.
@@ -69,11 +69,11 @@ Mark Moment is `App.MarkMoment` → `Service.MarkMoment`. It inserts a `system/m
 
 `App.GenerateManualVocabulary` calls the analyzer and records usage under `ManualVocabularySessionID`. It returns a draft and does not insert vocabulary. The draft adds `needsChoice`, `matchedContext`, `appliedVariant`, and `variants`. The UI leaves the form unchanged when `needsChoice` is true and shows those variants for selection. The UI disables generation during a live lesson. `App.SaveManualVocabulary` persists a confirmed entry, and the UI permits saving a complete manual form during capture. Photo recognition returns a draft and records usage under `PhotoVocabularySessionID`; reading and saving photos also remain available during capture.
 
-Lesson transcription, lesson analysis, Add Word generation, and selection lookup/card generation (`Transcribe` and `ChatJSON`) request ZDR routing and deny data collection. Photo vision requests (`ChatVisionJSON`) do not include those routing fields. Photo, manual generation, and selection lookup usage are recorded separately from lesson cost.
+Lesson transcription, lesson analysis, Add Word generation, and selection lookup/card generation (`Transcribe` and `ChatJSON`) deny data collection (`data_collection: deny`, `require_parameters: true`) without requiring ZDR routing. Photo vision requests (`ChatVisionJSON`) do not include those routing fields. Photo, manual generation, and selection lookup usage are recorded separately from lesson cost.
 
 ## Stop a lesson
 
-`App.StopLesson` → `Service.StopAndEndCurrentLesson`. That stops the helper, waits for queued analysis, then `reconcileLesson` sends one chat request covering the stored transcript when possible. The lesson row is closed with its final recorded cost. There is no enforced runtime hard-budget stop.
+`App.StopLesson` → `Service.StopAndEndCurrentLesson`. That stops the helper, drains pending audio transcriptions to SQLite first, gives background vocabulary extraction a bounded drain window, then runs `reconcileLesson` in one chat request covering the stored transcript when possible. Even if trailing vocabulary analysis times out after transcription completes, the lesson row is closed cleanly with its final recorded cost. There is no enforced runtime hard-budget stop.
 
 ## Database
 

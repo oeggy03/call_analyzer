@@ -52,15 +52,18 @@ func TestTranscribeAndChatRequestContracts(t *testing.T) {
 			if fields["model"] != DefaultASRModel {
 				t.Errorf("unexpected ASR model %q", fields["model"])
 			}
-			if fields["zdr"] != "true" {
-				t.Errorf("transcription did not require ZDR: %#v", fields)
+			if _, ok := fields["zdr"]; ok {
+				t.Errorf("transcription unexpectedly included zdr field: %#v", fields)
 			}
 			var provider map[string]any
 			if err := json.Unmarshal([]byte(fields["provider"]), &provider); err != nil {
 				t.Errorf("invalid transcription provider controls: %v", err)
 			}
-			if provider["data_collection"] != "deny" || provider["zdr"] != true {
+			if provider["require_parameters"] != true || provider["data_collection"] != "deny" {
 				t.Errorf("unexpected transcription provider controls: %#v", provider)
+			}
+			if _, ok := provider["zdr"]; ok {
+				t.Errorf("transcription provider unexpectedly included zdr: %#v", provider)
 			}
 			sawAudio.Store(sawAudio.Load() && fields["file"] != "")
 			_, _ = w.Write([]byte(`{"text":"你好","usage":{"cost":0.10}}`))
@@ -70,12 +73,18 @@ func TestTranscribeAndChatRequestContracts(t *testing.T) {
 				t.Errorf("decode chat: %v", err)
 				return
 			}
-			if payload["model"] != DefaultChatModel || payload["zdr"] != true {
-				t.Errorf("unexpected chat controls: %#v", payload)
+			if payload["model"] != DefaultChatModel {
+				t.Errorf("unexpected chat model: %#v", payload)
+			}
+			if _, ok := payload["zdr"]; ok {
+				t.Errorf("chat request unexpectedly included top-level zdr: %#v", payload)
 			}
 			provider, _ := payload["provider"].(map[string]any)
-			if provider["require_parameters"] != true || provider["data_collection"] != "deny" || provider["zdr"] != true {
+			if provider["require_parameters"] != true || provider["data_collection"] != "deny" {
 				t.Errorf("unexpected provider controls: %#v", provider)
+			}
+			if _, ok := provider["zdr"]; ok {
+				t.Errorf("chat provider unexpectedly included zdr: %#v", provider)
 			}
 			format, _ := payload["response_format"].(map[string]any)
 			schema, _ := format["json_schema"].(map[string]any)
@@ -126,14 +135,16 @@ func TestChatJSONSupportsLookupModelAndMaxTokens(t *testing.T) {
 		if payload["model"] != DefaultLookupModel || payload["max_tokens"] != float64(200) {
 			t.Fatalf("unexpected lookup request model or token limit: %#v", payload)
 		}
-		if payload["zdr"] != true {
-			t.Fatalf("lookup request did not require top-level ZDR: %#v", payload)
+		if _, ok := payload["zdr"]; ok {
+			t.Fatalf("lookup request unexpectedly included top-level zdr: %#v", payload)
 		}
 		provider, _ := payload["provider"].(map[string]any)
 		if provider["require_parameters"] != true ||
-			provider["data_collection"] != "deny" ||
-			provider["zdr"] != true {
+			provider["data_collection"] != "deny" {
 			t.Fatalf("lookup request did not require provider privacy controls: %#v", provider)
+		}
+		if _, ok := provider["zdr"]; ok {
+			t.Fatalf("lookup provider unexpectedly included zdr: %#v", provider)
 		}
 		reasoning, _ := payload["reasoning"].(map[string]any)
 		if reasoning["effort"] != "none" {
@@ -302,5 +313,76 @@ func TestChatVisionJSONRetriesReasoningWithoutZDR(t *testing.T) {
 	}
 	if got := client.BudgetStatus().Spent; got != .02 {
 		t.Fatalf("vision call changed lesson budget: %v", got)
+	}
+}
+
+func TestCallerContextCancellationDoesNotRetry(t *testing.T) {
+	var attempts atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	serverDone := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		attempts.Add(1)
+		cancel()
+		select {
+		case <-r.Context().Done():
+		case <-serverDone:
+		}
+	}))
+	defer func() {
+		close(serverDone)
+		server.Close()
+	}()
+
+	client, err := NewClient(Config{
+		BaseURL:    server.URL,
+		MaxRetries: 3,
+		RetryBase:  time.Millisecond,
+	}, testKeyProvider{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Transcribe(ctx, []byte("wav"), "sample.wav"); err == nil {
+		t.Fatal("expected canceled context error")
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("canceled parent context retried %d times, want 1 attempt", got)
+	}
+}
+
+func TestPerAttemptTimeoutRetriesWhileParentContextAlive(t *testing.T) {
+	var attempts atomic.Int32
+	serverDone := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if attempts.Add(1) == 1 {
+			select {
+			case <-r.Context().Done():
+			case <-serverDone:
+			}
+			return
+		}
+		_, _ = w.Write([]byte(`{"text":"恢复","usage":{"cost":0.01}}`))
+	}))
+	defer func() {
+		close(serverDone)
+		server.Close()
+	}()
+
+	client, err := NewClient(Config{
+		BaseURL:           server.URL,
+		MaxRetries:        2,
+		RetryBase:         time.Millisecond,
+		TranscribeTimeout: 20 * time.Millisecond,
+	}, testKeyProvider{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.Transcribe(context.Background(), []byte("wav"), "sample.wav")
+	if err != nil {
+		t.Fatalf("expected retry after per-attempt timeout to succeed, got %v", err)
+	}
+	if result.Text != "恢复" || attempts.Load() != 2 {
+		t.Fatalf("unexpected result=%#v attempts=%d", result, attempts.Load())
 	}
 }

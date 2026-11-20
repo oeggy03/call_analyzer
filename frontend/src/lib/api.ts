@@ -380,7 +380,7 @@ function createDemoSnapshot(): AppSnapshot {
       hardExceeded: false,
     },
     privacy: {
-      zdrEnabled: true,
+      zdrEnabled: false,
       audioRetention: 'sessionOnly',
     },
     settings: {

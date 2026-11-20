@@ -45,7 +45,7 @@ const EMPTY_SNAPSHOT: AppSnapshot = {
     hardExceeded: false,
   },
   privacy: {
-    zdrEnabled: true,
+    zdrEnabled: false,
     audioRetention: 'sessionOnly',
   },
   settings: {
@@ -100,8 +100,8 @@ const STT_MODEL_OPTIONS = [
 ] as const
 
 const ANALYZER_MODEL_OPTIONS = [
-  { value: 'qwen/qwen3-32b', label: 'Qwen 3 32B · ZDR' },
-  { value: 'qwen/qwen3.5-9b', label: 'Qwen 3.5 9B · ZDR' },
+  { value: 'qwen/qwen3-32b', label: 'Qwen 3 32B' },
+  { value: 'qwen/qwen3.5-9b', label: 'Qwen 3.5 9B' },
 ] as const
 
 const VISION_MODEL_OPTIONS = [
@@ -1129,7 +1129,7 @@ function Sidebar({
         <div className="privacy-mini">
           <span className="status-dot status-dot-green" aria-hidden="true" />
           <span>
-            <strong>{zdrEnabled ? 'Zero data retention' : 'Retention enabled'}</strong>
+            <strong>{zdrEnabled ? 'Zero data retention' : 'No model training'}</strong>
             <small>{mode === 'demo' ? 'Demo adapter active' : 'Privacy-first capture'}</small>
           </span>
         </div>
@@ -1226,7 +1226,7 @@ function LiveLessonView({
           <p className="page-intro">Follow the conversation here. Setup stays beside the transcript.</p>
         </div>
         <div className="heading-actions">
-          <PrivacyBadge />
+          <PrivacyBadge zdrEnabled={snapshot.privacy.zdrEnabled} />
           <span className="soft-badge">
             <span className="status-dot status-dot-blue" aria-hidden="true" />
             {pendingCandidates} candidates
@@ -1266,7 +1266,11 @@ function LiveLessonView({
           </div>
           <div className="capture-note">
             <Icon name="shield" />
-            <span>ZDR controls provider retention. Local audio follows the selected retention policy.</span>
+            <span>
+              {snapshot.privacy.zdrEnabled
+                ? 'ZDR controls provider retention. Local audio follows the selected retention policy.'
+                : 'Provider data collection is denied. Local audio follows the selected retention policy.'}
+            </span>
           </div>
         </section>
 
@@ -2783,10 +2787,14 @@ function SettingsView({
             <div className="privacy-explanation">
               <Icon name="shield" />
               <div>
-                <strong>Zero data retention (ZDR)</strong>
-                <p>ZDR controls provider-side retention. Local audio follows the selected retention policy; confirmed vocabulary remains in your local collection.</p>
+                <strong>{snapshot.privacy.zdrEnabled ? 'Zero data retention (ZDR)' : 'Provider training opt-out'}</strong>
+                <p>
+                  {snapshot.privacy.zdrEnabled
+                    ? 'ZDR controls provider-side retention. Local audio follows the selected retention policy; confirmed vocabulary remains in your local collection.'
+                    : 'Lesson transcription and text requests set data_collection: deny without restricting ZDR routing. Local audio follows the selected retention policy.'}
+                </p>
               </div>
-              <span className="status-pill status-mastered">Enabled</span>
+              <span className="status-pill status-mastered">{snapshot.privacy.zdrEnabled ? 'Enabled' : 'Active'}</span>
             </div>
           </section>
           <section className="panel settings-panel">
@@ -3159,8 +3167,12 @@ function PanelHeading({ eyebrow, title, description }: { eyebrow: string; title:
   )
 }
 
-function PrivacyBadge() {
-  return <span className="privacy-badge"><Icon name="shield" /> ZDR enabled</span>
+function PrivacyBadge({ zdrEnabled }: { zdrEnabled: boolean }) {
+  return (
+    <span className="privacy-badge">
+      <Icon name="shield" /> {zdrEnabled ? 'ZDR enabled' : 'No model training'}
+    </span>
+  )
 }
 
 function CostStatusAlert({ cost }: { cost: AppSnapshot['cost'] }) {
