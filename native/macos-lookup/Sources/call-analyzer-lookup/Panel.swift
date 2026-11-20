@@ -5,7 +5,14 @@ private extension NSColor {
     static let lookupSecondary = NSColor(calibratedRed: 0x4B / 255.0, green: 0x5A / 255.0, blue: 0x70 / 255.0, alpha: 1)
     static let lookupNavy = NSColor(calibratedRed: 0x20 / 255.0, green: 0x37 / 255.0, blue: 0x5E / 255.0, alpha: 1)
     static let lookupLine = NSColor(calibratedRed: 0xE2 / 255.0, green: 0xE7 / 255.0, blue: 0xEE / 255.0, alpha: 1)
+    static let lookupLineStrong = NSColor(calibratedRed: 0xD2 / 255.0, green: 0xD9 / 255.0, blue: 0xE4 / 255.0, alpha: 1)
+    static let lookupSurfaceMuted = NSColor(calibratedRed: 0xF5 / 255.0, green: 0xF7 / 255.0, blue: 0xFA / 255.0, alpha: 1)
     static let lookupButton = NSColor(calibratedRed: 0x39 / 255.0, green: 0x74 / 255.0, blue: 0xC8 / 255.0, alpha: 1)
+    static let lookupBlueSoft = NSColor(calibratedRed: 0xE9 / 255.0, green: 0xF1 / 255.0, blue: 0xFD / 255.0, alpha: 1)
+    static let lookupDanger = NSColor(calibratedRed: 0xBB / 255.0, green: 0x59 / 255.0, blue: 0x60 / 255.0, alpha: 1)
+    static let lookupDangerSoft = NSColor(calibratedRed: 0xFF / 255.0, green: 0xF0 / 255.0, blue: 0xF1 / 255.0, alpha: 1)
+    static let lookupDangerBorder = NSColor(calibratedRed: 0xF2 / 255.0, green: 0xCF / 255.0, blue: 0xD2 / 255.0, alpha: 1)
+    static let lookupDangerInk = NSColor(calibratedRed: 0x6E / 255.0, green: 0x32 / 255.0, blue: 0x38 / 255.0, alpha: 1)
 }
 
 private final class LookupPanel: NSPanel {
@@ -81,6 +88,15 @@ final class PanelController: NSObject {
     var onDismiss: (() -> Void)?
     var onAdd: ((GlossLine) -> Void)?
     var onSave: ((CardFields) -> Void)?
+    var onRetryAdd: (() -> Void)?
+    var onRetryLookup: (() -> Void)?
+    var onBackToResults: (() -> Void)?
+    var onRegenerate: (() -> Void)?
+
+    private enum ActionButtonStyle {
+        case primary
+        case secondary
+    }
 
     private let panel: LookupPanel
     private let bodyStack = NSStackView()
@@ -93,7 +109,9 @@ final class PanelController: NSObject {
     private var usingCustomCursor = false
     private var currentLines: [GlossLine] = []
     private var fieldInputs: [String: NSTextField] = [:]
-    private var formErrorLabel: NSTextField?
+    private var formStatusContainer: NSStackView?
+    private var formErrorContainer: NSStackView?
+    private var formActionButtons: [NSButton] = []
     private var generatedCard = false
     private var showingCard = false
     private var cardVariants: [CardVariant] = []
@@ -115,17 +133,15 @@ final class PanelController: NSObject {
 
     func showLoading(surface: String, anchor: PanelAnchor) {
         currentLines = []
+        showingCard = false
+        clearFormReferences()
         replaceBody(with: [
             makeLabel(
                 surface,
                 font: chineseFont(size: 14, weight: .medium),
                 color: .lookupInk
             ),
-            makeLabel(
-                "Looking up…",
-                font: chineseFont(size: 12, weight: .regular),
-                color: .lookupSecondary
-            ),
+            makeSpinnerRow(message: "Looking up…"),
         ])
         show(at: anchor)
     }
@@ -138,6 +154,8 @@ final class PanelController: NSObject {
         anchor: PanelAnchor
     ) {
         self.existingTags = existingTags
+        showingCard = false
+        clearFormReferences()
         currentLines = Array(lines.prefix(3))
         if currentLines.isEmpty {
             replaceBody(with: [
@@ -162,6 +180,8 @@ final class PanelController: NSObject {
 
     func showNotice(_ message: String, anchor: PanelAnchor) {
         currentLines = []
+        showingCard = false
+        clearFormReferences()
         replaceBody(with: [
             makeLabel(
                 message,
@@ -172,29 +192,108 @@ final class PanelController: NSObject {
         show(at: anchor)
     }
 
-    func showError(_ message: String, anchor: PanelAnchor) {
-        currentLines = []
-        replaceBody(with: [
-            makeLabel(
-                message,
-                font: chineseFont(size: 12, weight: .regular),
-                color: .lookupSecondary
-            )
-        ])
-        show(at: anchor)
-    }
-
-    func showAdding(action: String, anchor: PanelAnchor) {
+    func showError(title: String, detail: String?, anchor: PanelAnchor) {
         currentLines = []
         showingCard = false
-        let message = action == "open" ? "Opening…" : "Adding…"
+        clearFormReferences()
         replaceBody(with: [
-            makeLabel(
-                message,
-                font: chineseFont(size: 12, weight: .regular),
-                color: .lookupSecondary
-            )
+            makeErrorCallout(title: title, detail: detail),
         ])
+        show(at: anchor)
+    }
+
+    func showLookupError(
+        surface: String,
+        title: String,
+        detail: String?,
+        canRetry: Bool,
+        anchor: PanelAnchor
+    ) {
+        currentLines = []
+        showingCard = false
+        clearFormReferences()
+        var views: [NSView] = []
+        let trimmedSurface = surface.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedSurface.isEmpty {
+            views.append(makeLabel(
+                trimmedSurface,
+                font: chineseFont(size: 14, weight: .medium),
+                color: .lookupInk
+            ))
+        }
+        views.append(makeErrorCallout(title: title, detail: detail))
+        if canRetry {
+            views.append(makeActionButton(
+                title: "Retry",
+                symbolName: "arrow.clockwise",
+                style: .primary,
+                action: #selector(retryLookupPressed),
+                width: 312
+            ))
+        }
+        replaceBody(with: views)
+        show(at: anchor)
+    }
+
+    func showAddError(
+        line: GlossLine?,
+        title: String,
+        detail: String?,
+        canGoBack: Bool,
+        anchor: PanelAnchor
+    ) {
+        currentLines = []
+        showingCard = false
+        clearFormReferences()
+        var views: [NSView] = []
+        if let line {
+            views.append(contentsOf: makeWordContextViews(for: line))
+        }
+        views.append(makeErrorCallout(title: title, detail: detail))
+
+        if canGoBack {
+            let backButton = makeActionButton(
+                title: "Back",
+                symbolName: "chevron.left",
+                style: .secondary,
+                action: #selector(backToResultsPressed),
+                width: 88
+            )
+            let retryButton = makeActionButton(
+                title: "Retry",
+                symbolName: "arrow.clockwise",
+                style: .primary,
+                action: #selector(retryAddPressed),
+                width: 216
+            )
+            let actionRow = NSStackView(views: [backButton, retryButton])
+            actionRow.orientation = .horizontal
+            actionRow.alignment = .centerY
+            actionRow.spacing = 8
+            actionRow.distribution = .fill
+            views.append(actionRow)
+        } else {
+            views.append(makeActionButton(
+                title: "Retry",
+                symbolName: "arrow.clockwise",
+                style: .primary,
+                action: #selector(retryAddPressed),
+                width: 312
+            ))
+        }
+
+        replaceBody(with: views)
+        show(at: anchor)
+    }
+
+    func showAdding(line: GlossLine, anchor: PanelAnchor) {
+        currentLines = []
+        showingCard = false
+        clearFormReferences()
+        var views = makeWordContextViews(for: line)
+        let message = line.action == "open" ? "Opening…" : "Generating card…"
+        views.append(makeSpinnerRow(message: message))
+        replaceBody(with: views)
         show(at: anchor)
     }
 
@@ -203,7 +302,7 @@ final class PanelController: NSObject {
         panel.orderOut(nil)
         currentLines = []
         showingCard = false
-        fieldInputs = [:]
+        clearFormReferences()
     }
 
     func showCard(_ draft: CardDraft, anchor: PanelAnchor) {
@@ -211,7 +310,7 @@ final class PanelController: NSObject {
         showingCard = true
         cardVariants = draft.variants ?? []
         generatedCard = draft.fields.aiGenerated == true
-        fieldInputs = [:]
+        clearFormReferences()
         var views: [NSView] = []
         if draft.readOnly {
             views.append(makeLabel(
@@ -230,17 +329,44 @@ final class PanelController: NSObject {
             }
         }
         views.append(contentsOf: makeCardFields(draft.fields, editable: !draft.readOnly))
-        formErrorLabel = makeLabel(
-            "",
-            font: chineseFont(size: 12, weight: .regular),
-            color: NSColor(calibratedRed: 0xBB / 255.0, green: 0x59 / 255.0, blue: 0x60 / 255.0, alpha: 1)
-        )
-        formErrorLabel?.isHidden = true
-        if let formErrorLabel {
-            views.append(formErrorLabel)
-        }
+
         if !draft.readOnly {
-            views.append(makeSaveButton())
+            let statusContainer = NSStackView()
+            statusContainer.orientation = .vertical
+            statusContainer.alignment = .width
+            statusContainer.isHidden = true
+            formStatusContainer = statusContainer
+            views.append(statusContainer)
+
+            let errorContainer = NSStackView()
+            errorContainer.orientation = .vertical
+            errorContainer.alignment = .width
+            errorContainer.isHidden = true
+            formErrorContainer = errorContainer
+            views.append(errorContainer)
+
+            let regenerateButton = makeActionButton(
+                title: "Regenerate",
+                symbolName: "arrow.clockwise",
+                style: .secondary,
+                action: #selector(regeneratePressed),
+                width: 118
+            )
+            let saveButton = makeActionButton(
+                title: "Save",
+                symbolName: nil,
+                style: .primary,
+                action: #selector(savePressed),
+                width: 186
+            )
+            formActionButtons = [regenerateButton, saveButton]
+
+            let actionRow = NSStackView(views: [regenerateButton, saveButton])
+            actionRow.orientation = .horizontal
+            actionRow.alignment = .centerY
+            actionRow.spacing = 8
+            actionRow.distribution = .fill
+            views.append(actionRow)
         }
         replaceBody(with: views)
         show(at: anchor)
@@ -250,17 +376,70 @@ final class PanelController: NSObject {
         showingCard
     }
 
-    func showFormStatus(_ message: String) {
-        formErrorLabel?.stringValue = message
-        formErrorLabel?.isHidden = message.isEmpty
+    func setCardBusy(message: String) {
+        setFormButtonsEnabled(false)
+        clearStack(formErrorContainer)
+        formErrorContainer?.isHidden = true
+        clearStack(formStatusContainer)
+        formStatusContainer?.addArrangedSubview(makeSpinnerRow(message: message))
+        formStatusContainer?.isHidden = false
+        if let anchor = lastAnchor {
+            show(at: anchor)
+            scrollFormFeedbackIntoView()
+        }
+    }
+
+    func showFormError(title: String, detail: String?) {
+        setFormButtonsEnabled(true)
+        clearStack(formStatusContainer)
+        formStatusContainer?.isHidden = true
+        clearStack(formErrorContainer)
+        formErrorContainer?.addArrangedSubview(makeErrorCallout(title: title, detail: detail))
+        formErrorContainer?.isHidden = false
+        if let anchor = lastAnchor {
+            show(at: anchor)
+            scrollFormFeedbackIntoView()
+        }
+    }
+
+    func clearFormFeedback() {
+        setFormButtonsEnabled(true)
+        clearStack(formStatusContainer)
+        formStatusContainer?.isHidden = true
+        clearStack(formErrorContainer)
+        formErrorContainer?.isHidden = true
         if let anchor = lastAnchor {
             show(at: anchor)
         }
     }
 
+    func currentTags() -> [String] {
+        fieldValue("tags")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    func currentRegenerateFallbackLine() -> GlossLine? {
+        let simplified = fieldValue("simplified")
+        guard !simplified.isEmpty else {
+            return nil
+        }
+        return GlossLine(
+            surface: simplified,
+            simplified: simplified,
+            traditional: fieldValue("traditional").isEmpty ? nil : fieldValue("traditional"),
+            pinyin: fieldValue("pinyin"),
+            meaning: fieldValue("meaning"),
+            vocabularyId: nil,
+            action: "add",
+            destination: "add-word"
+        )
+    }
+
     func showSaved(anchor: PanelAnchor) {
         showingCard = false
-        fieldInputs = [:]
+        clearFormReferences()
         replaceBody(with: [
             makeLabel(
                 "Saved to your vocabulary.",
@@ -429,17 +608,235 @@ final class PanelController: NSObject {
         return views
     }
 
-    private func makeLabel(_ text: String, font: NSFont, color: NSColor) -> NSTextField {
+    private func makeLabel(
+        _ text: String,
+        font: NSFont,
+        color: NSColor,
+        maxWidth: CGFloat = 312
+    ) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.font = font
         label.textColor = color
         label.alignment = .left
         label.lineBreakMode = .byWordWrapping
         label.maximumNumberOfLines = 0
-        label.preferredMaxLayoutWidth = 312
+        label.preferredMaxLayoutWidth = maxWidth
         label.setContentHuggingPriority(.defaultLow, for: .horizontal)
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return label
+    }
+
+    private func makeWordContextViews(for line: GlossLine) -> [NSView] {
+        var views: [NSView] = []
+        let heading = line.surface.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? line.simplified
+            : line.surface
+        if !heading.isEmpty {
+            views.append(makeLabel(
+                heading,
+                font: chineseFont(size: 14, weight: .medium),
+                color: .lookupInk
+            ))
+        }
+        let pinyin = line.pinyin.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawMeaning = line.meaning.trimmingCharacters(in: .whitespacesAndNewlines)
+        let meaning = rawMeaning == "No English gloss saved" ? "" : rawMeaning
+        let subtitle = [pinyin, meaning].filter { !$0.isEmpty }.joined(separator: " · ")
+        if !subtitle.isEmpty {
+            views.append(makeLabel(
+                subtitle,
+                font: chineseFont(size: 12, weight: .regular),
+                color: .lookupSecondary
+            ))
+        }
+        return views
+    }
+
+    private func makeSpinnerRow(message: String) -> NSView {
+        let spinner = NSProgressIndicator()
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isIndeterminate = true
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        spinner.widthAnchor.constraint(equalToConstant: 14).isActive = true
+        spinner.heightAnchor.constraint(equalToConstant: 14).isActive = true
+        spinner.startAnimation(nil)
+
+        let label = makeLabel(
+            message,
+            font: chineseFont(size: 12, weight: .regular),
+            color: .lookupSecondary,
+            maxWidth: 290
+        )
+        let row = NSStackView(views: [spinner, label])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 7
+        return row
+    }
+
+    private func makeErrorCallout(title: String, detail: String?) -> NSView {
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanDetail = detail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.lookupDangerSoft.cgColor
+        container.layer?.borderColor = NSColor.lookupDangerBorder.cgColor
+        container.layer?.borderWidth = 1
+        container.layer?.cornerRadius = 8
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.widthAnchor.constraint(equalToConstant: 312).isActive = true
+
+        let contentStack = NSStackView()
+        contentStack.orientation = .vertical
+        contentStack.alignment = .leading
+        contentStack.spacing = 4
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+
+        let headerRow = NSStackView()
+        headerRow.orientation = .horizontal
+        headerRow.alignment = .centerY
+        headerRow.spacing = 6
+
+        var titleWidth: CGFloat = 292
+        let symbolConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        if let iconImage = NSImage(
+            systemSymbolName: "exclamationmark.triangle.fill",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(symbolConfig) {
+            iconImage.isTemplate = true
+            let iconView = NSImageView(image: iconImage)
+            iconView.contentTintColor = .lookupDanger
+            iconView.translatesAutoresizingMaskIntoConstraints = false
+            iconView.widthAnchor.constraint(equalToConstant: 14).isActive = true
+            iconView.heightAnchor.constraint(equalToConstant: 14).isActive = true
+            headerRow.addArrangedSubview(iconView)
+            titleWidth = 272
+        }
+
+        let titleLabel = makeLabel(
+            cleanTitle.isEmpty ? "Something went wrong." : cleanTitle,
+            font: chineseFont(size: 12, weight: .semibold),
+            color: .lookupDanger,
+            maxWidth: titleWidth
+        )
+        headerRow.addArrangedSubview(titleLabel)
+        contentStack.addArrangedSubview(headerRow)
+
+        if !cleanDetail.isEmpty && cleanDetail.caseInsensitiveCompare(cleanTitle) != .orderedSame {
+            let detailLabel = makeLabel(
+                cleanDetail,
+                font: chineseFont(size: 11.5, weight: .regular),
+                color: .lookupDangerInk,
+                maxWidth: 292
+            )
+            detailLabel.isSelectable = true
+            contentStack.addArrangedSubview(detailLabel)
+        }
+
+        container.addSubview(contentStack)
+        NSLayoutConstraint.activate([
+            contentStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
+            contentStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+            contentStack.topAnchor.constraint(equalTo: container.topAnchor, constant: 9),
+            contentStack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -9),
+        ])
+        return container
+    }
+
+    private func makeActionButton(
+        title: String,
+        symbolName: String?,
+        style: ActionButtonStyle,
+        action: Selector,
+        width: CGFloat
+    ) -> NSButton {
+        let button = PaddedButton(title: title, target: self, action: action)
+        button.isBordered = false
+        let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        button.font = font
+
+        let foregroundColor: NSColor
+        switch style {
+        case .primary:
+            foregroundColor = .white
+        case .secondary:
+            foregroundColor = .lookupNavy
+        }
+
+        button.attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [
+                .foregroundColor: foregroundColor,
+                .font: font,
+            ]
+        )
+
+        if let symbolName {
+            let symbolConfig = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+            if let image = NSImage(
+                systemSymbolName: symbolName,
+                accessibilityDescription: nil
+            )?.withSymbolConfiguration(symbolConfig) {
+                image.isTemplate = true
+                button.image = image
+                button.imagePosition = .imageLeading
+                button.imageHugsTitle = true
+                button.contentTintColor = foregroundColor
+            }
+        }
+
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 7
+        button.layer?.masksToBounds = true
+        switch style {
+        case .primary:
+            button.layer?.backgroundColor = NSColor.lookupButton.cgColor
+            button.layer?.borderWidth = 0
+        case .secondary:
+            button.layer?.backgroundColor = NSColor.lookupSurfaceMuted.cgColor
+            button.layer?.borderWidth = 1
+            button.layer?.borderColor = NSColor.lookupLineStrong.cgColor
+        }
+
+        button.setAccessibilityLabel(title)
+        button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        button.widthAnchor.constraint(equalToConstant: width).isActive = true
+        return button
+    }
+
+    private func clearFormReferences() {
+        fieldInputs = [:]
+        formStatusContainer = nil
+        formErrorContainer = nil
+        formActionButtons = []
+    }
+
+    private func clearStack(_ stack: NSStackView?) {
+        guard let stack else {
+            return
+        }
+        for view in stack.arrangedSubviews {
+            stack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+    }
+
+    private func setFormButtonsEnabled(_ enabled: Bool) {
+        for button in formActionButtons {
+            button.isEnabled = enabled
+            button.alphaValue = enabled ? 1.0 : 0.55
+        }
+    }
+
+    private func scrollFormFeedbackIntoView() {
+        panel.contentView?.layoutSubtreeIfNeeded()
+        if let actionButton = formActionButtons.last {
+            actionButton.scrollToVisible(actionButton.bounds)
+        } else if let errorContainer = formErrorContainer, !errorContainer.isHidden {
+            errorContainer.scrollToVisible(errorContainer.bounds)
+        }
     }
 
     private func makeButton(title: String, tag: Int, fullWidth: Bool) -> NSButton {
@@ -529,7 +926,7 @@ final class PanelController: NSObject {
         var hoveringButton = false
         var hoveringField = false
         while let current = view {
-            if current is NSButton {
+            if let button = current as? NSButton, button.isEnabled {
                 hoveringButton = true
                 break
             }
@@ -793,27 +1190,6 @@ final class PanelController: NSObject {
         return button
     }
 
-    private func makeSaveButton() -> NSButton {
-        let button = PaddedButton(title: "Save", target: self, action: #selector(savePressed))
-        button.isBordered = false
-        let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        button.font = font
-        button.attributedTitle = NSAttributedString(
-            string: "Save",
-            attributes: [
-                .foregroundColor: NSColor.white,
-                .font: font,
-            ]
-        )
-        button.wantsLayer = true
-        button.layer?.backgroundColor = NSColor.lookupButton.cgColor
-        button.layer?.cornerRadius = 7
-        button.setAccessibilityLabel("Save")
-        button.widthAnchor.constraint(equalToConstant: 312).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 28).isActive = true
-        return button
-    }
-
     private func apply(variant: CardVariant) {
         setField("traditional", variant.traditional ?? "")
         setField("pinyin", variant.pinyin)
@@ -835,10 +1211,7 @@ final class PanelController: NSObject {
     }
 
     private func currentFields() -> CardFields {
-        let tags = fieldValue("tags")
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        let tags = currentTags()
         return CardFields(
             simplified: fieldValue("simplified"),
             traditional: fieldValue("traditional").isEmpty ? nil : fieldValue("traditional"),
@@ -859,11 +1232,27 @@ final class PanelController: NSObject {
             return
         }
         apply(variant: cardVariants[sender.tag])
-        showFormStatus("")
+        clearFormFeedback()
     }
 
     @objc private func savePressed() {
         onSave?(currentFields())
+    }
+
+    @objc private func regeneratePressed() {
+        onRegenerate?()
+    }
+
+    @objc private func retryAddPressed() {
+        onRetryAdd?()
+    }
+
+    @objc private func retryLookupPressed() {
+        onRetryLookup?()
+    }
+
+    @objc private func backToResultsPressed() {
+        onBackToResults?()
     }
 
     @objc private func closePressed() {

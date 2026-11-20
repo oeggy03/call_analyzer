@@ -207,6 +207,7 @@ struct ParentMessage: Decodable, Sendable {
     let lines: [GlossLine]?
     let notice: String?
     let message: String?
+    let detail: String?
     let draft: CardDraft?
     let existingTags: [String]?
 }
