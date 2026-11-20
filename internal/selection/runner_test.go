@@ -18,12 +18,15 @@ type runnerTestHandler struct {
 	lookupResult LookupResult
 	lookupErr    error
 	addErr       error
+	regenErr     error
 
-	lookupSurface string
-	lookupContext string
-	addedLine     GlossLine
-	savedFields   CardFields
-	draft         CardDraft
+	lookupSurface    string
+	lookupContext    string
+	addedLine        GlossLine
+	regenFields      CardFields
+	regenInstruction string
+	savedFields      CardFields
+	draft            CardDraft
 }
 
 func (h *runnerTestHandler) LookupSelection(
@@ -50,6 +53,32 @@ func (h *runnerTestHandler) AddSelection(_ context.Context, line GlossLine) (Car
 				Pinyin:     line.Pinyin,
 				Meaning:    line.Meaning,
 				Example:    "我在走路。",
+			},
+		}
+	}
+	return h.draft, nil
+}
+
+func (h *runnerTestHandler) RegenerateSelection(
+	_ context.Context,
+	fields CardFields,
+	instruction string,
+) (CardDraft, error) {
+	h.regenFields = fields
+	h.regenInstruction = instruction
+	if h.regenErr != nil {
+		return CardDraft{}, h.regenErr
+	}
+	if h.draft.Fields.Simplified == "" && h.draft.Fields.Pinyin == "" {
+		h.draft = CardDraft{
+			Fields: CardFields{
+				Simplified:         fields.Simplified,
+				Pinyin:             fields.Pinyin,
+				Meaning:            fields.Meaning,
+				Example:            "我们一起去散步吧。",
+				ExamplePinyin:      "wǒ men yì qǐ qù sàn bù ba",
+				ExampleTranslation: "Let's go for a walk together.",
+				AIGenerated:        true,
 			},
 		}
 	}
@@ -184,6 +213,49 @@ func TestServeAddSuccessWritesDraft(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	if response.Type != "draft" || response.ID != "add-1" || response.Draft.Fields.Pinyin != "xíng" {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+}
+
+func TestServeRegenerateSuccessWritesDraftWithInstruction(t *testing.T) {
+	handler := &runnerTestHandler{}
+	var output bytes.Buffer
+	input := `{"type":"regenerate","id":"regen-1","fields":{"simplified":"行","pinyin":"xíng","meaning":"to walk","example":"我在走路。"},"instruction":"use a casual spoken example"}` + "\n"
+	err := Serve(context.Background(), strings.NewReader(input), &output, handler)
+	if err != nil {
+		t.Fatalf("Serve returned error: %v", err)
+	}
+	if handler.regenFields.Simplified != "行" || handler.regenInstruction != "use a casual spoken example" {
+		t.Fatalf("unexpected regenerate arguments: fields=%#v instruction=%q", handler.regenFields, handler.regenInstruction)
+	}
+
+	var response draftMessage
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Type != "draft" || response.ID != "regen-1" || response.Draft.Fields.Example != "我们一起去散步吧。" {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+}
+
+func TestServeRegenerateErrorWritesFriendlyMessageAndDetail(t *testing.T) {
+	handler := &runnerTestHandler{
+		regenErr: fmt.Errorf("manual vocabulary regeneration failed: %w", context.DeadlineExceeded),
+	}
+	var output bytes.Buffer
+	input := `{"type":"regenerate","id":"regen-2","fields":{"simplified":"行","pinyin":"xíng","meaning":"to walk"},"instruction":"simpler"}` + "\n"
+	err := Serve(context.Background(), strings.NewReader(input), &output, handler)
+	if err != nil {
+		t.Fatalf("Serve returned error: %v", err)
+	}
+
+	var response errorMessage
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Type != "error" || response.ID != "regen-2" ||
+		response.Message != regenerateFailureMessage ||
+		response.Detail != "Request timed out while regenerating the word card." {
 		t.Fatalf("unexpected response: %#v", response)
 	}
 }
@@ -411,6 +483,10 @@ func (h *deadlineHandler) LookupSelection(ctx context.Context, _, _ string) (Loo
 }
 
 func (*deadlineHandler) AddSelection(context.Context, GlossLine) (CardDraft, error) {
+	return CardDraft{}, nil
+}
+
+func (*deadlineHandler) RegenerateSelection(context.Context, CardFields, string) (CardDraft, error) {
 	return CardDraft{}, nil
 }
 

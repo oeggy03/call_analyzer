@@ -73,8 +73,8 @@ final class LookupAgent: NSObject, NSApplicationDelegate {
         panel.onBackToResults = { [weak self] in
             self?.backToResults()
         }
-        panel.onRegenerate = { [weak self] in
-            self?.regenerate()
+        panel.onRegenerate = { [weak self] fields, instruction in
+            self?.regenerate(fields: fields, instruction: instruction)
         }
     }
 
@@ -209,7 +209,11 @@ final class LookupAgent: NSObject, NSApplicationDelegate {
                     )
                 }
                 preservedRegenerateTags = nil
-                panel.showCard(draft, anchor: anchor)
+                panel.showCard(
+                    draft,
+                    notice: wasRegenerating ? "Card regenerated. Review before saving." : nil,
+                    anchor: anchor
+                )
             }
         case "saved":
             activeRequestKind = nil
@@ -322,16 +326,17 @@ final class LookupAgent: NSObject, NSApplicationDelegate {
         )
     }
 
-    private func regenerate() {
-        guard let line = lastAddLine ?? panel.currentRegenerateFallbackLine() else {
-            return
-        }
-        lastAddLine = line
-        preservedRegenerateTags = panel.currentTags()
+    private func regenerate(fields: CardFields, instruction: String) {
+        let trimmed = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        preservedRegenerateTags = fields.tags
         let id = nextRequestID()
         activeRequestKind = .regenerate
         panel.setCardBusy(message: "Regenerating…")
-        writer.write(AddRequest(id: id, line: line))
+        writer.write(RegenerateRequest(
+            id: id,
+            fields: fields,
+            instruction: trimmed.isEmpty ? nil : trimmed
+        ))
     }
 
     private func save(_ fields: CardFields) {

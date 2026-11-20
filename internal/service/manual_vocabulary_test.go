@@ -607,3 +607,86 @@ func TestManualVocabularyDuplicateAndRejectedRestore(t *testing.T) {
 		t.Fatalf("automatic upsert revived rejected entry: %#v", again)
 	}
 }
+
+func TestRegenerateManualVocabularyAppliesInstructionAndPreservesTags(t *testing.T) {
+	const regeneratedResponse = `{"simplified":"吞吐","traditional":"吞吐","pinyin":"tūn tǔ","meaning":"network throughput","partOfSpeech":"noun","classifier":"","example":"这套系统的吞吐量非常稳定。","examplePinyin":"zhè tào xì tǒng de tūn tǔ liàng fēi cháng wěn dìng","exampleTranslation":"This system's throughput is very stable.","tags":["ignored-model-tag"]}`
+	var requestPayload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestPayload); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{
+				"message": map[string]string{"content": regeneratedResponse},
+			}},
+			"usage": map[string]any{
+				"prompt_tokens":     20,
+				"completion_tokens": 30,
+				"total_tokens":      50,
+				"cost":              0.0085,
+			},
+		})
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	store, err := storage.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	router, err := openrouter.NewClient(openrouter.Config{
+		BaseURL:    server.URL,
+		MaxRetries: 1,
+	}, manualTestKeyProvider{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := New(store, capture.NewMockSource(), NewMemorySecretStore(), router)
+	if err := svc.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	draft, err := svc.RegenerateManualVocabulary(ctx, RegenerateManualVocabularyInput{
+		ManualVocabularyInput: ManualVocabularyInput{
+			Simplified:         "吞吐",
+			Pinyin:             "tūn tǔ",
+			Meaning:            "to take in and send out",
+			Example:            "江河在入海口不断吞吐。",
+			ExamplePinyin:      "jiāng hé zài rù hǎi kǒu bù duàn tūn tǔ",
+			ExampleTranslation: "Rivers take in and send out water at the estuary.",
+			Tags:               []string{"systems", "work"},
+		},
+		Instruction: "Switch to the software engineering throughput meaning",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.Meaning != "network throughput" ||
+		draft.Example != "这套系统的吞吐量非常稳定。" ||
+		!draft.AiGenerated ||
+		!draft.MatchedContext ||
+		len(draft.Tags) != 2 || draft.Tags[0] != "systems" || draft.Tags[1] != "work" {
+		t.Fatalf("unexpected regenerated draft: %#v", draft)
+	}
+
+	messages, _ := requestPayload["messages"].([]any)
+	if len(messages) != 2 {
+		t.Fatalf("unexpected messages: %#v", requestPayload["messages"])
+	}
+	userContent, _ := messages[1].(map[string]any)["content"].(string)
+	if !strings.Contains(userContent, "BEGIN QUOTED ORIGINAL CARD JSON") ||
+		!strings.Contains(userContent, "Switch to the software engineering throughput meaning") {
+		t.Fatalf("prompt did not include original card and instruction: %s", userContent)
+	}
+
+	// Blocked during an active lesson for desktop Add Word / Inbox edit.
+	svc.mu.Lock()
+	svc.currentLesson = "active-lesson"
+	svc.mu.Unlock()
+	if _, err := svc.RegenerateManualVocabulary(ctx, RegenerateManualVocabularyInput{
+		ManualVocabularyInput: ManualVocabularyInput{Simplified: "吞吐"},
+	}); err == nil || !strings.Contains(err.Error(), "finish the active lesson") {
+		t.Fatalf("expected active lesson error, got: %v", err)
+	}
+}

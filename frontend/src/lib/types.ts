@@ -157,6 +157,10 @@ export interface ManualVocabularyInput {
   aiGenerated?: boolean
 }
 
+export interface RegenerateManualVocabularyInput extends ManualVocabularyInput {
+  instruction?: string
+}
+
 export interface ManualVocabularyVariant {
   traditional?: string
   pinyin: string

@@ -11,7 +11,7 @@ Package roles are listed in `README.md`. This file is the boundary and flow map.
 | Lesson service | `internal/service/service.go`, `capture_pipeline.go` | capture, OpenRouter, storage, vocabulary, sync | `capture.Source`, `openrouter.Client`, `storage.Store` |
 | Capture | `internal/capture/capture.go` | macOS adapter on Darwin, `MockSource` otherwise | `Source`, plus optional `ConfigurableSource`, `EventSource`, `PermissionSource`, `TargetSource` |
 | Helper process | `internal/capture/macos` | `native/macos-capture` | JSON-line events. Commands are in `native/macos-capture/Sources/call-analyzer-capture/CLI.swift`. |
-| Selection lookup | `internal/selection`, `internal/service/selection_lookup.go` | `native/macos-lookup`, Wails runtime events | JSON-line `lookup`/`add`/`save` requests (`result`/`draft`/`saved`/`error` replies); saves emit `vocabulary.changed` → `call_analyzer:snapshot_changed` (`call_analyzer:selection.add-word` remains wired as a legacy listener) |
+| Selection lookup | `internal/selection`, `internal/service/selection_lookup.go` | `native/macos-lookup`, Wails runtime events | JSON-line `lookup`/`add`/`regenerate`/`save` requests (`result`/`draft`/`saved`/`error` replies); saves emit `vocabulary.changed` → `call_analyzer:snapshot_changed` (`call_analyzer:selection.add-word` remains wired as a legacy listener) |
 | Model HTTP | `internal/openrouter/client.go` | OpenRouter | Audio transcription, text chat, and vision chat |
 | Database | `internal/storage/store.go` | embedded SQL | `internal/storage/migrations/*.sql`, applied in filename order |
 | Vocabulary rules | `internal/vocabulary/vocabulary.go` | used by `internal/service/vocabulary.go` | `NormalizeCandidate`, `CanonicalPinyin`, `ExtractionSchema` |
@@ -19,7 +19,7 @@ Package roles are listed in `README.md`. This file is the boundary and flow map.
 
 `assets.go` embeds `frontend/dist` for the packaged app. Vite writes that directory. It is not hand-edited source.
 
-Domain structs in `internal/domain/domain.go` are the storage and service shapes. `AppSnapshot` in `app_contract.go` is the main UI shape. `snapshot.go` maps domain records into it. Five methods return separate result types: `GenerateManualVocabulary` (`ManualVocabularyDraft`), `RecognizeVocabularyPhoto` (`PhotoVocabularyDraft`), `ListLessonTranscripts` (`[]LessonTranscriptSummary`), `GetLessonTranscript` (`LessonTranscript`), and `ListTags` (`[]string`).
+Domain structs in `internal/domain/domain.go` are the storage and service shapes. `AppSnapshot` in `app_contract.go` is the main UI shape. `snapshot.go` maps domain records into it. Six methods return separate result types: `GenerateManualVocabulary` (`ManualVocabularyDraft`), `RegenerateManualVocabulary` (`ManualVocabularyDraft`), `RecognizeVocabularyPhoto` (`PhotoVocabularyDraft`), `ListLessonTranscripts` (`[]LessonTranscriptSummary`), `GetLessonTranscript` (`LessonTranscript`), and `ListTags` (`[]string`).
 
 ## Startup and shutdown
 

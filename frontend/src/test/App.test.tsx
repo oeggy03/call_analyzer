@@ -822,6 +822,7 @@ describe('Call Analyzer frontend', () => {
     const fakeApp = {
       GetAppSnapshot: vi.fn().mockResolvedValue(snapshot),
       GenerateManualVocabulary: vi.fn().mockResolvedValue(manualDraft),
+      RegenerateManualVocabulary: vi.fn().mockResolvedValue(manualDraft),
       RecognizeVocabularyPhoto: vi.fn().mockResolvedValue({
         entries: [{
           simplified: '新词',
@@ -901,6 +902,7 @@ describe('Call Analyzer frontend', () => {
     expect(runtimeApi.mode).toBe('runtime')
     await runtimeApi.getSnapshot()
     await runtimeApi.generateManualVocabulary(manualInput)
+    await runtimeApi.regenerateManualVocabulary({ ...manualInput, instruction: 'more casual' })
     await runtimeApi.recognizeVocabularyPhoto('photo-base64')
     await runtimeApi.saveManualVocabulary(manualInput)
     await runtimeApi.listLessonTranscripts(30)
@@ -920,6 +922,7 @@ describe('Call Analyzer frontend', () => {
     await runtimeApi.refresh()
 
     expect(fakeApp.GenerateManualVocabulary).toHaveBeenCalledWith(manualInput)
+    expect(fakeApp.RegenerateManualVocabulary).toHaveBeenCalledWith({ ...manualInput, instruction: 'more casual' })
     expect(fakeApp.RecognizeVocabularyPhoto).toHaveBeenCalledWith('photo-base64')
     expect(fakeApp.SaveManualVocabulary).toHaveBeenCalledWith(manualInput)
     expect(fakeApp.ListLessonTranscripts).toHaveBeenCalledWith(30)
@@ -1091,5 +1094,46 @@ describe('Call Analyzer frontend', () => {
     await expect(createApi({ mode: 'runtime' }).generateManualVocabulary({ simplified: '吞吐' })).rejects.toThrow(
       'invalid manual vocabulary draft',
     )
+  })
+
+  it('regenerates a candidate inside the edit dialog with an optional prompt', async () => {
+    const api = createDemoApi()
+    const regenerateSpy = vi.spyOn(api, 'regenerateManualVocabulary')
+    render(<App apiClient={api} />)
+    await openView('Candidate Inbox')
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^Edit$/i })[0])
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Regenerate$/i }))
+
+    const promptInput = within(dialog).getByLabelText('Regeneration instructions')
+    fireEvent.change(promptInput, { target: { value: 'Make it more casual' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: /Regenerate now/i }))
+
+    await waitFor(() => expect(regenerateSpy).toHaveBeenCalledTimes(1))
+    expect(regenerateSpy.mock.calls[0][0].instruction).toBe('Make it more casual')
+    expect(await within(dialog).findByText(/Card regenerated with/i)).toBeInTheDocument()
+    expect(
+      (within(dialog).getByLabelText('Translation') as HTMLTextAreaElement).value,
+    ).toContain('Make it more casual')
+  })
+
+  it('regenerates a completed Add Word card with a quick-prompt preset', async () => {
+    const api = createDemoApi()
+    const regenerateSpy = vi.spyOn(api, 'regenerateManualVocabulary')
+    render(<App apiClient={api} />)
+    await openView('Add Word')
+
+    fireEvent.change(screen.getByLabelText(/Chinese word \(simplified\)/i), { target: { value: '学习' } })
+    fireEvent.click(screen.getByRole('button', { name: /Generate missing details/i }))
+    expect(await screen.findByText(/Missing details generated/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Regenerate$/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'More casual' }))
+    fireEvent.click(screen.getByRole('button', { name: /Regenerate now/i }))
+
+    await waitFor(() => expect(regenerateSpy).toHaveBeenCalledTimes(1))
+    expect(regenerateSpy.mock.calls[0][0].instruction).toContain('casual')
+    expect(await screen.findByText(/Card regenerated/i)).toBeInTheDocument()
   })
 })

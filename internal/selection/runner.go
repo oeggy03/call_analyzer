@@ -21,12 +21,13 @@ import (
 var ErrAlreadyRunning = errors.New("selection helper is already running")
 
 const (
-	lookupFailureMessage = "Couldn't look this up."
-	addFailureMessage    = "Couldn't add this word."
-	saveFailureMessage   = "Couldn't save this word."
-	lookupTimeout        = 20 * time.Second
-	addTimeout           = 60 * time.Second
-	maxErrorDetailRunes  = 220
+	lookupFailureMessage     = "Couldn't look this up."
+	addFailureMessage        = "Couldn't add this word."
+	regenerateFailureMessage = "Couldn't regenerate this card."
+	saveFailureMessage       = "Couldn't save this word."
+	lookupTimeout            = 20 * time.Second
+	addTimeout               = 60 * time.Second
+	maxErrorDetailRunes      = 220
 )
 
 // Handler contains the service operations used by the selection helper.
@@ -36,6 +37,7 @@ type Handler interface {
 		surface, sentenceContext string,
 	) (LookupResult, error)
 	AddSelection(ctx context.Context, line GlossLine) (CardDraft, error)
+	RegenerateSelection(ctx context.Context, fields CardFields, instruction string) (CardDraft, error)
 	SaveSelection(ctx context.Context, fields CardFields) error
 }
 
@@ -77,13 +79,14 @@ func helperEnvironment() []string {
 }
 
 type helperRequest struct {
-	Type    string      `json:"type"`
-	ID      string      `json:"id"`
-	Surface string      `json:"surface"`
-	Context *string     `json:"context"`
-	Bounds  *Bounds     `json:"bounds"`
-	Line    *GlossLine  `json:"line"`
-	Fields  *CardFields `json:"fields"`
+	Type        string      `json:"type"`
+	ID          string      `json:"id"`
+	Surface     string      `json:"surface"`
+	Context     *string     `json:"context"`
+	Bounds      *Bounds     `json:"bounds"`
+	Line        *GlossLine  `json:"line"`
+	Fields      *CardFields `json:"fields"`
+	Instruction string      `json:"instruction,omitempty"`
 }
 
 func failureDetail(err error, op string) string {
@@ -128,6 +131,8 @@ func timeoutDetail(op string) string {
 	switch op {
 	case "add":
 		return "Request timed out while generating the word card."
+	case "regenerate":
+		return "Request timed out while regenerating the word card."
 	case "lookup":
 		return "Lookup request timed out."
 	case "save":
@@ -219,6 +224,7 @@ func extractNestedErrorMessage(raw string) string {
 
 func stripInternalPrefixes(text string) string {
 	prefixes := []string{
+		"manual vocabulary regeneration failed: ",
 		"manual vocabulary generation failed: ",
 		"manual vocabulary: ",
 		"selection lookup failed: ",
@@ -502,6 +508,37 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, handler Handler) er
 						ID:      request.ID,
 						Message: addFailureMessage,
 						Detail:  failureDetail(err, "add"),
+					}))
+					return
+				}
+				recordWriteError(write(draftMessage{
+					Type:  "draft",
+					ID:    request.ID,
+					Draft: draft,
+				}))
+			}()
+		case "regenerate":
+			if request.Fields == nil {
+				continue
+			}
+			request := request
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				callCtx, callCancel := context.WithTimeout(serveCtx, addTimeout)
+				defer callCancel()
+
+				draft, err := handler.RegenerateSelection(
+					callCtx,
+					*request.Fields,
+					request.Instruction,
+				)
+				if err != nil {
+					recordWriteError(write(errorMessage{
+						Type:    "error",
+						ID:      request.ID,
+						Message: regenerateFailureMessage,
+						Detail:  failureDetail(err, "regenerate"),
 					}))
 					return
 				}

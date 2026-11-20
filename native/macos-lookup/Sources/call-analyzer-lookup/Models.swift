@@ -200,6 +200,13 @@ struct SaveRequest: Encodable, Sendable {
     let fields: CardFields
 }
 
+struct RegenerateRequest: Encodable, Sendable {
+    let type = "regenerate"
+    let id: String
+    let fields: CardFields
+    let instruction: String?
+}
+
 struct ParentMessage: Decodable, Sendable {
     let type: String
     let id: String

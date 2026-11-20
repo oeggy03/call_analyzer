@@ -44,4 +44,31 @@ final class LookupTests: XCTestCase {
         XCTAssertEqual(decodedWithoutDetail.message, "Couldn't add this word.")
         XCTAssertNil(decodedWithoutDetail.detail)
     }
+
+    func testRegenerateRequestEncodesFieldsAndOptionalInstruction() throws {
+        let request = RegenerateRequest(
+            id: "9",
+            fields: CardFields(
+                simplified: "学习",
+                traditional: "學習",
+                pinyin: "xué xí",
+                meaning: "to study",
+                example: "我学习中文。",
+                examplePinyin: "wǒ xué xí zhōng wén",
+                exampleTranslation: "I study Chinese.",
+                tags: ["daily"],
+                aiGenerated: true
+            ),
+            instruction: "use a more casual spoken example"
+        )
+        let data = try JSONEncoder().encode(request)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(object["type"] as? String, "regenerate")
+        XCTAssertEqual(object["id"] as? String, "9")
+        XCTAssertEqual(object["instruction"] as? String, "use a more casual spoken example")
+        let fields = try XCTUnwrap(object["fields"] as? [String: Any])
+        XCTAssertEqual(fields["simplified"] as? String, "学习")
+    }
 }

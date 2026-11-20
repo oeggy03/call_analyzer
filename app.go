@@ -224,6 +224,46 @@ func (a *App) GenerateManualVocabulary(input ManualVocabularyInput) (ManualVocab
 	}, nil
 }
 
+func (a *App) RegenerateManualVocabulary(input RegenerateManualVocabularyInput) (ManualVocabularyDraft, error) {
+	draft, err := a.service.RegenerateManualVocabulary(a.context(), service.RegenerateManualVocabularyInput{
+		ManualVocabularyInput: service.ManualVocabularyInput{
+			Simplified:         input.Simplified,
+			Traditional:        input.Traditional,
+			Pinyin:             input.Pinyin,
+			Meaning:            input.Meaning,
+			PartOfSpeech:       input.PartOfSpeech,
+			Classifier:         input.Classifier,
+			Example:            input.Example,
+			ExamplePinyin:      input.ExamplePinyin,
+			ExampleTranslation: input.ExampleTranslation,
+			Tags:               input.Tags,
+			AiGenerated:        input.AiGenerated,
+		},
+		Instruction: input.Instruction,
+	})
+	if err != nil {
+		return ManualVocabularyDraft{}, err
+	}
+	return ManualVocabularyDraft{
+		Simplified:         draft.Simplified,
+		Traditional:        draft.Traditional,
+		Pinyin:             draft.Pinyin,
+		Meaning:            draft.Meaning,
+		PartOfSpeech:       draft.PartOfSpeech,
+		Classifier:         draft.Classifier,
+		Example:            draft.Example,
+		ExamplePinyin:      draft.ExamplePinyin,
+		ExampleTranslation: draft.ExampleTranslation,
+		Tags:               draft.Tags,
+		AiGenerated:        draft.AiGenerated,
+		Model:              draft.Model,
+		Cost:               draft.Cost,
+		NeedsChoice:        draft.NeedsChoice,
+		MatchedContext:     draft.MatchedContext,
+		AppliedVariant:     draft.AppliedVariant,
+	}, nil
+}
+
 func (a *App) RecognizeVocabularyPhoto(imageBase64 string) (PhotoVocabularyDraft, error) {
 	image, err := decodePhotoImageBase64(imageBase64)
 	if err != nil {

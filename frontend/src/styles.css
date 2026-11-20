@@ -3548,6 +3548,127 @@ textarea.text-input {
   margin-top: 11px;
 }
 
+.regenerate-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 13px 14px;
+  border: 1px solid #d2e1fa;
+  border-radius: 12px;
+  background: #f5f8fe;
+}
+
+.regenerate-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.regenerate-panel-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.regenerate-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.regenerate-panel-title svg {
+  color: var(--blue);
+}
+
+.regenerate-panel-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.regenerate-panel-close {
+  width: 26px;
+  height: 26px;
+}
+
+.regenerate-panel-copy {
+  margin: 0;
+  color: var(--ink-700);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.regenerate-prompt-input {
+  background: var(--paper);
+  min-height: 60px;
+}
+
+.regenerate-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.regenerate-preset-chip {
+  font-size: 12px;
+}
+
+.regenerate-panel-error {
+  margin: 0;
+}
+
+.regenerate-panel-hint {
+  margin: 0;
+}
+
+.regenerate-panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.dialog-success {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  border: 1px solid #c6e7da;
+  border-radius: 10px;
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.dialog-actions-split {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.dialog-actions-primary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.button-secondary.is-active {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+  color: var(--navy);
+}
+
 @media (max-width: 480px) {
   .photo-queue-item {
     max-width: none;

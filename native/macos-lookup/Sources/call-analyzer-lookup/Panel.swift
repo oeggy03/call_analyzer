@@ -9,6 +9,11 @@ private extension NSColor {
     static let lookupSurfaceMuted = NSColor(calibratedRed: 0xF5 / 255.0, green: 0xF7 / 255.0, blue: 0xFA / 255.0, alpha: 1)
     static let lookupButton = NSColor(calibratedRed: 0x39 / 255.0, green: 0x74 / 255.0, blue: 0xC8 / 255.0, alpha: 1)
     static let lookupBlueSoft = NSColor(calibratedRed: 0xE9 / 255.0, green: 0xF1 / 255.0, blue: 0xFD / 255.0, alpha: 1)
+    static let lookupBlueTint = NSColor(calibratedRed: 0xF5 / 255.0, green: 0xF8 / 255.0, blue: 0xFE / 255.0, alpha: 1)
+    static let lookupBlueBorder = NSColor(calibratedRed: 0xD2 / 255.0, green: 0xE1 / 255.0, blue: 0xFA / 255.0, alpha: 1)
+    static let lookupGreen = NSColor(calibratedRed: 0x2E / 255.0, green: 0x92 / 255.0, blue: 0x70 / 255.0, alpha: 1)
+    static let lookupGreenSoft = NSColor(calibratedRed: 0xE8 / 255.0, green: 0xF6 / 255.0, blue: 0xF0 / 255.0, alpha: 1)
+    static let lookupGreenBorder = NSColor(calibratedRed: 0xC6 / 255.0, green: 0xE7 / 255.0, blue: 0xDA / 255.0, alpha: 1)
     static let lookupDanger = NSColor(calibratedRed: 0xBB / 255.0, green: 0x59 / 255.0, blue: 0x60 / 255.0, alpha: 1)
     static let lookupDangerSoft = NSColor(calibratedRed: 0xFF / 255.0, green: 0xF0 / 255.0, blue: 0xF1 / 255.0, alpha: 1)
     static let lookupDangerBorder = NSColor(calibratedRed: 0xF2 / 255.0, green: 0xCF / 255.0, blue: 0xD2 / 255.0, alpha: 1)
@@ -36,6 +41,7 @@ private final class PaddedButton: NSButton {
 }
 
 private final class FlowView: NSView {
+    var preferredWidth: CGFloat = 312
     override var isFlipped: Bool { true }
 
     func setItems(_ items: [NSView]) {
@@ -46,12 +52,12 @@ private final class FlowView: NSView {
     }
 
     override var intrinsicContentSize: NSSize {
-        layoutItems(in: 312, place: false)
+        layoutItems(in: preferredWidth, place: false)
     }
 
     override func layout() {
         super.layout()
-        let width = bounds.width > 1 ? bounds.width : 312
+        let width = bounds.width > 1 ? bounds.width : preferredWidth
         _ = layoutItems(in: width, place: true)
     }
 
@@ -84,14 +90,20 @@ struct PanelAnchor {
 }
 
 @MainActor
-final class PanelController: NSObject {
+final class PanelController: NSObject, NSTextFieldDelegate {
+    private static let regeneratePresets: [(title: String, prompt: String)] = [
+        ("Simpler example", "Use a simpler, everyday example sentence."),
+        ("More casual", "Make the example sentence more casual and conversational."),
+        ("Different meaning", "Use a different common meaning or sense of this word."),
+    ]
+
     var onDismiss: (() -> Void)?
     var onAdd: ((GlossLine) -> Void)?
     var onSave: ((CardFields) -> Void)?
     var onRetryAdd: (() -> Void)?
     var onRetryLookup: (() -> Void)?
     var onBackToResults: (() -> Void)?
-    var onRegenerate: (() -> Void)?
+    var onRegenerate: ((CardFields, String) -> Void)?
 
     private enum ActionButtonStyle {
         case primary
@@ -112,6 +124,10 @@ final class PanelController: NSObject {
     private var formStatusContainer: NSStackView?
     private var formErrorContainer: NSStackView?
     private var formActionButtons: [NSButton] = []
+    private var defaultActionRow: NSView?
+    private var regenerateDrawer: NSView?
+    private var regeneratePromptField: NSTextField?
+    private var regeneratePresetButtons: [NSButton] = []
     private var generatedCard = false
     private var showingCard = false
     private var cardVariants: [CardVariant] = []
@@ -305,13 +321,16 @@ final class PanelController: NSObject {
         clearFormReferences()
     }
 
-    func showCard(_ draft: CardDraft, anchor: PanelAnchor) {
+    func showCard(_ draft: CardDraft, notice: String? = nil, anchor: PanelAnchor) {
         currentLines = []
         showingCard = true
         cardVariants = draft.variants ?? []
         generatedCard = draft.fields.aiGenerated == true
         clearFormReferences()
         var views: [NSView] = []
+        if let notice, !notice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            views.append(makeSuccessBanner(message: notice))
+        }
         if draft.readOnly {
             views.append(makeLabel(
                 "Saved",
@@ -345,11 +364,16 @@ final class PanelController: NSObject {
             formErrorContainer = errorContainer
             views.append(errorContainer)
 
+            let (drawer, drawerButtons) = makeRegenerateDrawer()
+            drawer.isHidden = true
+            regenerateDrawer = drawer
+            views.append(drawer)
+
             let regenerateButton = makeActionButton(
                 title: "Regenerate",
                 symbolName: "arrow.clockwise",
                 style: .secondary,
-                action: #selector(regeneratePressed),
+                action: #selector(openRegenerateDrawerPressed),
                 width: 118
             )
             let saveButton = makeActionButton(
@@ -359,13 +383,14 @@ final class PanelController: NSObject {
                 action: #selector(savePressed),
                 width: 186
             )
-            formActionButtons = [regenerateButton, saveButton]
+            formActionButtons = [regenerateButton, saveButton] + drawerButtons
 
             let actionRow = NSStackView(views: [regenerateButton, saveButton])
             actionRow.orientation = .horizontal
             actionRow.alignment = .centerY
             actionRow.spacing = 8
             actionRow.distribution = .fill
+            defaultActionRow = actionRow
             views.append(actionRow)
         }
         replaceBody(with: views)
@@ -418,23 +443,6 @@ final class PanelController: NSObject {
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-    }
-
-    func currentRegenerateFallbackLine() -> GlossLine? {
-        let simplified = fieldValue("simplified")
-        guard !simplified.isEmpty else {
-            return nil
-        }
-        return GlossLine(
-            surface: simplified,
-            simplified: simplified,
-            traditional: fieldValue("traditional").isEmpty ? nil : fieldValue("traditional"),
-            pinyin: fieldValue("pinyin"),
-            meaning: fieldValue("meaning"),
-            vocabularyId: nil,
-            action: "add",
-            destination: "add-word"
-        )
     }
 
     func showSaved(anchor: PanelAnchor) {
@@ -745,6 +753,224 @@ final class PanelController: NSObject {
         return container
     }
 
+    private func makeSuccessBanner(message: String) -> NSView {
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.lookupGreenSoft.cgColor
+        container.layer?.borderColor = NSColor.lookupGreenBorder.cgColor
+        container.layer?.borderWidth = 1
+        container.layer?.cornerRadius = 8
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.widthAnchor.constraint(equalToConstant: 312).isActive = true
+
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 6
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        var labelWidth: CGFloat = 292
+        let symbolConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        if let iconImage = NSImage(
+            systemSymbolName: "checkmark.circle.fill",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(symbolConfig) {
+            iconImage.isTemplate = true
+            let iconView = NSImageView(image: iconImage)
+            iconView.contentTintColor = .lookupGreen
+            iconView.translatesAutoresizingMaskIntoConstraints = false
+            iconView.widthAnchor.constraint(equalToConstant: 14).isActive = true
+            iconView.heightAnchor.constraint(equalToConstant: 14).isActive = true
+            row.addArrangedSubview(iconView)
+            labelWidth = 272
+        }
+
+        row.addArrangedSubview(makeLabel(
+            message,
+            font: chineseFont(size: 11.5, weight: .medium),
+            color: .lookupGreen,
+            maxWidth: labelWidth
+        ))
+
+        container.addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
+            row.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+            row.topAnchor.constraint(equalTo: container.topAnchor, constant: 7),
+            row.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -7),
+        ])
+        return container
+    }
+
+    private func makeRegenerateDrawer() -> (NSView, [NSButton]) {
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.lookupBlueTint.cgColor
+        container.layer?.borderColor = NSColor.lookupBlueBorder.cgColor
+        container.layer?.borderWidth = 1
+        container.layer?.cornerRadius = 8
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.widthAnchor.constraint(equalToConstant: 312).isActive = true
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 7
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let headerRow = NSStackView()
+        headerRow.orientation = .horizontal
+        headerRow.alignment = .centerY
+        headerRow.spacing = 5
+        let symbolConfig = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        if let icon = NSImage(
+            systemSymbolName: "sparkles",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(symbolConfig) {
+            icon.isTemplate = true
+            let iconView = NSImageView(image: icon)
+            iconView.contentTintColor = .lookupButton
+            iconView.translatesAutoresizingMaskIntoConstraints = false
+            iconView.widthAnchor.constraint(equalToConstant: 13).isActive = true
+            iconView.heightAnchor.constraint(equalToConstant: 13).isActive = true
+            headerRow.addArrangedSubview(iconView)
+        }
+        headerRow.addArrangedSubview(makeLabel(
+            "Regenerate card",
+            font: chineseFont(size: 12, weight: .semibold),
+            color: .lookupNavy,
+            maxWidth: 160
+        ))
+        let optionalHint = makeLabel(
+            "Optional instructions",
+            font: chineseFont(size: 11, weight: .regular),
+            color: .lookupSecondary,
+            maxWidth: 120
+        )
+        optionalHint.alignment = .right
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.fittingSizeCompression, for: .horizontal)
+        headerRow.addArrangedSubview(spacer)
+        headerRow.addArrangedSubview(optionalHint)
+        headerRow.widthAnchor.constraint(equalToConstant: 292).isActive = true
+        stack.addArrangedSubview(headerRow)
+
+        let inputBox = NSView()
+        inputBox.wantsLayer = true
+        inputBox.layer?.cornerRadius = 6
+        inputBox.layer?.borderWidth = 1
+        inputBox.layer?.borderColor = NSColor.lookupLineStrong.cgColor
+        inputBox.layer?.backgroundColor = NSColor.white.cgColor
+        inputBox.translatesAutoresizingMaskIntoConstraints = false
+        inputBox.widthAnchor.constraint(equalToConstant: 292).isActive = true
+        inputBox.heightAnchor.constraint(equalToConstant: 46).isActive = true
+
+        let promptField = NSTextField(string: "")
+        promptField.font = chineseFont(size: 12, weight: .regular)
+        promptField.textColor = .lookupInk
+        promptField.placeholderString = "e.g. casual spoken example, simpler, business sense…"
+        promptField.isEditable = true
+        promptField.isSelectable = true
+        promptField.isBezeled = false
+        promptField.isBordered = false
+        promptField.drawsBackground = false
+        promptField.focusRingType = .none
+        promptField.lineBreakMode = .byWordWrapping
+        promptField.maximumNumberOfLines = 2
+        promptField.cell?.wraps = true
+        promptField.cell?.isScrollable = false
+        promptField.delegate = self
+        promptField.setAccessibilityLabel("Regeneration instructions")
+        promptField.translatesAutoresizingMaskIntoConstraints = false
+        inputBox.addSubview(promptField)
+        NSLayoutConstraint.activate([
+            promptField.leadingAnchor.constraint(equalTo: inputBox.leadingAnchor, constant: 8),
+            promptField.trailingAnchor.constraint(equalTo: inputBox.trailingAnchor, constant: -8),
+            promptField.topAnchor.constraint(equalTo: inputBox.topAnchor, constant: 6),
+            promptField.bottomAnchor.constraint(equalTo: inputBox.bottomAnchor, constant: -6),
+        ])
+        regeneratePromptField = promptField
+        stack.addArrangedSubview(inputBox)
+
+        let flow = FlowView()
+        flow.preferredWidth = 292
+        flow.translatesAutoresizingMaskIntoConstraints = false
+        regeneratePresetButtons = Self.regeneratePresets.enumerated().map { index, preset in
+            let button = PaddedButton(
+                title: preset.title,
+                target: self,
+                action: #selector(selectRegeneratePreset(_:))
+            )
+            button.tag = index
+            button.isBordered = false
+            button.font = chineseFont(size: 11, weight: .medium)
+            button.setAccessibilityLabel(preset.title)
+            button.translatesAutoresizingMaskIntoConstraints = true
+            stylePresetButton(button)
+            return button
+        }
+        flow.setItems(regeneratePresetButtons)
+        let fitted = flow.intrinsicContentSize
+        flow.widthAnchor.constraint(equalToConstant: 292).isActive = true
+        flow.heightAnchor.constraint(equalToConstant: max(fitted.height, 24)).isActive = true
+        stack.addArrangedSubview(flow)
+
+        let cancelButton = makeActionButton(
+            title: "Cancel",
+            symbolName: nil,
+            style: .secondary,
+            action: #selector(closeRegenerateDrawerPressed),
+            width: 86
+        )
+        let submitButton = makeActionButton(
+            title: "Regenerate",
+            symbolName: "arrow.clockwise",
+            style: .primary,
+            action: #selector(submitRegeneratePressed),
+            width: 198
+        )
+        let drawerActions = NSStackView(views: [cancelButton, submitButton])
+        drawerActions.orientation = .horizontal
+        drawerActions.alignment = .centerY
+        drawerActions.spacing = 8
+        drawerActions.distribution = .fill
+        stack.addArrangedSubview(drawerActions)
+
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 9),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -9),
+        ])
+        return (container, [cancelButton, submitButton] + regeneratePresetButtons)
+    }
+
+    private func stylePresetButton(_ button: NSButton) {
+        guard Self.regeneratePresets.indices.contains(button.tag) else {
+            return
+        }
+        let preset = Self.regeneratePresets[button.tag]
+        let currentPrompt = regeneratePromptField?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let selected = currentPrompt.caseInsensitiveCompare(preset.prompt) == .orderedSame
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 8
+        button.layer?.borderWidth = 1
+        let color: NSColor = selected ? .lookupNavy : .lookupSecondary
+        let font = chineseFont(size: 11, weight: .medium)
+        button.attributedTitle = NSAttributedString(
+            string: preset.title,
+            attributes: [.foregroundColor: color, .font: font]
+        )
+        if selected {
+            button.layer?.backgroundColor = NSColor.lookupBlueSoft.cgColor
+            button.layer?.borderColor = NSColor.lookupButton.cgColor
+        } else {
+            button.layer?.backgroundColor = NSColor.white.cgColor
+            button.layer?.borderColor = NSColor.lookupLine.cgColor
+        }
+    }
+
     private func makeActionButton(
         title: String,
         symbolName: String?,
@@ -811,6 +1037,10 @@ final class PanelController: NSObject {
         formStatusContainer = nil
         formErrorContainer = nil
         formActionButtons = []
+        defaultActionRow = nil
+        regenerateDrawer = nil
+        regeneratePromptField = nil
+        regeneratePresetButtons = []
     }
 
     private func clearStack(_ stack: NSStackView?) {
@@ -828,12 +1058,16 @@ final class PanelController: NSObject {
             button.isEnabled = enabled
             button.alphaValue = enabled ? 1.0 : 0.55
         }
+        regeneratePromptField?.isEditable = enabled
+        regeneratePromptField?.isEnabled = enabled
     }
 
     private func scrollFormFeedbackIntoView() {
         panel.contentView?.layoutSubtreeIfNeeded()
-        if let actionButton = formActionButtons.last {
-            actionButton.scrollToVisible(actionButton.bounds)
+        if let drawer = regenerateDrawer, !drawer.isHidden {
+            drawer.scrollToVisible(drawer.bounds)
+        } else if let actionRow = defaultActionRow, !actionRow.isHidden {
+            actionRow.scrollToVisible(actionRow.bounds)
         } else if let errorContainer = formErrorContainer, !errorContainer.isHidden {
             errorContainer.scrollToVisible(errorContainer.bounds)
         }
@@ -1239,8 +1473,78 @@ final class PanelController: NSObject {
         onSave?(currentFields())
     }
 
-    @objc private func regeneratePressed() {
-        onRegenerate?()
+    @objc private func openRegenerateDrawerPressed() {
+        regenerateDrawer?.isHidden = false
+        defaultActionRow?.isHidden = true
+        clearStack(formErrorContainer)
+        formErrorContainer?.isHidden = true
+        if let anchor = lastAnchor {
+            show(at: anchor)
+            scrollFormFeedbackIntoView()
+        }
+        if let promptField = regeneratePromptField {
+            panel.makeKey()
+            panel.makeFirstResponder(promptField)
+        }
+    }
+
+    @objc private func closeRegenerateDrawerPressed() {
+        regenerateDrawer?.isHidden = true
+        defaultActionRow?.isHidden = false
+        clearStack(formErrorContainer)
+        formErrorContainer?.isHidden = true
+        if let anchor = lastAnchor {
+            show(at: anchor)
+            scrollFormFeedbackIntoView()
+        }
+    }
+
+    @objc private func selectRegeneratePreset(_ sender: NSButton) {
+        guard Self.regeneratePresets.indices.contains(sender.tag),
+              let promptField = regeneratePromptField
+        else {
+            return
+        }
+        let preset = Self.regeneratePresets[sender.tag]
+        let current = promptField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if current.caseInsensitiveCompare(preset.prompt) == .orderedSame {
+            promptField.stringValue = ""
+        } else {
+            promptField.stringValue = preset.prompt
+        }
+        regeneratePresetButtons.forEach(stylePresetButton)
+        panel.makeFirstResponder(promptField)
+    }
+
+    @objc private func submitRegeneratePressed() {
+        let instruction = regeneratePromptField?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        onRegenerate?(currentFields(), instruction)
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField, field === regeneratePromptField else {
+            return
+        }
+        regeneratePresetButtons.forEach(stylePresetButton)
+    }
+
+    func control(
+        _ control: NSControl,
+        textView: NSTextView,
+        doCommandBy commandSelector: Selector
+    ) -> Bool {
+        guard control === regeneratePromptField else {
+            return false
+        }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            submitRegeneratePressed()
+            return true
+        }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            closeRegenerateDrawerPressed()
+            return true
+        }
+        return false
     }
 
     @objc private func retryAddPressed() {

@@ -546,6 +546,40 @@ export namespace main {
 	}
 	
 	
+	export class RegenerateManualVocabularyInput {
+	    simplified: string;
+	    traditional?: string;
+	    pinyin?: string;
+	    meaning?: string;
+	    partOfSpeech?: string;
+	    classifier?: string;
+	    example?: string;
+	    examplePinyin?: string;
+	    exampleTranslation?: string;
+	    tags?: string[];
+	    aiGenerated?: boolean;
+	    instruction?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RegenerateManualVocabularyInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.simplified = source["simplified"];
+	        this.traditional = source["traditional"];
+	        this.pinyin = source["pinyin"];
+	        this.meaning = source["meaning"];
+	        this.partOfSpeech = source["partOfSpeech"];
+	        this.classifier = source["classifier"];
+	        this.example = source["example"];
+	        this.examplePinyin = source["examplePinyin"];
+	        this.exampleTranslation = source["exampleTranslation"];
+	        this.tags = source["tags"];
+	        this.aiGenerated = source["aiGenerated"];
+	        this.instruction = source["instruction"];
+	    }
+	}
 	export class SettingsPatch {
 	    openRouterKey?: string;
 	    sttModel?: string;
