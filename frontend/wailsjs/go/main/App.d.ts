@@ -28,6 +28,8 @@ export function RecognizeVocabularyPhoto(arg1:string):Promise<main.PhotoVocabula
 
 export function Refresh():Promise<main.AppSnapshot>;
 
+export function RegenerateManualVocabulary(arg1:main.RegenerateManualVocabularyInput):Promise<main.ManualVocabularyDraft>;
+
 export function RejectCandidate(arg1:string):Promise<main.AppSnapshot>;
 
 export function RequestCapturePermission():Promise<main.AppSnapshot>;

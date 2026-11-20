@@ -27,10 +27,29 @@ final class LookupAgent: NSObject, NSApplicationDelegate {
         }
     )
 
+    private enum RequestKind {
+        case lookup
+        case add
+        case regenerate
+        case save
+    }
+
+    private struct LastLookupResult {
+        let surface: String
+        let lines: [GlossLine]
+        let notice: String
+        let existingTags: [String]
+    }
+
     private var requestCounter: UInt64 = 0
     private var currentRequestID: String?
     private var currentAnchor: PanelAnchor?
     private var currentSurface = ""
+    private var activeRequestKind: RequestKind?
+    private var lastLookupSelection: SelectionRead?
+    private var lastLookupResult: LastLookupResult?
+    private var lastAddLine: GlossLine?
+    private var preservedRegenerateTags: [String]?
     private var hotKey: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
 
@@ -44,6 +63,18 @@ final class LookupAgent: NSObject, NSApplicationDelegate {
         }
         panel.onSave = { [weak self] fields in
             self?.save(fields)
+        }
+        panel.onRetryAdd = { [weak self] in
+            self?.retryAdd()
+        }
+        panel.onRetryLookup = { [weak self] in
+            self?.retryLookup()
+        }
+        panel.onBackToResults = { [weak self] in
+            self?.backToResults()
+        }
+        panel.onRegenerate = { [weak self] fields, instruction in
+            self?.regenerate(fields: fields, instruction: instruction)
         }
     }
 
@@ -65,31 +96,44 @@ final class LookupAgent: NSObject, NSApplicationDelegate {
     }
 
     private func hotKeyPressed() {
-        let id = nextRequestID()
         let mouseLocation = NSEvent.mouseLocation
         let fallbackAnchor = PanelAnchor(
             selectionRect: nil,
             mouseLocation: mouseLocation
         )
         currentAnchor = fallbackAnchor
+        activeRequestKind = nil
+        lastLookupSelection = nil
+        lastLookupResult = nil
+        lastAddLine = nil
+        preservedRegenerateTags = nil
 
         guard AXIsProcessTrusted() else {
+            _ = nextRequestID()
             promptForAccessibility()
             panel.showNotice(Self.accessibilityNotice, anchor: fallbackAnchor)
             return
         }
 
         guard let selection = readSelection() else {
+            _ = nextRequestID()
             panel.showNotice(Self.emptySelectionNotice, anchor: fallbackAnchor)
             return
         }
 
         currentSurface = selection.surface
+        lastLookupSelection = selection
         let anchor = PanelAnchor(
             selectionRect: selection.bounds,
             mouseLocation: mouseLocation
         )
         currentAnchor = anchor
+        sendLookup(selection, anchor: anchor)
+    }
+
+    private func sendLookup(_ selection: SelectionRead, anchor: PanelAnchor) {
+        let id = nextRequestID()
+        activeRequestKind = .lookup
         panel.showLoading(surface: selection.surface, anchor: anchor)
 
         let bounds = selection.bounds.map {
@@ -119,25 +163,112 @@ final class LookupAgent: NSObject, NSApplicationDelegate {
 
         switch message.type {
         case "result":
+            activeRequestKind = nil
             let surface = message.surface ?? currentSurface
+            let lines = message.lines ?? []
+            let notice = message.notice ?? ""
+            let existingTags = message.existingTags ?? []
+            lastLookupResult = LastLookupResult(
+                surface: surface,
+                lines: lines,
+                notice: notice,
+                existingTags: existingTags
+            )
             panel.showResult(
                 surface: surface,
-                lines: message.lines ?? [],
-                notice: message.notice ?? "",
-                existingTags: message.existingTags ?? [],
+                lines: lines,
+                notice: notice,
+                existingTags: existingTags,
                 anchor: anchor
             )
         case "draft":
-            if let draft = message.draft {
-                panel.showCard(draft, anchor: anchor)
+            let wasRegenerating = activeRequestKind == .regenerate
+            activeRequestKind = nil
+            if var draft = message.draft {
+                if wasRegenerating,
+                   let preservedTags = preservedRegenerateTags,
+                   !preservedTags.isEmpty,
+                   (draft.fields.tags ?? []).isEmpty {
+                    draft = CardDraft(
+                        fields: CardFields(
+                            simplified: draft.fields.simplified,
+                            traditional: draft.fields.traditional,
+                            pinyin: draft.fields.pinyin,
+                            meaning: draft.fields.meaning,
+                            partOfSpeech: draft.fields.partOfSpeech,
+                            classifier: draft.fields.classifier,
+                            example: draft.fields.example,
+                            examplePinyin: draft.fields.examplePinyin,
+                            exampleTranslation: draft.fields.exampleTranslation,
+                            tags: preservedTags,
+                            aiGenerated: draft.fields.aiGenerated
+                        ),
+                        needsChoice: draft.needsChoice,
+                        readOnly: draft.readOnly,
+                        variants: draft.variants
+                    )
+                }
+                preservedRegenerateTags = nil
+                panel.showCard(
+                    draft,
+                    notice: wasRegenerating ? "Card regenerated. Review before saving." : nil,
+                    anchor: anchor
+                )
             }
         case "saved":
+            activeRequestKind = nil
+            preservedRegenerateTags = nil
             panel.showSaved(anchor: anchor)
         case "error":
-            if panel.shouldKeepForm() {
-                panel.showFormStatus(message.message ?? "Couldn't save this word. Try again.")
-            } else {
-                panel.showError(message.message ?? "", anchor: anchor)
+            let kind = activeRequestKind
+            activeRequestKind = nil
+            preservedRegenerateTags = nil
+            let headline = nonEmpty(message.message) ?? defaultErrorTitle(for: kind)
+            let detail = nonEmpty(message.detail)
+            switch kind {
+            case .save:
+                if panel.shouldKeepForm() {
+                    panel.showFormError(title: headline, detail: detail)
+                } else {
+                    panel.showError(title: headline, detail: detail, anchor: anchor)
+                }
+            case .regenerate:
+                if panel.shouldKeepForm() {
+                    panel.showFormError(
+                        title: "Couldn't regenerate this card.",
+                        detail: detail ?? (headline == "Couldn't add this word." ? nil : headline)
+                    )
+                } else {
+                    panel.showAddError(
+                        line: lastAddLine,
+                        title: headline,
+                        detail: detail,
+                        canGoBack: lastLookupResult != nil,
+                        anchor: anchor
+                    )
+                }
+            case .add:
+                panel.showAddError(
+                    line: lastAddLine,
+                    title: headline,
+                    detail: detail,
+                    canGoBack: lastLookupResult != nil,
+                    anchor: anchor
+                )
+            case .lookup:
+                panel.showLookupError(
+                    surface: currentSurface,
+                    title: headline,
+                    detail: detail,
+                    canRetry: lastLookupSelection != nil,
+                    anchor: anchor
+                )
+            case .none:
+                if panel.shouldKeepForm() {
+                    panel.showFormError(title: headline, detail: detail)
+                } else {
+                    panel.showError(title: headline, detail: detail, anchor: anchor)
+                }
             }
         case "dismiss":
             dismiss()
@@ -151,22 +282,92 @@ final class LookupAgent: NSObject, NSApplicationDelegate {
             return
         }
         if line.action == "open" {
+            activeRequestKind = nil
             panel.showCard(savedCard(from: line), anchor: anchor)
             return
         }
-        guard let id = currentRequestID else {
-            return
-        }
-        panel.showAdding(action: line.action, anchor: anchor)
+        lastAddLine = line
+        let id = nextRequestID()
+        activeRequestKind = .add
+        panel.showAdding(line: line, anchor: anchor)
         writer.write(AddRequest(id: id, line: line))
     }
 
-    private func save(_ fields: CardFields) {
-        guard let id = currentRequestID else {
+    private func retryAdd() {
+        guard let line = lastAddLine, let anchor = currentAnchor else {
             return
         }
-        panel.showFormStatus("Saving…")
+        let id = nextRequestID()
+        activeRequestKind = .add
+        panel.showAdding(line: line, anchor: anchor)
+        writer.write(AddRequest(id: id, line: line))
+    }
+
+    private func retryLookup() {
+        guard let selection = lastLookupSelection, let anchor = currentAnchor else {
+            return
+        }
+        sendLookup(selection, anchor: anchor)
+    }
+
+    private func backToResults() {
+        guard let result = lastLookupResult, let anchor = currentAnchor else {
+            return
+        }
+        _ = nextRequestID()
+        activeRequestKind = nil
+        preservedRegenerateTags = nil
+        panel.showResult(
+            surface: result.surface,
+            lines: result.lines,
+            notice: result.notice,
+            existingTags: result.existingTags,
+            anchor: anchor
+        )
+    }
+
+    private func regenerate(fields: CardFields, instruction: String) {
+        let trimmed = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        preservedRegenerateTags = fields.tags
+        let id = nextRequestID()
+        activeRequestKind = .regenerate
+        panel.setCardBusy(message: "Regenerating…")
+        writer.write(RegenerateRequest(
+            id: id,
+            fields: fields,
+            instruction: trimmed.isEmpty ? nil : trimmed
+        ))
+    }
+
+    private func save(_ fields: CardFields) {
+        let id = nextRequestID()
+        activeRequestKind = .save
+        panel.setCardBusy(message: "Saving…")
         writer.write(SaveRequest(id: id, fields: fields))
+    }
+
+    private func defaultErrorTitle(for kind: RequestKind?) -> String {
+        switch kind {
+        case .lookup:
+            return "Couldn't look this up."
+        case .add:
+            return "Couldn't add this word."
+        case .regenerate:
+            return "Couldn't regenerate this card."
+        case .save:
+            return "Couldn't save this word."
+        case .none:
+            return "Something went wrong."
+        }
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty
+        else {
+            return nil
+        }
+        return trimmed
     }
 
     private func savedCard(from line: GlossLine) -> CardDraft {
@@ -194,6 +395,11 @@ final class LookupAgent: NSObject, NSApplicationDelegate {
         currentRequestID = nil
         currentAnchor = nil
         currentSurface = ""
+        activeRequestKind = nil
+        lastLookupSelection = nil
+        lastLookupResult = nil
+        lastAddLine = nil
+        preservedRegenerateTags = nil
         panel.hide()
     }
 

@@ -253,6 +253,36 @@ func (s *Service) AddSelection(
 	return cardDraftFromManual(draft), nil
 }
 
+func (s *Service) RegenerateSelection(
+	ctx context.Context,
+	fields selection.CardFields,
+	instruction string,
+) (selection.CardDraft, error) {
+	if s == nil {
+		return selection.CardDraft{}, errors.New("selection lookup: service is not configured")
+	}
+	draft, err := s.regenerateManualVocabulary(ctx, RegenerateManualVocabularyInput{
+		ManualVocabularyInput: ManualVocabularyInput{
+			Simplified:         fields.Simplified,
+			Traditional:        fields.Traditional,
+			Pinyin:             fields.Pinyin,
+			Meaning:            fields.Meaning,
+			PartOfSpeech:       fields.PartOfSpeech,
+			Classifier:         fields.Classifier,
+			Example:            fields.Example,
+			ExamplePinyin:      fields.ExamplePinyin,
+			ExampleTranslation: fields.ExampleTranslation,
+			Tags:               fields.Tags,
+			AiGenerated:        fields.AIGenerated,
+		},
+		Instruction: instruction,
+	}, false)
+	if err != nil {
+		return selection.CardDraft{}, err
+	}
+	return cardDraftFromManual(draft), nil
+}
+
 func (s *Service) ListTagNames(ctx context.Context) ([]string, error) {
 	if s == nil || s.store == nil {
 		return nil, errors.New("selection lookup: storage is not configured")

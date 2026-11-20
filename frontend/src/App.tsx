@@ -217,6 +217,8 @@ export function App({ apiClient = defaultApi }: AppProps) {
     tags: '',
   })
   const [editError, setEditError] = useState<string>()
+  const [editRegenerateError, setEditRegenerateError] = useState<string>()
+  const [editRegenerateNotice, setEditRegenerateNotice] = useState<string>()
   const [manualForm, setManualForm] = useState<ManualVocabularyForm>(EMPTY_MANUAL_VOCABULARY_FORM)
   const [manualGeneration, setManualGeneration] = useState<ManualVocabularyDraft>()
   const [manualVariantPrompt, setManualVariantPrompt] = useState<ManualVariantPrompt>()
@@ -409,7 +411,60 @@ export function App({ apiClient = defaultApi }: AppProps) {
       tags: candidate.tags.join(', '),
     })
     setEditError(undefined)
+    setEditRegenerateError(undefined)
+    setEditRegenerateNotice(undefined)
     setActionError(undefined)
+  }
+
+  const handleRegenerateCandidate = async (instruction: string): Promise<boolean> => {
+    if (!editingCandidate) return false
+    if (!editDraft.simplified.trim()) {
+      setEditRegenerateError('Enter a Chinese word before regenerating.')
+      return false
+    }
+    if (!current.settings.openRouterKeyConfigured) {
+      setEditRegenerateError('Add an OpenRouter API key in Settings before regenerating.')
+      return false
+    }
+    const candidateId = editingCandidate.id
+    setBusyAction(`regenerate-candidate-${candidateId}`)
+    setEditRegenerateError(undefined)
+    setEditRegenerateNotice(undefined)
+    try {
+      const draft = await apiClient.regenerateManualVocabulary({
+        simplified: editDraft.simplified.trim(),
+        traditional: editDraft.traditional.trim() || undefined,
+        pinyin: editDraft.pinyin.trim() || undefined,
+        meaning: editDraft.meaning.trim() || undefined,
+        partOfSpeech: editDraft.partOfSpeech.trim() || undefined,
+        classifier: editDraft.classifier.trim() || undefined,
+        example: editDraft.example.trim() || undefined,
+        examplePinyin: editDraft.examplePinyin.trim() || undefined,
+        exampleTranslation: editDraft.exampleTranslation.trim() || undefined,
+        tags: parseTags(editDraft.tags),
+        instruction: instruction.trim() || undefined,
+      })
+      setEditDraft((prev) => ({
+        simplified: draft.simplified || prev.simplified,
+        traditional: draft.traditional ?? '',
+        pinyin: draft.pinyin ?? '',
+        meaning: draft.meaning ?? '',
+        partOfSpeech: draft.partOfSpeech ?? '',
+        classifier: draft.classifier ?? '',
+        example: draft.example ?? '',
+        examplePinyin: draft.examplePinyin ?? '',
+        exampleTranslation: draft.exampleTranslation ?? '',
+        tags: prev.tags,
+      }))
+      setEditError(undefined)
+      setEditRegenerateNotice(`Card regenerated with ${draft.model} (${formatUsd(draft.cost)}). Review before saving.`)
+      return true
+    } catch (error: unknown) {
+      setEditRegenerateError(getErrorMessage(error))
+      return false
+    } finally {
+      setBusyAction((active) => (active === `regenerate-candidate-${candidateId}` ? undefined : active))
+    }
   }
 
   const saveEdit = (event: FormEvent<HTMLFormElement>) => {
@@ -604,6 +659,45 @@ export function App({ apiClient = defaultApi }: AppProps) {
       .finally(() => {
         if (requestId === manualGenerationRequest.current) setBusyAction(undefined)
       })
+  }
+
+  const handleRegenerateManualVocabulary = async (instruction: string): Promise<boolean> => {
+    const formAtRequest = manualFormRef.current
+    const input = manualVocabularyFormToInput(formAtRequest)
+    if (!input.simplified.trim()) {
+      setActionError('Enter a Chinese word (simplified) before regenerating.')
+      setActionMessage(undefined)
+      return false
+    }
+    if (!current.settings.openRouterKeyConfigured) {
+      setActionError('Add an OpenRouter API key in Settings before regenerating.')
+      setActionMessage(undefined)
+      return false
+    }
+    const requestedHeadword = input.simplified.trim()
+    const requestId = manualGenerationRequest.current + 1
+    manualGenerationRequest.current = requestId
+    setBusyAction('regenerate-manual-vocabulary')
+    setActionError(undefined)
+    setActionMessage(undefined)
+    try {
+      const draft = await apiClient.regenerateManualVocabulary({
+        ...input,
+        instruction: instruction.trim() || undefined,
+      })
+      if (requestId !== manualGenerationRequest.current) return false
+      if (manualFormRef.current.simplified.trim() !== requestedHeadword) return false
+      setManualGeneration(draft)
+      setManualVariantPrompt(undefined)
+      setManualFormValue(manualVocabularyDraftToForm(draft))
+      setActionMessage('Card regenerated. Review every field before saving.')
+      return true
+    } catch (error: unknown) {
+      setActionError(getErrorMessage(error))
+      return false
+    } finally {
+      if (requestId === manualGenerationRequest.current) setBusyAction(undefined)
+    }
   }
 
   const applyManualVariant = (index: number) => {
@@ -1007,6 +1101,7 @@ export function App({ apiClient = defaultApi }: AppProps) {
                   busyAction={busyAction}
                   onFormChange={updateManualForm}
                   onGenerate={handleGenerateManualVocabulary}
+                  onRegenerate={handleRegenerateManualVocabulary}
                   onApplyVariant={applyManualVariant}
                   onClear={clearManualForm}
                   onPhotoFiles={handlePhotoFiles}
@@ -1054,12 +1149,22 @@ export function App({ apiClient = defaultApi }: AppProps) {
           draft={editDraft}
           existingTags={existingTags}
           validationError={editError}
+          regenerateError={editRegenerateError}
+          regenerateNotice={editRegenerateNotice}
+          hasApiKey={current.settings.openRouterKeyConfigured}
+          lessonActive={['live', 'starting', 'stopping'].includes(current.lesson.status)}
           isSaving={busyAction === `edit-${editingCandidate.id}`}
+          isRegenerating={busyAction === `regenerate-candidate-${editingCandidate.id}`}
           onDraftChange={(draft) => {
             setEditDraft(draft)
             setEditError(undefined)
           }}
-          onCancel={() => setEditingCandidate(undefined)}
+          onRegenerate={handleRegenerateCandidate}
+          onCancel={() => {
+            setEditingCandidate(undefined)
+            setEditRegenerateError(undefined)
+            setEditRegenerateNotice(undefined)
+          }}
           onSubmit={saveEdit}
         />
       )}
@@ -1784,6 +1889,7 @@ function ManualVocabularyView({
   busyAction,
   onFormChange,
   onGenerate,
+  onRegenerate,
   onApplyVariant,
   onClear,
   onPhotoFiles,
@@ -1812,6 +1918,7 @@ function ManualVocabularyView({
   busyAction?: string
   onFormChange: (form: ManualVocabularyForm) => void
   onGenerate: () => void
+  onRegenerate: (instruction: string) => Promise<boolean>
   onApplyVariant: (index: number) => void
   onClear: () => void
   onPhotoFiles: (files: File[]) => void
@@ -1825,15 +1932,25 @@ function ManualVocabularyView({
   onOpenSettings: () => void
 }) {
   const isGenerating = busyAction === 'generate-manual-vocabulary'
+  const isRegenerating = busyAction === 'regenerate-manual-vocabulary'
   const isSaving = busyAction === 'save-manual-vocabulary'
   const isBusy = Boolean(busyAction)
   const missingFields = manualVocabularyMissingFields(form)
   const hasCompleteDetails = missingFields.length === 0
   const canGenerate = Boolean(form.simplified.trim()) && hasApiKey && !lessonActive && !hasCompleteDetails && !isBusy
+  const showRegenerateOption = Boolean(form.simplified.trim()) && (hasCompleteDetails || Boolean(generatedDraft))
+  const canRegenerate = showRegenerateOption && hasApiKey && !lessonActive && !isBusy
+  const [regenerateOpen, setRegenerateOpen] = useState(false)
+  const [regeneratePrompt, setRegeneratePrompt] = useState('')
   const canClear = !isBusy && (
     Boolean(variantPrompt || generatedDraft) ||
     Object.entries(form).some(([, value]) => typeof value === 'string' && value.trim())
   )
+  const headword = form.simplified.trim()
+  useEffect(() => {
+    setRegenerateOpen(false)
+    setRegeneratePrompt('')
+  }, [headword])
   const variantPickerRef = useRef<HTMLFieldSetElement>(null)
   const variantKey = variantPrompt
     ? `${variantPrompt.headword}:${variantPrompt.variants.map((variant) => `${variant.pinyin}:${variant.meaning}`).join('|')}`
@@ -2102,6 +2219,27 @@ function ManualVocabularyView({
             </fieldset>
           )}
 
+          {regenerateOpen && showRegenerateOption && (
+            <RegeneratePanel
+              idPrefix="manual"
+              prompt={regeneratePrompt}
+              onPromptChange={setRegeneratePrompt}
+              hasApiKey={hasApiKey}
+              lessonActive={lessonActive}
+              isRegenerating={isRegenerating}
+              disabled={!canRegenerate}
+              onClose={() => setRegenerateOpen(false)}
+              onSubmit={() => {
+                void onRegenerate(regeneratePrompt).then((didRegenerate) => {
+                  if (didRegenerate) {
+                    setRegenerateOpen(false)
+                    setRegeneratePrompt('')
+                  }
+                })
+              }}
+            />
+          )}
+
           <div className="manual-action-row">
             <button className="button button-secondary manual-clear-button" type="button" onClick={onClear} disabled={!canClear}>
               Clear form
@@ -2110,6 +2248,18 @@ function ManualVocabularyView({
               <Icon name="spark" />
               {isGenerating ? 'Generating…' : 'Generate missing details'}
             </button>
+            {showRegenerateOption && (
+              <button
+                className={`button button-secondary${regenerateOpen ? ' is-active' : ''}`}
+                type="button"
+                aria-expanded={regenerateOpen}
+                onClick={() => setRegenerateOpen((open) => !open)}
+                disabled={isBusy}
+              >
+                <Icon name="spark" />
+                {isRegenerating ? 'Regenerating…' : 'Regenerate'}
+              </button>
+            )}
             <button className="button button-primary" type="submit" disabled={isBusy || !form.simplified.trim() || !hasCompleteDetails}>
               <Icon name="check" />
               {isSaving ? 'Saving…' : 'Save to Vocabulary'}
@@ -2918,13 +3068,155 @@ function DiagnosticRow({ label, value, tone }: { label: string; value: string; t
   )
 }
 
+const REGENERATE_PRESETS = [
+  { label: 'Simpler example', prompt: 'Use a simpler, everyday example sentence.' },
+  { label: 'More casual', prompt: 'Make the example sentence more casual and conversational.' },
+  { label: 'Formal / business', prompt: 'Use a formal or workplace context for the example.' },
+  { label: 'Different meaning', prompt: 'Use a different common meaning or sense of this word.' },
+] as const
+
+function RegeneratePanel({
+  idPrefix,
+  prompt,
+  onPromptChange,
+  hasApiKey,
+  lessonActive,
+  isRegenerating,
+  disabled,
+  error,
+  onClose,
+  onSubmit,
+}: {
+  idPrefix: string
+  prompt: string
+  onPromptChange: (value: string) => void
+  hasApiKey: boolean
+  lessonActive: boolean
+  isRegenerating: boolean
+  disabled: boolean
+  error?: string
+  onClose: () => void
+  onSubmit: () => void
+}) {
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  const trimmedPrompt = prompt.trim().toLowerCase()
+  const inputId = `${idPrefix}-regenerate-prompt`
+
+  return (
+    <section className="regenerate-panel" aria-label="Regenerate word options">
+      <div className="regenerate-panel-header">
+        <div className="regenerate-panel-heading">
+          <span className="regenerate-panel-title">
+            <Icon name="spark" />
+            Regenerate card
+          </span>
+          <span className="regenerate-panel-badge">Optional instructions</span>
+        </div>
+        <button
+          className="icon-button regenerate-panel-close"
+          type="button"
+          aria-label="Close regenerate options"
+          onClick={onClose}
+          disabled={isRegenerating}
+        >
+          <Icon name="close" />
+        </button>
+      </div>
+      <p className="regenerate-panel-copy">
+        Describe how to revise the meaning, reading, or example—or leave blank for a fresh alternative.
+      </p>
+      <textarea
+        ref={inputRef}
+        id={inputId}
+        className="text-input textarea regenerate-prompt-input"
+        aria-label="Regeneration instructions"
+        placeholder="e.g. casual spoken example, simpler sentence, business sense…"
+        value={prompt}
+        onChange={(event) => onPromptChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault()
+            if (!disabled && !isRegenerating) onSubmit()
+          } else if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            if (!isRegenerating) onClose()
+          }
+        }}
+        disabled={isRegenerating}
+        rows={2}
+      />
+      <div className="regenerate-presets" role="group" aria-label="Quick regeneration prompts">
+        {REGENERATE_PRESETS.map((preset) => {
+          const isSelected = trimmedPrompt === preset.prompt.toLowerCase()
+          return (
+            <button
+              key={preset.label}
+              type="button"
+              className={`tag-picker-chip regenerate-preset-chip${isSelected ? ' is-selected' : ''}`}
+              aria-pressed={isSelected}
+              onClick={() => onPromptChange(isSelected ? '' : preset.prompt)}
+              disabled={isRegenerating}
+            >
+              {preset.label}
+            </button>
+          )
+        })}
+      </div>
+      {error && (
+        <div className="dialog-error regenerate-panel-error" role="alert">
+          {error}
+        </div>
+      )}
+      {!hasApiKey ? (
+        <p className="helper-text regenerate-panel-hint">
+          Add an OpenRouter API key in Settings to regenerate this word.
+        </p>
+      ) : lessonActive ? (
+        <p className="helper-text regenerate-panel-hint">
+          Finish the active lesson before regenerating word details here.
+        </p>
+      ) : null}
+      <div className="regenerate-panel-actions">
+        <button
+          className="button button-ghost button-small"
+          type="button"
+          onClick={onClose}
+          disabled={isRegenerating}
+        >
+          Cancel
+        </button>
+        <button
+          className="button button-primary button-small"
+          type="button"
+          onClick={onSubmit}
+          disabled={disabled || isRegenerating}
+        >
+          <Icon name="spark" />
+          {isRegenerating ? 'Regenerating…' : 'Regenerate now'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
 function EditCandidateDialog({
   candidate,
   draft,
   existingTags,
   validationError,
+  regenerateError,
+  regenerateNotice,
+  hasApiKey,
+  lessonActive,
   isSaving,
+  isRegenerating,
   onDraftChange,
+  onRegenerate,
   onCancel,
   onSubmit,
 }: {
@@ -2932,11 +3224,21 @@ function EditCandidateDialog({
   draft: CandidateEditDraft
   existingTags: string[]
   validationError?: string
+  regenerateError?: string
+  regenerateNotice?: string
+  hasApiKey: boolean
+  lessonActive: boolean
   isSaving: boolean
+  isRegenerating: boolean
   onDraftChange: (draft: CandidateEditDraft) => void
+  onRegenerate: (instruction: string) => Promise<boolean>
   onCancel: () => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
 }) {
+  const [regenerateOpen, setRegenerateOpen] = useState(false)
+  const [regeneratePrompt, setRegeneratePrompt] = useState('')
+  const canRegenerate = Boolean(draft.simplified.trim()) && hasApiKey && !lessonActive && !isSaving && !isRegenerating
+
   return (
     <div className="dialog-backdrop" role="presentation">
       <form
@@ -2955,6 +3257,12 @@ function EditCandidateDialog({
           <button className="icon-button" type="button" aria-label="Close edit dialog" onClick={onCancel}><Icon name="close" /></button>
         </div>
         {validationError && <div className="dialog-error" id="edit-dialog-error" role="alert">{validationError}</div>}
+        {regenerateNotice && (
+          <div className="dialog-success" role="status" aria-live="polite">
+            <Icon name="check" />
+            <span>{regenerateNotice}</span>
+          </div>
+        )}
         <div className="dialog-form-grid">
           <div className="field-group">
             <label className="field-label" htmlFor="edit-simplified">Hanzi</label>
@@ -3043,9 +3351,42 @@ function EditCandidateDialog({
             onChange={(tags) => onDraftChange({ ...draft, tags })}
           />
         </div>
-        <div className="dialog-actions">
-          <button className="button button-ghost" type="button" onClick={onCancel}>Cancel</button>
-          <button className="button button-primary" type="submit" disabled={isSaving}>{isSaving ? 'Saving…' : 'Save changes'}</button>
+        {regenerateOpen && (
+          <RegeneratePanel
+            idPrefix="edit"
+            prompt={regeneratePrompt}
+            onPromptChange={setRegeneratePrompt}
+            hasApiKey={hasApiKey}
+            lessonActive={lessonActive}
+            isRegenerating={isRegenerating}
+            disabled={!canRegenerate}
+            error={regenerateError}
+            onClose={() => setRegenerateOpen(false)}
+            onSubmit={() => {
+              void onRegenerate(regeneratePrompt).then((didRegenerate) => {
+                if (didRegenerate) {
+                  setRegenerateOpen(false)
+                  setRegeneratePrompt('')
+                }
+              })
+            }}
+          />
+        )}
+        <div className="dialog-actions dialog-actions-split">
+          <button
+            className={`button button-secondary dialog-regenerate-toggle${regenerateOpen ? ' is-active' : ''}`}
+            type="button"
+            aria-expanded={regenerateOpen}
+            onClick={() => setRegenerateOpen((open) => !open)}
+            disabled={isSaving || isRegenerating}
+          >
+            <Icon name="spark" />
+            {isRegenerating ? 'Regenerating…' : 'Regenerate'}
+          </button>
+          <div className="dialog-actions-primary">
+            <button className="button button-ghost" type="button" onClick={onCancel} disabled={isSaving || isRegenerating}>Cancel</button>
+            <button className="button button-primary" type="submit" disabled={isSaving || isRegenerating}>{isSaving ? 'Saving…' : 'Save changes'}</button>
+          </div>
         </div>
       </form>
     </div>

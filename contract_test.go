@@ -31,11 +31,12 @@ func TestWailsMethodsMatchFrontendContract(t *testing.T) {
 
 	appType := reflect.TypeOf(&App{})
 	expectedResults := map[string]reflect.Type{
-		"GenerateManualVocabulary": reflect.TypeOf(ManualVocabularyDraft{}),
-		"RecognizeVocabularyPhoto": reflect.TypeOf(PhotoVocabularyDraft{}),
-		"ListLessonTranscripts":    reflect.TypeOf([]LessonTranscriptSummary{}),
-		"GetLessonTranscript":      reflect.TypeOf(LessonTranscript{}),
-		"ListTags":                 reflect.TypeOf([]string{}),
+		"GenerateManualVocabulary":   reflect.TypeOf(ManualVocabularyDraft{}),
+		"RegenerateManualVocabulary": reflect.TypeOf(ManualVocabularyDraft{}),
+		"RecognizeVocabularyPhoto":   reflect.TypeOf(PhotoVocabularyDraft{}),
+		"ListLessonTranscripts":      reflect.TypeOf([]LessonTranscriptSummary{}),
+		"GetLessonTranscript":        reflect.TypeOf(LessonTranscript{}),
+		"ListTags":                   reflect.TypeOf([]string{}),
 	}
 	seen := map[string]bool{}
 	for _, match := range matches {
@@ -61,7 +62,8 @@ func TestWailsMethodsMatchFrontendContract(t *testing.T) {
 			t.Errorf("%s result = %s, want %s", name, got, want)
 		}
 	}
-	if !seen["GenerateManualVocabulary"] || !seen["RecognizeVocabularyPhoto"] ||
+	if !seen["GenerateManualVocabulary"] || !seen["RegenerateManualVocabulary"] ||
+		!seen["RecognizeVocabularyPhoto"] ||
 		!seen["ListLessonTranscripts"] || !seen["GetLessonTranscript"] ||
 		!seen["SaveManualVocabulary"] || !seen["DeleteLastLesson"] ||
 		!seen["DeleteVocabulary"] {

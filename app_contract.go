@@ -22,6 +22,11 @@ type ManualVocabularyInput struct {
 	AiGenerated        bool     `json:"aiGenerated,omitempty"`
 }
 
+type RegenerateManualVocabularyInput struct {
+	ManualVocabularyInput
+	Instruction string `json:"instruction,omitempty"`
+}
+
 type ManualVocabularyDraft struct {
 	Simplified         string                    `json:"simplified"`
 	Traditional        string                    `json:"traditional,omitempty"`

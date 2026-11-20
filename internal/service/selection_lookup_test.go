@@ -440,6 +440,52 @@ func TestAddSelectionOpenEmitsEventWithoutHTTP(t *testing.T) {
 	}
 }
 
+func TestRegenerateSelectionWorksDuringActiveLessonAndPassesInstruction(t *testing.T) {
+	const regeneratedResponse = `{"simplified":"学习","traditional":"學習","pinyin":"xué xí","meaning":"to study","partOfSpeech":"verb","classifier":"","example":"下班以后我想学习做饭。","examplePinyin":"xià bān yǐ hòu wǒ xiǎng xué xí zuò fàn","exampleTranslation":"After work I want to learn to cook.","tags":[]}`
+	var requestContent string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode regenerate request: %v", err)
+		}
+		messages, _ := payload["messages"].([]any)
+		if len(messages) > 0 {
+			userMessage, _ := messages[len(messages)-1].(map[string]any)
+			requestContent, _ = userMessage["content"].(string)
+		}
+		writeSelectionChatResponse(w, regeneratedResponse)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	store, svc := newSelectionTestService(t, server.URL)
+	defer store.Close()
+	svc.mu.Lock()
+	svc.currentLesson = "active-lesson"
+	svc.mu.Unlock()
+
+	draft, err := svc.RegenerateSelection(ctx, selection.CardFields{
+		Simplified:         "学习",
+		Pinyin:             "xué xí",
+		Meaning:            "to study",
+		Example:            "我每天学习中文。",
+		ExamplePinyin:      "wǒ měi tiān xué xí zhōng wén",
+		ExampleTranslation: "I study Chinese every day.",
+		Tags:               []string{"daily"},
+	}, "make it a casual example about cooking")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(requestContent, "make it a casual example about cooking") {
+		t.Fatalf("regeneration instruction was not sent to model: %q", requestContent)
+	}
+	if draft.Fields.Example != "下班以后我想学习做饭。" ||
+		!draft.Fields.AIGenerated ||
+		len(draft.Fields.Tags) != 1 || draft.Fields.Tags[0] != "daily" {
+		t.Fatalf("unexpected regenerated selection draft: %#v", draft)
+	}
+}
+
 func newSelectionTestService(t *testing.T, serverURL string) (*storage.Store, *Service) {
 	t.Helper()
 	ctx := context.Background()

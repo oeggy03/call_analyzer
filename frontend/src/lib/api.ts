@@ -15,6 +15,7 @@ import type {
   ManualVocabularyInput,
   ManualVocabularyVariant,
   PhotoVocabularyDraft,
+  RegenerateManualVocabularyInput,
   SelectionAddWordEvent,
   TargetApp,
 } from './types'
@@ -53,6 +54,7 @@ function storedLessonTags(raw?: string): string {
 export const BACKEND_METHODS = {
   getSnapshot: 'GetAppSnapshot',
   generateManualVocabulary: 'GenerateManualVocabulary',
+  regenerateManualVocabulary: 'RegenerateManualVocabulary',
   recognizeVocabularyPhoto: 'RecognizeVocabularyPhoto',
   saveManualVocabulary: 'SaveManualVocabulary',
   listLessonTranscripts: 'ListLessonTranscripts',
@@ -87,6 +89,7 @@ export interface AppApi {
   readonly mode: ApiMode
   getSnapshot(): Promise<AppSnapshot>
   generateManualVocabulary(input: ManualVocabularyInput): Promise<ManualVocabularyDraft>
+  regenerateManualVocabulary(input: RegenerateManualVocabularyInput): Promise<ManualVocabularyDraft>
   recognizeVocabularyPhoto(imageBase64: string): Promise<PhotoVocabularyDraft>
   saveManualVocabulary(input: ManualVocabularyInput): Promise<AppSnapshot>
   listLessonTranscripts(limit: number): Promise<LessonTranscriptSummary[]>
@@ -831,6 +834,57 @@ class DemoApi implements AppApi {
     return { ...draft, tags: [...(draft.tags ?? [])] }
   }
 
+  async regenerateManualVocabulary(input: RegenerateManualVocabularyInput): Promise<ManualVocabularyDraft> {
+    if (this.snapshot.lesson.status === 'live' || this.snapshot.lesson.status === 'starting') {
+      throw new ApiValidationError('Finish the active lesson before regenerating word details.')
+    }
+    if (!this.snapshot.settings.openRouterKeyConfigured) {
+      throw new ApiValidationError('Add an OpenRouter API key in Settings before regenerating details.')
+    }
+    const normalized = normalizeManualVocabularyInput(input)
+    const instruction = (input.instruction ?? '').trim()
+    const base = DEMO_MANUAL_VOCABULARY_EXAMPLES[normalized.simplified]
+    const cost = DEMO_MANUAL_VOCABULARY_COST
+    const nextExample = instruction.toLowerCase().includes('casual')
+      ? `我平时也常常用到「${normalized.simplified}」。`
+      : instruction.toLowerCase().includes('simple')
+        ? `我懂「${normalized.simplified}」。`
+        : `今天我们聊到了「${normalized.simplified}」。`
+    const nextExamplePinyin = instruction.toLowerCase().includes('casual')
+      ? 'Wǒ píng shí yě cháng cháng yòng dào zhè ge cí.'
+      : instruction.toLowerCase().includes('simple')
+        ? 'Wǒ dǒng zhè ge cí.'
+        : 'Jīn tiān wǒ men liáo dào le zhè ge cí.'
+    const nextExampleTranslation = instruction
+      ? `Example revised (${instruction}): We talked about "${normalized.simplified}".`
+      : `Today we talked about "${normalized.simplified}".`
+    const draft: ManualVocabularyDraft = {
+      simplified: normalized.simplified,
+      traditional: normalized.traditional || base?.traditional || normalized.simplified,
+      pinyin: normalized.pinyin || base?.pinyin || 'hǎo',
+      meaning: normalized.meaning || base?.meaning || 'a useful Mandarin word',
+      partOfSpeech: normalized.partOfSpeech || base?.partOfSpeech || 'word',
+      classifier: normalized.classifier || base?.classifier || '',
+      example: nextExample,
+      examplePinyin: nextExamplePinyin,
+      exampleTranslation: nextExampleTranslation,
+      tags: [...(normalized.tags ?? [])],
+      aiGenerated: true,
+      model: DEMO_MANUAL_VOCABULARY_MODEL,
+      cost,
+      needsChoice: false,
+      matchedContext: instruction.length > 0,
+      appliedVariant: -1,
+    }
+    this.snapshot.cost = {
+      ...this.snapshot.cost,
+      currentUsd: this.snapshot.cost.currentUsd + cost,
+      projectedUsd: Math.max(this.snapshot.cost.projectedUsd, this.snapshot.cost.currentUsd + cost),
+    }
+    this.publish()
+    return { ...draft, tags: [...(draft.tags ?? [])] }
+  }
+
   async recognizeVocabularyPhoto(imageBase64: string): Promise<PhotoVocabularyDraft> {
     if (imageBase64.includes('fail-photo')) {
       throw new ApiValidationError('This photo could not be read.')
@@ -1173,6 +1227,16 @@ class RuntimeApi implements AppApi {
     return result
   }
 
+  async regenerateManualVocabulary(input: RegenerateManualVocabularyInput): Promise<ManualVocabularyDraft> {
+    const result = await this.call(BACKEND_METHODS.regenerateManualVocabulary, [input])
+    if (!isManualVocabularyDraft(result)) {
+      throw new ApiUnavailableError(
+        `Backend method ${BACKEND_METHODS.regenerateManualVocabulary} returned an invalid manual vocabulary draft.`,
+      )
+    }
+    return result
+  }
+
   async recognizeVocabularyPhoto(imageBase64: string): Promise<PhotoVocabularyDraft> {
     const result = await this.call(BACKEND_METHODS.recognizeVocabularyPhoto, [imageBase64])
     if (!isPhotoVocabularyDraft(result)) {
@@ -1370,6 +1434,10 @@ class UnavailableApi implements AppApi {
 
   generateManualVocabulary(): Promise<ManualVocabularyDraft> {
     return Promise.reject(new ApiUnavailableError())
+  }
+
+  regenerateManualVocabulary(): Promise<ManualVocabularyDraft> {
+    return this.fail()
   }
 
   recognizeVocabularyPhoto(): Promise<PhotoVocabularyDraft> {

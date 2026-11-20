@@ -54,6 +54,10 @@ export function Refresh() {
   return window['go']['main']['App']['Refresh']();
 }
 
+export function RegenerateManualVocabulary(arg1) {
+  return window['go']['main']['App']['RegenerateManualVocabulary'](arg1);
+}
+
 export function RejectCandidate(arg1) {
   return window['go']['main']['App']['RejectCandidate'](arg1);
 }
